@@ -11,6 +11,9 @@
   "scripts": {
     "check": "pnpm typecheck && pnpm test",
     "demo": "pnpm --filter @rsi/cli start",
+    "demo:pipeline": "pnpm --filter @rsi/cli pipeline",
+    "operator": "pnpm --filter @rsi/cli run operator --",
+    "operator:demo": "pnpm --filter @rsi/cli run operator -- --seed",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",

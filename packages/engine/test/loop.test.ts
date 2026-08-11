@@ -66,4 +66,53 @@ describe("RecursiveImprovementLoop", () => {
     expect(result.stage).toBe("rejected");
     expect(() => loop.startLiveCanary(candidate.candidateId, 10)).toThrow();
   });
+
+  it("rejects nonsensical options and external telemetry before state changes", () => {
+    expect(
+      () => new RecursiveImprovementLoop(champion, { maxCanaryDrawdownBps: Number.NaN }),
+    ).toThrow();
+    expect(
+      () => new RecursiveImprovementLoop(champion, { maxCanaryAllocationBps: 10_001 }),
+    ).toThrow();
+
+    const loop = new RecursiveImprovementLoop(champion);
+    const candidate = loop.propose("rsi-v1", {}, `0x${"d".repeat(64)}`);
+    expect(() =>
+      loop.recordAttackResult(candidate.candidateId, {
+        passed: true,
+        hardInvariantEscapes: Number.NaN,
+        notes: "invalid",
+      }),
+    ).toThrow();
+    expect(loop.getCandidate(candidate.candidateId)?.stage).toBe("proposed");
+
+    loop.recordAttackResult(candidate.candidateId, {
+      passed: true,
+      hardInvariantEscapes: 0,
+      notes: "valid",
+    });
+    loop.startLiveCanary(candidate.candidateId, 10);
+    expect(() =>
+      loop.recordCanaryResult(candidate.candidateId, {
+        hardInvariantEscapes: 0,
+        maxDrawdownBps: Number.NaN,
+        notes: "invalid",
+      }),
+    ).toThrow();
+    expect(loop.getCandidate(candidate.candidateId)?.stage).toBe("canary_active");
+
+    loop.recordCanaryResult(candidate.candidateId, {
+      hardInvariantEscapes: 0,
+      maxDrawdownBps: 10,
+      notes: "valid",
+    });
+    expect(() =>
+      loop.recordEvaluation(candidate.candidateId, {
+        sampleSize: Number.NaN,
+        recommendPromotion: true,
+        notes: "invalid",
+      }),
+    ).toThrow();
+    expect(loop.getCandidate(candidate.candidateId)?.stage).toBe("canary_complete");
+  });
 });

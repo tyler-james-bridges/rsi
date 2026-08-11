@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
+import { z } from "zod";
 
 import {
+  AtomicAmountSchema,
+  Bytes32Schema,
   ObservationSchema,
   PolicyConfigSchema,
   ExecutionIntentSchema,
@@ -16,6 +19,7 @@ export type PolicyReasonCode =
   | "POLICY_VERSION_MISMATCH"
   | "POLICY_HASH_MISMATCH"
   | "DUPLICATE_INTENT"
+  | "DUPLICATE_NONCE"
   | "INTENT_TIME_INVALID"
   | "INTENT_EXPIRED"
   | "INTENT_FROM_FUTURE"
@@ -23,11 +27,14 @@ export type PolicyReasonCode =
   | "MARKETPLACE_TARGET_NOT_ALLOWED"
   | "COLLECTION_NOT_ALLOWED"
   | "PAYMENT_ASSET_NOT_ALLOWED"
+  | "RECIPIENT_NOT_ALLOWED"
   | "SPEND_LIMIT_MISSING"
   | "SPEND_LIMIT_EXCEEDED"
   | "DAILY_SPEND_LIMIT_EXCEEDED"
   | "MISSING_EVIDENCE"
+  | "DUPLICATE_EVIDENCE"
   | "STALE_EVIDENCE"
+  | "EVIDENCE_TIME_INVALID"
   | "EVIDENCE_INTEGRITY_FLAG"
   | "EVIDENCE_ASSET_MISMATCH"
   | "INSUFFICIENT_INDEPENDENT_EVIDENCE"
@@ -52,6 +59,33 @@ export interface PolicyApproval {
 }
 
 export type PolicyDecision = PolicyApproval | PolicyRejection;
+
+const PolicyKernelStateSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    policyHash: Bytes32Schema,
+    processedIntentIds: z
+      .array(z.string().regex(/^rsi-intent:[a-zA-Z0-9._-]{1,96}$/))
+      .max(1_000_000)
+      .refine((values) => new Set(values).size === values.length, "duplicate intent ID"),
+    processedNonces: z
+      .array(Bytes32Schema)
+      .max(1_000_000)
+      .refine(
+        (values) => new Set(values.map((value) => value.toLowerCase())).size === values.length,
+        "duplicate nonce",
+      ),
+    dailySpendByKey: z.record(
+      z
+        .string()
+        .max(128)
+        .regex(/^\d{4}-\d{2}-\d{2}:\d+:0x[0-9a-f]{40}$/),
+      AtomicAmountSchema,
+    ),
+  })
+  .strict();
+
+export type PolicyKernelState = z.infer<typeof PolicyKernelStateSchema>;
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -112,20 +146,17 @@ function isCanonicalMarketplaceEvidence(
   observation: Observation,
   intent: ExecutionIntent,
 ): boolean {
-  if (observation.source.kind !== "onchain" && observation.source.kind !== "opensea") {
+  if (
+    observation.source.kind !== "opensea" ||
+    observation.order?.marketplace !== "opensea" ||
+    observation.order.orderHash.toLowerCase() !== intent.action.orderHash.toLowerCase()
+  ) {
     return false;
   }
 
-  const canonicalClaimTypes = new Set([
-    "collection_identity",
-    "ownership",
-    "listing",
-    "executable_bid",
-  ]);
-
   return observation.claims.some(
     (claim) =>
-      canonicalClaimTypes.has(claim.type) &&
+      claim.type === "listing" &&
       claim.asset.chainId === intent.action.chainId &&
       claim.asset.address.toLowerCase() === intent.action.collectionContract.toLowerCase() &&
       claim.asset.tokenId === intent.action.tokenId,
@@ -141,12 +172,43 @@ export class PolicyKernel {
   readonly policy: Readonly<PolicyConfig>;
 
   readonly #processedIntentIds = new Set<string>();
+  readonly #processedNonces = new Set<string>();
   readonly #dailySpend = new Map<string, bigint>();
 
-  constructor(rawPolicy: PolicyConfig) {
+  constructor(rawPolicy: PolicyConfig, rawState?: PolicyKernelState) {
     const policy = PolicyConfigSchema.parse(structuredClone(rawPolicy));
     this.policy = deepFreeze(policy);
     this.policyHash = canonicalHash(policy);
+
+    if (rawState !== undefined) {
+      const state = PolicyKernelStateSchema.parse(structuredClone(rawState));
+      if (state.policyHash.toLowerCase() !== this.policyHash.toLowerCase()) {
+        throw new Error("policy kernel state does not match the active policy hash");
+      }
+      for (const intentId of state.processedIntentIds) {
+        this.#processedIntentIds.add(intentId);
+      }
+      for (const nonce of state.processedNonces) {
+        this.#processedNonces.add(nonce.toLowerCase());
+      }
+      for (const [key, value] of Object.entries(state.dailySpendByKey)) {
+        this.#dailySpend.set(key, BigInt(value));
+      }
+    }
+  }
+
+  exportState(): Readonly<PolicyKernelState> {
+    return deepFreeze({
+      schemaVersion: 1,
+      policyHash: this.policyHash,
+      processedIntentIds: [...this.#processedIntentIds].sort(),
+      processedNonces: [...this.#processedNonces].sort() as `0x${string}`[],
+      dailySpendByKey: Object.fromEntries(
+        [...this.#dailySpend.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, value]) => [key, value.toString()]),
+      ),
+    });
   }
 
   authorize(
@@ -176,6 +238,7 @@ export class PolicyKernel {
     }
 
     this.#processedIntentIds.add(intent.intentId);
+    this.#processedNonces.add(intent.action.nonce.toLowerCase());
     const spendKey = this.#dailySpendKey(intent, now);
     const previousSpend = this.#dailySpend.get(spendKey) ?? 0n;
     this.#dailySpend.set(spendKey, previousSpend + BigInt(intent.action.maxTotalSpend));
@@ -219,6 +282,9 @@ export class PolicyKernel {
     if (this.#processedIntentIds.has(intent.intentId)) {
       reasons.add("DUPLICATE_INTENT");
     }
+    if (this.#processedNonces.has(action.nonce.toLowerCase())) {
+      reasons.add("DUPLICATE_NONCE");
+    }
     if (createdAt.getTime() >= expiresAt.getTime()) {
       reasons.add("INTENT_TIME_INVALID");
     }
@@ -248,6 +314,9 @@ export class PolicyKernel {
     if (!includesContract(this.policy.allowedPaymentAssets, action.chainId, action.paymentAsset)) {
       reasons.add("PAYMENT_ASSET_NOT_ALLOWED");
     }
+    if (!includesContract(this.policy.allowedRecipients, action.chainId, action.recipient)) {
+      reasons.add("RECIPIENT_NOT_ALLOWED");
+    }
 
     const paymentAssetKey = assetKey(action.chainId, action.paymentAsset);
     const perTransactionLimit = this.policy.maxPerTransactionByAsset[paymentAssetKey];
@@ -268,6 +337,12 @@ export class PolicyKernel {
     const observationsById = new Map(
       observations.map((observation) => [observation.observationId, observation]),
     );
+    if (
+      new Set(intent.evidenceIds).size !== intent.evidenceIds.length ||
+      observationsById.size !== observations.length
+    ) {
+      reasons.add("DUPLICATE_EVIDENCE");
+    }
     const referenced = intent.evidenceIds
       .map((id) => observationsById.get(id))
       .filter((value): value is Observation => value !== undefined);
@@ -279,9 +354,20 @@ export class PolicyKernel {
     const maxEvidenceAgeMs = this.policy.maxEvidenceAgeSeconds * 1_000;
     for (const observation of referenced) {
       const acquiredAt = new Date(observation.acquiredAt);
+      const observedAt = new Date(observation.observedAt);
       const validUntil = new Date(observation.validUntil);
       if (
+        acquiredAt.getTime() > now.getTime() + maxClockSkewMs ||
+        observedAt.getTime() > now.getTime() + maxClockSkewMs ||
+        observedAt.getTime() > acquiredAt.getTime() + maxClockSkewMs ||
+        validUntil.getTime() <= acquiredAt.getTime() ||
+        validUntil.getTime() <= observedAt.getTime()
+      ) {
+        reasons.add("EVIDENCE_TIME_INVALID");
+      }
+      if (
         now.getTime() - acquiredAt.getTime() > maxEvidenceAgeMs ||
+        now.getTime() - observedAt.getTime() > maxEvidenceAgeMs ||
         validUntil.getTime() <= now.getTime()
       ) {
         reasons.add("STALE_EVIDENCE");

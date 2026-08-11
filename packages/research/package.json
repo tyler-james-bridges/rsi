@@ -1,0 +1,13 @@
+{
+  "name": "@rsi/research",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@rsi/domain": "workspace:*",
+    "zod": "^4.4.3"
+  }
+}

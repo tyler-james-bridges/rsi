@@ -63,7 +63,7 @@ The first executable domain object is an NFT purchase intent. It commits to:
 - evidence IDs;
 - unique nonce and expiry.
 
-`@rsi/domain` encodes the object as EIP-712 typed data. A future signer must independently reconstruct the order, verify the EIP-712 digest, simulate it, and revalidate state immediately before broadcast.
+`@rsi/domain` encodes the object as EIP-712 typed data. The kernel allowlists the recipient, persists used intent IDs and nonces, and requires a fresh OpenSea observation carrying the exact order hash. A future signer must still independently reconstruct the order, verify the EIP-712 digest, simulate it, and revalidate state immediately before broadcast.
 
 ## Recursive-improvement boundary
 
@@ -87,4 +87,12 @@ These are separate money domains. The UI may aggregate public performance, but k
 
 ## Storage model
 
-The first persistent implementation should use an append-only SQLite event log locally, with content-addressed raw snapshots stored separately. Every derived claim, decision, execution receipt, outcome, strategy proposal, and promotion points back to immutable hashes. Public reporting can reveal hashes, timestamps, decisions, costs, and results without leaking credentials or sensitive brokerage data.
+The local foundation now uses a transactional SQLite event log. Each event commits to its canonical payload, sequence, predecessor hash, type, aggregate, idempotency key, and timestamp. A metadata head makes direct edits, reordering, and tail deletion detectable on reopen. Duplicate retries return the original event only when the complete request is identical; conflicting reuse fails closed.
+
+This is tamper-evident, not tamper-proof. The event rows and head metadata share one database, so an attacker who can replace the entire file can construct a new internally consistent history. Before execution exists, RSI needs an independently controlled signed checkpoint or write-once external anchor plus backup and recovery tests.
+
+The policy read/decide/append step runs inside one SQLite `BEGIN IMMEDIATE` transaction. A clean restart rebuilds intent-ID, nonce, and daily-spend state from approved decisions, and multiple local writers sharing that database cannot approve from stale snapshots. This does not coordinate separate database copies or hosts; a future distributed executor still requires one durable authorization authority.
+
+The recorded-fixture pipeline does not persist raw hostile bytes. It records capture hashes and bounded metadata, then typed observations, analyses, correlation summaries, intents, decisions, kernel state, and run reports. A future live collector needs a separate encrypted/content-addressed raw snapshot vault inside the quarantine trust domain. No signer or operator projection may read that vault.
+
+The read-only operator service binds to IPv4 loopback by default and recursively removes known sensitive field names. That projection is defense in depth, not a secret-management system: providers must never place credentials or hostile raw content anywhere in public response objects.

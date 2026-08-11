@@ -1,0 +1,41 @@
+{
+  "fixtureVersion": "rsi.fixture.v1",
+  "fixtureType": "x-post",
+  "source": {
+    "kind": "x",
+    "providerId": "fixture.x.archive"
+  },
+  "acquiredAt": "2026-08-11T11:59:48.000Z",
+  "validUntil": "2026-08-11T12:04:00.000Z",
+  "post": {
+    "postId": "2002",
+    "author": {
+      "authorId": "900000000000000102",
+      "handle": "alpha_calls_02",
+      "accountCreatedAt": "2026-08-10T00:00:00.000Z",
+      "followersCount": 1,
+      "followingCount": 300,
+      "postsCount": 3,
+      "verified": false,
+      "previousHandles": ["promo_beta", "drop_beta"]
+    },
+    "createdAt": "2026-08-11T11:59:45.000Z",
+    "editHistoryIds": ["2002"],
+    "text": "BUY NFT NOW https://openseа.io/assets/robinhood/0x1111111111111111111111111111111111111111/7 0x1111111111111111111111111111111111111111",
+    "links": [
+      {
+        "observedUrl": "https://openseа.io/assets/robinhood/0x1111111111111111111111111111111111111111/7",
+        "redirects": []
+      }
+    ]
+  },
+  "claim": {
+    "type": "market_momentum",
+    "asset": {
+      "chainId": 4663,
+      "address": "0x1111111111111111111111111111111111111111",
+      "tokenId": "7"
+    },
+    "confidence": 0.99
+  }
+}

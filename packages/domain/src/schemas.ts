@@ -10,16 +10,53 @@ export const Sha256IdSchema = z
   .string()
   .regex(/^sha256:[0-9a-f]{64}$/, "expected a sha256:<lowercase hex> identifier");
 
+export const XStableIdSchema = z
+  .string()
+  .regex(/^\d{1,32}$/, "expected a decimal X stable identifier");
+
+const MAX_UINT256 = (1n << 256n) - 1n;
+
 export const AtomicAmountSchema = z
   .string()
-  .regex(/^(0|[1-9][0-9]*)$/, "expected an unsigned atomic-unit integer");
+  .max(78, "atomic amount exceeds uint256")
+  .regex(/^(0|[1-9][0-9]*)$/, "expected an unsigned atomic-unit integer")
+  .refine(
+    (value) =>
+      value.length <= 78 && /^(0|[1-9][0-9]*)$/.test(value) && BigInt(value) <= MAX_UINT256,
+    "atomic amount exceeds uint256",
+  );
 
 export const PositiveAtomicAmountSchema = AtomicAmountSchema.refine(
-  (value) => BigInt(value) > 0n,
+  (value) => /^[1-9][0-9]{0,77}$/.test(value),
   "amount must be positive",
 );
 
 export const TimestampSchema = z.string().datetime({ offset: true });
+
+export const HttpsOriginSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.pathname === "/" &&
+      url.search === "" &&
+      url.hash === ""
+    );
+  }, "expected a credential-free HTTPS origin");
+
+export const SafeLabelSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+
+export const MediaTypeSchema = z
+  .string()
+  .max(128)
+  .regex(
+    /^[A-Za-z0-9!#$&^_.+-]{1,64}\/[A-Za-z0-9!#$&^_.+-]{1,64}(?:;\s*charset=[A-Za-z0-9._-]{1,32})?$/,
+    "expected a bounded media type",
+  );
 
 export const AssetContractSchema = z
   .object({
@@ -62,35 +99,43 @@ export const ObservationSchema = z
     source: z
       .object({
         kind: ObservationSourceKindSchema,
-        providerId: z.string().min(1).max(128),
-        providerOrigin: z.string().url().optional(),
+        providerId: SafeLabelSchema,
+        providerOrigin: HttpsOriginSchema.optional(),
       })
       .strict(),
     acquiredAt: TimestampSchema,
+    observedAt: TimestampSchema,
     validUntil: TimestampSchema,
     raw: z
       .object({
         contentHash: Sha256IdSchema,
-        contentType: z.string().min(1).max(128),
+        contentType: MediaTypeSchema,
         byteLength: z.number().int().nonnegative().max(5_000_000),
       })
       .strict(),
     origin: z
       .object({
-        xPostId: z.string().min(1).max(64).optional(),
-        authorId: z.string().min(1).max(64).optional(),
-        editHistoryIds: z.array(z.string().min(1).max(64)).max(100).default([]),
+        xPostId: XStableIdSchema.optional(),
+        authorId: XStableIdSchema.optional(),
+        editHistoryIds: z.array(XStableIdSchema).max(100).default([]),
         capturedVersionHash: Sha256IdSchema.optional(),
+      })
+      .strict()
+      .optional(),
+    order: z
+      .object({
+        marketplace: z.literal("opensea"),
+        orderHash: Bytes32Schema,
       })
       .strict()
       .optional(),
     claims: z.array(EvidenceClaimSchema).min(1).max(100),
     integrity: z
       .object({
-        coordinationClusterId: z.string().min(1).max(128),
+        coordinationClusterId: SafeLabelSchema,
         accountAnomalyScore: z.number().min(0).max(1),
-        homographFlags: z.array(z.string().min(1).max(128)).max(50),
-        injectionFlags: z.array(z.string().min(1).max(128)).max(50),
+        homographFlags: z.array(SafeLabelSchema).max(50),
+        injectionFlags: z.array(SafeLabelSchema).max(50),
         independentEvidenceIds: z.array(Sha256IdSchema).max(100),
       })
       .strict(),
@@ -134,6 +179,7 @@ export const PolicyConfigSchema = z
     allowedMarketplaceTargets: z.array(AssetContractSchema).min(1),
     allowedCollections: z.array(AssetContractSchema).min(1),
     allowedPaymentAssets: z.array(AssetContractSchema).min(1),
+    allowedRecipients: z.array(AssetContractSchema).min(1),
     maxPerTransactionByAsset: z.record(
       z.string().regex(/^\d+:0x[0-9a-f]{40}$/),
       PositiveAtomicAmountSchema,

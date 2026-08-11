@@ -4,7 +4,7 @@ Each phase produces evidence that unlocks the next. “Live” begins with bound
 
 ## Phase 0 — Foundation
 
-Status: **started in Build Session 1**
+Status: **complete as a non-executing local foundation**
 
 - TypeScript monorepo and local CLI.
 - Strict evidence, policy, strategy, and NFT-intent schemas.
@@ -18,11 +18,18 @@ Exit: `pnpm check` passes and the declared prohibited intents are rejected.
 
 ## Phase 1 — Provenance-first research
 
-- Append-only SQLite event store and content-addressed snapshot store.
-- X collector in a network-isolated process.
-- OpenSea and chain read adapters.
-- Claim extraction, coordination clustering, stable-account history, edit tracking, exact contract resolution, and wash-trade graph.
-- Public local dashboard showing hypotheses, evidence lineage, costs, decisions, and abstentions.
+Status: **recorded-fixture vertical slice complete in Build Session 2; live reads remain disabled**
+
+- [x] Transactional SQLite event store with an integrity chain, retry idempotency, reopen verification, and tail-deletion detection.
+- [x] Bounded quarantine capture and strict recorded X/OpenSea/onchain fixture schemas.
+- [x] Typed observation extraction, source-observed timestamps, instruction-risk flags, URL normalization, stable-author coordination clustering, and exact asset/order correlation.
+- [x] Durable end-to-end runs covering safe, prompt-injection, coordinated-shill, stale-evidence, and contract-substitution cases.
+- [x] Read-only local operator API showing integrity, evidence lineage, decisions, and abstentions without raw hostile text.
+- [ ] Externally anchored event-log checkpoints and a separate encrypted/content-addressed snapshot vault.
+- [ ] Authenticated live X collector in a network-isolated process.
+- [ ] Authenticated OpenSea and chain read adapters with recorded replay fixtures.
+- [ ] Stable-account history, edit tracking, exact proxy/deployer resolution, and wash-trade/funding graphs.
+- [ ] A richer local UI; the current operator surface is JSON HTTP plus CLI.
 
 Exit: recorded adversarial corpus produces zero policy escapes; no state-changing credentials exist.
 
@@ -66,4 +73,4 @@ Exit: the optional connector can be disconnected without affecting RSI's onchain
 
 ## Near-term next session
 
-Build Phase 1's append-only event store and ingest one recorded X fixture plus one canonical marketplace/onchain fixture through the quarantine-to-evidence pipeline.
+Externally anchor event-log checkpoints, design the isolated raw snapshot vault, then add one authenticated read-only source adapter with record/replay fixtures and no state-changing credentials.

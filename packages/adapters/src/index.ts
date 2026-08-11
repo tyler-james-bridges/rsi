@@ -112,5 +112,5 @@ export const RSI_ADAPTER_CATALOG = Object.freeze(
       credentialBoundary: "exclusive-onchain-executor",
       notes: "Fresh smart account with an expiring, selector-scoped session key.",
     },
-  ].map((manifest) => AdapterManifestSchema.parse(manifest)),
+  ].map((manifest) => Object.freeze(AdapterManifestSchema.parse(manifest))),
 );

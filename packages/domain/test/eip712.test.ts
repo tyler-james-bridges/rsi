@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { evidenceRoot, hashExecutionIntent, type ExecutionIntent } from "../src/index.js";
+import {
+  AtomicAmountSchema,
+  PositiveAtomicAmountSchema,
+  evidenceRoot,
+  hashExecutionIntent,
+  type ExecutionIntent,
+} from "../src/index.js";
 
 const intent: ExecutionIntent = {
   intentId: "rsi-intent:typed-data-001",
@@ -53,5 +59,14 @@ describe("EIP-712 execution intent", () => {
       hashExecutionIntent(changedNonce, verifier),
     );
     expect(evidenceRoot(intent.evidenceIds)).toBe(evidenceRoot([...intent.evidenceIds].reverse()));
+  });
+
+  it("rejects decimal values above the EVM uint256 boundary", () => {
+    const maxUint256 = ((1n << 256n) - 1n).toString();
+    expect(AtomicAmountSchema.parse(maxUint256)).toBe(maxUint256);
+    expect(() => AtomicAmountSchema.parse((1n << 256n).toString())).toThrow(/uint256/);
+    expect(() => AtomicAmountSchema.parse("9".repeat(10_000))).toThrow(/uint256/);
+    expect(PositiveAtomicAmountSchema.safeParse("not-a-number").success).toBe(false);
+    expect(PositiveAtomicAmountSchema.safeParse("0").success).toBe(false);
   });
 });

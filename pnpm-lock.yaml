@@ -28,12 +28,20 @@ importers:
       "@rsi/domain":
         specifier: workspace:*
         version: link:../../packages/domain
+      "@rsi/operator":
+        specifier: workspace:*
+        version: link:../operator
+      "@rsi/pipeline":
+        specifier: workspace:*
+        version: link:../../packages/pipeline
       "@rsi/policy":
         specifier: workspace:*
         version: link:../../packages/policy
       tsx:
         specifier: ^4.23.12
         version: 4.23.12
+
+  apps/operator: {}
 
   packages/adapters:
     dependencies:
@@ -61,12 +69,50 @@ importers:
       "@rsi/domain":
         specifier: workspace:*
         version: link:../domain
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/pipeline:
+    dependencies:
+      "@rsi/domain":
+        specifier: workspace:*
+        version: link:../domain
+      "@rsi/operator":
+        specifier: workspace:*
+        version: link:../../apps/operator
+      "@rsi/policy":
+        specifier: workspace:*
+        version: link:../policy
+      "@rsi/research":
+        specifier: workspace:*
+        version: link:../research
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/policy:
     dependencies:
       "@rsi/domain":
         specifier: workspace:*
         version: link:../domain
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/research:
+    dependencies:
+      "@rsi/domain":
+        specifier: workspace:*
+        version: link:../domain
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/store: {}
 
 packages:
   "@adraffy/ens-normalize@1.11.1":

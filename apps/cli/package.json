@@ -4,10 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "operator": "tsx src/operator.ts",
+    "pipeline": "tsx src/pipeline.ts",
     "start": "tsx src/index.ts"
   },
   "dependencies": {
     "@rsi/domain": "workspace:*",
+    "@rsi/operator": "workspace:*",
+    "@rsi/pipeline": "workspace:*",
     "@rsi/policy": "workspace:*",
     "tsx": "^4.23.12"
   }

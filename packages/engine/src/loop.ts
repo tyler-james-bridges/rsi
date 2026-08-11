@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { z } from "zod";
 
 import {
   StrategyPatchSchema,
@@ -44,6 +45,40 @@ const DEFAULT_OPTIONS: ImprovementLoopOptions = {
   minEvaluationSampleSize: 10,
 };
 
+const ImprovementLoopOptionsSchema = z
+  .object({
+    maxCanaryAllocationBps: z.number().int().min(1).max(10_000),
+    maxCanaryDrawdownBps: z.number().int().min(0).max(10_000),
+    minEvaluationSampleSize: z.number().int().min(1).max(1_000_000_000),
+  })
+  .strict();
+
+const AttackResultSchema = z
+  .object({
+    passed: z.boolean(),
+    hardInvariantEscapes: z.number().int().nonnegative().max(1_000_000),
+    notes: z.string().max(4_096),
+  })
+  .strict();
+
+const CanaryResultSchema = z
+  .object({
+    hardInvariantEscapes: z.number().int().nonnegative().max(1_000_000),
+    maxDrawdownBps: z.number().int().min(0).max(10_000),
+    notes: z.string().max(4_096),
+  })
+  .strict();
+
+const EvaluationResultSchema = z
+  .object({
+    sampleSize: z.number().int().nonnegative().max(1_000_000_000),
+    recommendPromotion: z.boolean(),
+    notes: z.string().max(4_096),
+  })
+  .strict();
+
+const EvidenceRootSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
+
 function candidateId(value: unknown): string {
   return `candidate:${createHash("sha256")
     .update(JSON.stringify(value))
@@ -58,7 +93,7 @@ export class RecursiveImprovementLoop {
 
   constructor(rawChampion: Strategy, options: Partial<ImprovementLoopOptions> = {}) {
     this.#champion = StrategySchema.parse(structuredClone(rawChampion));
-    this.#options = { ...DEFAULT_OPTIONS, ...options };
+    this.#options = ImprovementLoopOptionsSchema.parse({ ...DEFAULT_OPTIONS, ...options });
   }
 
   get champion(): Strategy {
@@ -72,6 +107,8 @@ export class RecursiveImprovementLoop {
     now = new Date(),
   ): CandidateStrategy {
     const patch = StrategyPatchSchema.parse(rawPatch);
+    const parsedEvidenceRoot = EvidenceRootSchema.parse(evidenceRoot);
+    if (!Number.isFinite(now.getTime())) throw new Error("candidate time must be valid");
     const nextStrategy = StrategySchema.parse({
       ...this.#champion,
       ...patch,
@@ -89,14 +126,14 @@ export class RecursiveImprovementLoop {
     const candidate: CandidateStrategy = {
       candidateId: candidateId({
         baseVersion: this.#champion.version,
-        evidenceRoot,
+        evidenceRoot: parsedEvidenceRoot,
         nextStrategy,
       }),
       stage: "proposed",
       baseVersion: this.#champion.version,
       strategy: nextStrategy,
       patch,
-      evidenceRoot,
+      evidenceRoot: parsedEvidenceRoot,
       createdAt: now.toISOString(),
     };
     this.#candidates.set(candidate.candidateId, candidate);
@@ -107,6 +144,7 @@ export class RecursiveImprovementLoop {
     id: string,
     result: { passed: boolean; hardInvariantEscapes: number; notes: string },
   ): CandidateStrategy {
+    result = AttackResultSchema.parse(result);
     const candidate = this.#requireStage(id, "proposed");
     if (!result.passed || result.hardInvariantEscapes !== 0) {
       candidate.stage = "rejected";
@@ -136,6 +174,7 @@ export class RecursiveImprovementLoop {
     id: string,
     result: { hardInvariantEscapes: number; maxDrawdownBps: number; notes: string },
   ): CandidateStrategy {
+    result = CanaryResultSchema.parse(result);
     const candidate = this.#requireStage(id, "canary_active");
     if (
       result.hardInvariantEscapes !== 0 ||
@@ -153,6 +192,7 @@ export class RecursiveImprovementLoop {
     id: string,
     result: { sampleSize: number; recommendPromotion: boolean; notes: string },
   ): CandidateStrategy {
+    result = EvaluationResultSchema.parse(result);
     const candidate = this.#requireStage(id, "canary_complete");
     if (result.sampleSize < this.#options.minEvaluationSampleSize) {
       throw new Error(

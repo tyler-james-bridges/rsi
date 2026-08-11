@@ -1,0 +1,17 @@
+{
+  "name": "@rsi/pipeline",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@rsi/domain": "workspace:*",
+    "@rsi/operator": "workspace:*",
+    "@rsi/policy": "workspace:*",
+    "@rsi/research": "workspace:*",
+    "@rsi/store": "workspace:*",
+    "zod": "^4.4.3"
+  }
+}

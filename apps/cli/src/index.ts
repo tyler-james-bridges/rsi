@@ -17,6 +17,7 @@ const policy: PolicyConfig = {
   allowedMarketplaceTargets: [{ chainId: 4663, address: MARKETPLACE }],
   allowedCollections: [{ chainId: 4663, address: COLLECTION }],
   allowedPaymentAssets: [{ chainId: 4663, address: PAYMENT_ASSET }],
+  allowedRecipients: [{ chainId: 4663, address: RECIPIENT }],
   maxPerTransactionByAsset: {
     [assetKey(4663, PAYMENT_ASSET)]: "10000000",
   },
@@ -37,11 +38,17 @@ function observation(
   cluster: string,
   claimType: Observation["claims"][number]["type"],
 ): Observation {
+  const order =
+    source === "opensea"
+      ? { marketplace: "opensea" as const, orderHash: `0x${"5".repeat(64)}` }
+      : undefined;
   return {
     observationId: `sha256:${idCharacter.repeat(64)}`,
     source: { kind: source, providerId: `demo-${source}` },
     acquiredAt,
+    observedAt: acquiredAt,
     validUntil,
+    ...(order === undefined ? {} : { order }),
     raw: {
       contentHash: `sha256:${idCharacter.repeat(64)}`,
       contentType: "application/json",

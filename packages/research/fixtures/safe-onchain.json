@@ -1,0 +1,28 @@
+{
+  "fixtureVersion": "rsi.fixture.v1",
+  "fixtureType": "onchain-record",
+  "source": {
+    "kind": "onchain",
+    "providerId": "fixture.rpc.archive",
+    "providerOrigin": "https://rpc-provider.example.invalid"
+  },
+  "acquiredAt": "2026-08-11T11:59:15.000Z",
+  "validUntil": "2026-08-11T12:10:00.000Z",
+  "record": {
+    "chainId": 4663,
+    "blockNumber": "8100000",
+    "blockHash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+    "blockTimestamp": "2026-08-11T11:59:12.000Z",
+    "transactionHash": "0x5555555555555555555555555555555555555555555555555555555555555555",
+    "logIndex": 2,
+    "claim": {
+      "type": "ownership",
+      "asset": {
+        "chainId": 4663,
+        "address": "0x1111111111111111111111111111111111111111",
+        "tokenId": "7"
+      },
+      "confidence": 1
+    }
+  }
+}

@@ -15,6 +15,7 @@ export function makeFixture() {
     allowedMarketplaceTargets: [{ chainId: 4663, address: MARKETPLACE }],
     allowedCollections: [{ chainId: 4663, address: COLLECTION }],
     allowedPaymentAssets: [{ chainId: 4663, address: PAYMENT_ASSET }],
+    allowedRecipients: [{ chainId: 4663, address: RECIPIENT }],
     maxPerTransactionByAsset: {
       [assetKey(4663, PAYMENT_ASSET)]: "10000000",
     },
@@ -33,31 +34,39 @@ export function makeFixture() {
     source: Observation["source"]["kind"],
     cluster: string,
     claimType: Observation["claims"][number]["type"],
-  ): Observation => ({
-    observationId: `sha256:${idCharacter.repeat(64)}`,
-    source: { kind: source, providerId: `fixture-${source}` },
-    acquiredAt: "2026-08-11T11:59:00.000Z",
-    validUntil: "2026-08-11T12:01:00.000Z",
-    raw: {
-      contentHash: `sha256:${idCharacter.repeat(64)}`,
-      contentType: "application/json",
-      byteLength: 512,
-    },
-    claims: [
-      {
-        type: claimType,
-        asset: { chainId: 4663, address: COLLECTION, tokenId: "7" },
-        confidence: 0.9,
+  ): Observation => {
+    const order =
+      source === "opensea"
+        ? { marketplace: "opensea" as const, orderHash: `0x${"5".repeat(64)}` }
+        : undefined;
+    return {
+      observationId: `sha256:${idCharacter.repeat(64)}`,
+      source: { kind: source, providerId: `fixture-${source}` },
+      acquiredAt: "2026-08-11T11:59:00.000Z",
+      observedAt: "2026-08-11T11:58:55.000Z",
+      validUntil: "2026-08-11T12:01:00.000Z",
+      ...(order === undefined ? {} : { order }),
+      raw: {
+        contentHash: `sha256:${idCharacter.repeat(64)}`,
+        contentType: "application/json",
+        byteLength: 512,
       },
-    ],
-    integrity: {
-      coordinationClusterId: cluster,
-      accountAnomalyScore: 0,
-      homographFlags: [],
-      injectionFlags: [],
-      independentEvidenceIds: [],
-    },
-  });
+      claims: [
+        {
+          type: claimType,
+          asset: { chainId: 4663, address: COLLECTION, tokenId: "7" },
+          confidence: 0.9,
+        },
+      ],
+      integrity: {
+        coordinationClusterId: cluster,
+        accountAnomalyScore: 0,
+        homographFlags: [],
+        injectionFlags: [],
+        independentEvidenceIds: [],
+      },
+    };
+  };
 
   const observations = [
     observation("a", "x", "social-cluster", "market_momentum"),
