@@ -16,6 +16,8 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 - One exclusive executor owns each state-changing capability.
 - No arbitrary calls, arbitrary approvals, bridging, withdrawals, leverage, lending, self-trading, or EIP-7702 delegation.
 - A strategy cannot edit policy, tests, logs, evaluator, credentials, emergency stop, or incident history.
+- Raw snapshot encryption keys and checkpoint signing keys are separate from each other and from every future wallet key.
+- A checkpoint is trusted only when its public key, store ID, key ID, and newest independently retained journal head are pinned.
 
 ## Threat gates
 
@@ -30,6 +32,14 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 | Prompt/tool injection    | Parse untrusted bytes in a no-tools process into a closed schema. Discard instruction-like and unknown fields.                 | Signer accepts structured fields only and independently constructs calldata.                        |
 | Malicious paid provider  | Enforce content type, schema, size, timeout, same-origin redirect, DNS/IP, response hash, and provider budget.                 | Pin network, asset, payee, endpoint, amount, nonce, and deadline. Payment proves payment—not truth. |
 | Transaction substitution | Commit to expected economic result and order hash.                                                                             | Decode all order entries and recipients, simulate, then revalidate before broadcast.                |
+
+## Research storage and checkpoint threats
+
+- X bearer credentials are constructor-injected, never accepted in a query, cassette, event, demo output, or vault metadata. The collector rejects redirects and response bodies containing its credential.
+- Exact external bytes and their metadata are encrypted before parsing. Malformed data produces a bounded rejection event while the encrypted snapshot remains available for isolated forensic review.
+- Snapshot addresses reveal a SHA-256 digest and ciphertext size. They do not make low-entropy content secret from an attacker who can guess and hash it; do not treat content addressing as confidentiality.
+- Vault compromise is contained with a dedicated directory, strict permissions, authenticated encryption, bounded objects, and symlink/hard-link checks. A same-user attacker with the live in-process key can still decrypt data, so production deployment requires process isolation and managed key custody.
+- SQLite's internal hash chain cannot detect replacement with another internally consistent database. Signed checkpoints bind exact historical heads, but suffix rollback is detectable only when the latest journal head is retained outside the journal. Production activation requires publishing or storing that head in an independently controlled system and testing recovery.
 
 ## Tool activation
 

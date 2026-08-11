@@ -1,0 +1,25 @@
+{
+  "name": "@rsi/ingestion",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@rsi/store": "workspace:*",
+    "@rsi/vault": "workspace:*",
+    "@rsi/x-collector": "workspace:*"
+  },
+  "devDependencies": {
+    "@rsi/checkpoints": "workspace:*"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

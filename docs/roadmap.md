@@ -18,15 +18,18 @@ Exit: `pnpm check` passes and the declared prohibited intents are rejected.
 
 ## Phase 1 — Provenance-first research
 
-Status: **recorded-fixture vertical slice complete in Build Session 2; live reads remain disabled**
+Status: **offline provenance and quarantined X ingestion complete through Build Session 3; production live reads remain unapproved**
 
 - [x] Transactional SQLite event store with an integrity chain, retry idempotency, reopen verification, and tail-deletion detection.
 - [x] Bounded quarantine capture and strict recorded X/OpenSea/onchain fixture schemas.
 - [x] Typed observation extraction, source-observed timestamps, instruction-risk flags, URL normalization, stable-author coordination clustering, and exact asset/order correlation.
 - [x] Durable end-to-end runs covering safe, prompt-injection, coordinated-shill, stale-evidence, and contract-substitution cases.
 - [x] Read-only local operator API showing integrity, evidence lineage, decisions, and abstentions without raw hostile text.
-- [ ] Externally anchored event-log checkpoints and a separate encrypted/content-addressed snapshot vault.
-- [ ] Authenticated live X collector in a network-isolated process.
+- [x] Portable Ed25519-signed event-log checkpoints with an independent journal and verifier.
+- [ ] Publish or retain the newest trusted checkpoint head in an independently controlled system and test backup/recovery.
+- [x] Separate content-addressed AES-256-GCM snapshot vault with encrypted metadata and adversarial filesystem tests.
+- [x] Credential-injected, read-only X recent-search collector with pinned transport/schema and offline record/replay fixtures.
+- [ ] Run a credentialed X canary in a network-isolated process, reconcile the current official documentation dialect, and approve or revise the pinned contract.
 - [ ] Authenticated OpenSea and chain read adapters with recorded replay fixtures.
 - [ ] Stable-account history, edit tracking, exact proxy/deployer resolution, and wash-trade/funding graphs.
 - [ ] A richer local UI; the current operator surface is JSON HTTP plus CLI.
@@ -73,4 +76,4 @@ Exit: the optional connector can be disconnected without affecting RSI's onchain
 
 ## Near-term next session
 
-Externally anchor event-log checkpoints, design the isolated raw snapshot vault, then add one authenticated read-only source adapter with record/replay fixtures and no state-changing credentials.
+Externally retain/publish the checkpoint journal head, run the X collector's credentialed network-isolated canary, and add authenticated OpenSea plus chain read adapters with encrypted record/replay snapshots. Keep every paid and state-changing capability disabled.

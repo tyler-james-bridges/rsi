@@ -4,15 +4,21 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "ingestion": "tsx src/ingestion.ts",
     "operator": "tsx src/operator.ts",
     "pipeline": "tsx src/pipeline.ts",
     "start": "tsx src/index.ts"
   },
   "dependencies": {
+    "@rsi/checkpoints": "workspace:*",
     "@rsi/domain": "workspace:*",
+    "@rsi/ingestion": "workspace:*",
     "@rsi/operator": "workspace:*",
     "@rsi/pipeline": "workspace:*",
     "@rsi/policy": "workspace:*",
+    "@rsi/store": "workspace:*",
+    "@rsi/vault": "workspace:*",
+    "@rsi/x-collector": "workspace:*",
     "tsx": "^4.23.12"
   }
 }

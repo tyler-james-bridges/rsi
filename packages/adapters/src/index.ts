@@ -60,9 +60,10 @@ export const RSI_ADAPTER_CATALOG = Object.freeze(
       id: "x.research",
       label: "X research collector",
       capability: "read_only",
-      status: "disabled",
+      status: "quarantined",
       credentialBoundary: "quarantine-worker",
-      notes: "Collects hypotheses only; never supplies transaction authority.",
+      notes:
+        "Pinned recent-search collector with offline replay; live credentials remain unverified and it never supplies transaction authority.",
     },
     {
       id: "agentcash.x402",

@@ -1,0 +1,17 @@
+{
+  "name": "@rsi/vault",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "format:check": "prettier --check ."
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

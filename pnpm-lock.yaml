@@ -25,9 +25,15 @@ importers:
 
   apps/cli:
     dependencies:
+      "@rsi/checkpoints":
+        specifier: workspace:*
+        version: link:../../packages/checkpoints
       "@rsi/domain":
         specifier: workspace:*
         version: link:../../packages/domain
+      "@rsi/ingestion":
+        specifier: workspace:*
+        version: link:../../packages/ingestion
       "@rsi/operator":
         specifier: workspace:*
         version: link:../operator
@@ -37,6 +43,15 @@ importers:
       "@rsi/policy":
         specifier: workspace:*
         version: link:../../packages/policy
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../../packages/store
+      "@rsi/vault":
+        specifier: workspace:*
+        version: link:../../packages/vault
+      "@rsi/x-collector":
+        specifier: workspace:*
+        version: link:../../packages/x-collector
       tsx:
         specifier: ^4.23.12
         version: 4.23.12
@@ -55,6 +70,12 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/checkpoints:
+    devDependencies:
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
+
   packages/domain:
     dependencies:
       viem:
@@ -72,6 +93,22 @@ importers:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+
+  packages/ingestion:
+    dependencies:
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
+      "@rsi/vault":
+        specifier: workspace:*
+        version: link:../vault
+      "@rsi/x-collector":
+        specifier: workspace:*
+        version: link:../x-collector
+    devDependencies:
+      "@rsi/checkpoints":
+        specifier: workspace:*
+        version: link:../checkpoints
 
   packages/pipeline:
     dependencies:
@@ -113,6 +150,10 @@ importers:
         version: 4.4.3
 
   packages/store: {}
+
+  packages/vault: {}
+
+  packages/x-collector: {}
 
 packages:
   "@adraffy/ens-normalize@1.11.1":
