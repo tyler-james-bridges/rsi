@@ -1,0 +1,27 @@
+{
+  "name": "rsi",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Recursive Self-Improvement: a live economic agent with a non-self-modifying safety kernel.",
+  "type": "module",
+  "packageManager": "pnpm@11.20.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "check": "pnpm typecheck && pnpm test",
+    "demo": "pnpm --filter @rsi/cli start",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

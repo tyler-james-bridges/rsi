@@ -1,0 +1,14 @@
+{
+  "name": "@rsi/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@rsi/domain": "workspace:*",
+    "@rsi/policy": "workspace:*",
+    "tsx": "^4.23.12"
+  }
+}

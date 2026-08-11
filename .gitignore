@@ -1,0 +1,19 @@
+node_modules/
+dist/
+coverage/
+.turbo/
+
+# Secrets and wallet material
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.keystore
+
+# Foundry output (when contract integration tests are added)
+broadcast/
+cache/
+
+.DS_Store
+*.log
