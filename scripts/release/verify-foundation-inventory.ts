@@ -10,7 +10,7 @@ import {
   type ReleaseArtifactInputV1,
   type ReleaseArtifactMediaType,
   type ReleaseArtifactRole,
-} from "@rsi/release-bundle";
+} from "../../packages/release-bundle/src/index.js";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const encoder = new TextEncoder();
