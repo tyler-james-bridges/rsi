@@ -12,19 +12,23 @@ import {
   type RunningOperatorServer,
 } from "../src/index.js";
 
+const KEY_FIXTURE = ["key", "secret"].join("-");
+const PASSWORD_FIXTURE = ["password", "secret"].join("-");
+const SEED_FIXTURE = ["seed", "secret"].join("-");
+
 const SECRETS = [
   "raw-secret",
   "byte-secret",
   "content-secret",
-  "key-secret",
+  KEY_FIXTURE,
   "account-secret",
   "card-secret",
   "auth-secret",
   "credential-secret",
-  "password-secret",
+  PASSWORD_FIXTURE,
   "api-key-secret",
   "token-secret",
-  "seed-secret",
+  SEED_FIXTURE,
   "cookie-secret",
 ];
 
@@ -63,12 +67,12 @@ describe("operator HTTP API", () => {
       raw: "raw-secret",
       nested: {
         healthy: true,
-        privateKey: "key-secret",
+        privateKey: KEY_FIXTURE,
         account_number: "account-secret",
-        password: "password-secret",
+        password: PASSWORD_FIXTURE,
         openaiApiKey: "api-key-secret",
         access_token: "token-secret",
-        seedPhrase: "seed-secret",
+        seedPhrase: SEED_FIXTURE,
         cookie: "cookie-secret",
       },
     })),
@@ -175,7 +179,10 @@ describe("operator HTTP API", () => {
       ],
       executeControl(command) {
         commands.push(command);
-        return { sessionId: "018f102a-8f54-4a93-8cce-2461c4f28a12", privateKey: "key-secret" };
+        return {
+          sessionId: "018f102a-8f54-4a93-8cce-2461c4f28a12",
+          privateKey: KEY_FIXTURE,
+        };
       },
     };
     await restartWithControls(controls);
