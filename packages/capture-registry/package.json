@@ -1,0 +1,20 @@
+{
+  "name": "@rsi/capture-registry",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}

@@ -11,6 +11,7 @@ import {
   ScenarioRunConflictError,
   SqliteOperatorSnapshotProvider,
   createFixturePolicy,
+  isRsiFixturePipeline,
   type FixtureScenarioName,
 } from "../src/index.js";
 
@@ -32,6 +33,24 @@ afterEach(async () => {
 });
 
 describe("RsiFixturePipeline", () => {
+  it("requires the authenticated factory at runtime", async () => {
+    const RuntimePipeline = RsiFixturePipeline as unknown as new (
+      store: object,
+      policy: object,
+      constructionToken: object,
+    ) => RsiFixturePipeline;
+    expect(() => new RuntimePipeline({}, {}, Object.freeze({}))).toThrow(
+      "RsiFixturePipeline must be created through RsiFixturePipeline.open",
+    );
+    const forged = Object.create(RsiFixturePipeline.prototype) as RsiFixturePipeline;
+    expect(isRsiFixturePipeline(forged)).toBe(false);
+    expect(() => forged.close()).toThrow("authenticated factory");
+
+    const pipeline = RsiFixturePipeline.open(await databasePath(), createFixturePolicy());
+    expect(isRsiFixturePipeline(pipeline)).toBe(true);
+    pipeline.close();
+  });
+
   it("persists and approves a corroborated safe scenario", async () => {
     const path = await databasePath();
     const pipeline = RsiFixturePipeline.open(path, createFixturePolicy());

@@ -1,0 +1,18 @@
+title = "RSI Gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Typed Ed25519 key-material identifiers that contain no literal key material"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''^packages/checkpoints/src/types\.ts$''',
+  '''^packages/checkpoints/test/checkpoints\.test\.ts$''',
+]
+regexes = [
+  '''^\s*readonly privateKey: Ed25519PrivateKeyMaterial;\s*$''',
+  '''^\s*privateKey: Ed25519PrivateKeyMaterial = primaryKeys\.privateKey,\s*$''',
+]

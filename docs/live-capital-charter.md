@@ -1,5 +1,11 @@
 # Live-capital charter
 
+> [!IMPORTANT]
+> This is a future Phase 2 charter, not current authorization. The active
+> [Observer v1 production-readiness contract](./production-readiness/v1/README.md)
+> forbids wallets, payments, transactions, and financial credentials. Live capital
+> requires a new design process and qualification.
+
 RSI is designed to learn with real economic consequences. Historical replay is a security test, not a fake portfolio. Live operation begins only when every activation field below is explicitly set and reviewed.
 
 ## Objective ordering

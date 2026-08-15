@@ -12,14 +12,17 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@rsi/capture-registry": "workspace:*",
+    "@rsi/operations": "workspace:*",
     "@rsi/store": "workspace:*",
     "@rsi/vault": "workspace:*",
-    "@rsi/x-collector": "workspace:*"
+    "@rsi/x-collector": "workspace:*",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@rsi/checkpoints": "workspace:*"
   },
   "engines": {
-    "node": ">=24"
+    "node": "24.x"
   }
 }

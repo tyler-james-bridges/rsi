@@ -28,7 +28,6 @@ export type XRecentSearchCassette = Readonly<{
 
 export interface XRecentSearchCassetteStore {
   get(fingerprint: Sha256): Promise<unknown | undefined>;
-  put(cassette: XRecentSearchCassette): Promise<void>;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -89,9 +88,19 @@ function decodeCanonicalBase64(value: unknown): Uint8Array {
   ) {
     invalidCassette();
   }
-  const bytes = Uint8Array.from(Buffer.from(value, "base64"));
-  if (Buffer.from(bytes).toString("base64") !== value) invalidCassette();
-  return bytes;
+  const decoded = Buffer.from(value, "base64");
+  try {
+    const bytes = new Uint8Array(decoded);
+    if (
+      Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64") !== value
+    ) {
+      bytes.fill(0);
+      invalidCassette();
+    }
+    return bytes;
+  } finally {
+    decoded.fill(0);
+  }
 }
 
 function validateCanonicalRequest(canonicalRequest: string, fingerprint: Sha256): void {
@@ -176,43 +185,47 @@ export function validateXRecentSearchCassette(input: unknown): XRecentSearchCass
   const contentType = normalizedJsonContentType(response.contentType);
   if (contentType === undefined) invalidCassette();
   const bytes = decodeCanonicalBase64(response.bodyBase64);
-  if (bytes.byteLength !== response.byteLength || sha256(bytes) !== response.bodySha256) {
-    invalidCassette();
+  try {
+    if (bytes.byteLength !== response.byteLength || sha256(bytes) !== response.bodySha256) {
+      invalidCassette();
+    }
+
+    const integrityInput = {
+      version: X_RECENT_SEARCH_CASSETTE_VERSION,
+      acquiredAt: input.acquiredAt,
+      request: {
+        fingerprint: request.fingerprint,
+        canonicalRequest: request.canonicalRequest,
+      },
+      response: {
+        status: 200,
+        contentType,
+        byteLength: bytes.byteLength,
+        bodySha256: response.bodySha256,
+        bodyBase64: response.bodyBase64 as string,
+      },
+    };
+    if (cassetteIntegrity(integrityInput) !== input.integritySha256) invalidCassette();
+
+    return Object.freeze({
+      version: X_RECENT_SEARCH_CASSETTE_VERSION,
+      acquiredAt: input.acquiredAt,
+      request: Object.freeze({
+        fingerprint: request.fingerprint,
+        canonicalRequest: request.canonicalRequest,
+      }),
+      response: Object.freeze({
+        status: 200,
+        contentType,
+        byteLength: bytes.byteLength,
+        bodySha256: response.bodySha256,
+        bodyBase64: response.bodyBase64 as string,
+      }),
+      integritySha256: input.integritySha256,
+    });
+  } finally {
+    bytes.fill(0);
   }
-
-  const integrityInput = {
-    version: X_RECENT_SEARCH_CASSETTE_VERSION,
-    acquiredAt: input.acquiredAt,
-    request: {
-      fingerprint: request.fingerprint,
-      canonicalRequest: request.canonicalRequest,
-    },
-    response: {
-      status: 200,
-      contentType,
-      byteLength: bytes.byteLength,
-      bodySha256: response.bodySha256,
-      bodyBase64: response.bodyBase64 as string,
-    },
-  };
-  if (cassetteIntegrity(integrityInput) !== input.integritySha256) invalidCassette();
-
-  return Object.freeze({
-    version: X_RECENT_SEARCH_CASSETTE_VERSION,
-    acquiredAt: input.acquiredAt,
-    request: Object.freeze({
-      fingerprint: request.fingerprint,
-      canonicalRequest: request.canonicalRequest,
-    }),
-    response: Object.freeze({
-      status: 200,
-      contentType,
-      byteLength: bytes.byteLength,
-      bodySha256: response.bodySha256,
-      bodyBase64: response.bodyBase64 as string,
-    }),
-    integritySha256: input.integritySha256,
-  });
 }
 
 export function createXRecentSearchCassette(
@@ -226,30 +239,36 @@ export function createXRecentSearchCassette(
     );
   }
   const bytes = response.copyBytes();
-  const cassette = {
-    version: X_RECENT_SEARCH_CASSETTE_VERSION,
-    acquiredAt: response.metadata.acquiredAt,
-    request: {
-      fingerprint: request.fingerprint,
-      canonicalRequest: request.canonicalRequest,
-    },
-    response: {
-      status: 200,
-      contentType: response.metadata.contentType,
-      byteLength: bytes.byteLength,
-      bodySha256: response.metadata.responseHash,
-      bodyBase64: Buffer.from(bytes).toString("base64"),
-    },
-  };
-  return validateXRecentSearchCassette({
-    ...cassette,
-    integritySha256: cassetteIntegrity(cassette),
-  });
+  try {
+    const cassette = {
+      version: X_RECENT_SEARCH_CASSETTE_VERSION,
+      acquiredAt: response.metadata.acquiredAt,
+      request: {
+        fingerprint: request.fingerprint,
+        canonicalRequest: request.canonicalRequest,
+      },
+      response: {
+        status: 200,
+        contentType: response.metadata.contentType,
+        byteLength: bytes.byteLength,
+        bodySha256: response.metadata.responseHash,
+        bodyBase64: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(
+          "base64",
+        ),
+      },
+    };
+    return validateXRecentSearchCassette({
+      ...cassette,
+      integritySha256: cassetteIntegrity(cassette),
+    });
+  } finally {
+    bytes.fill(0);
+  }
 }
 
 export function decodeXRecentSearchCassetteBody(cassette: XRecentSearchCassette): Uint8Array {
   const validated = validateXRecentSearchCassette(cassette);
-  return Uint8Array.from(Buffer.from(validated.response.bodyBase64, "base64"));
+  return decodeCanonicalBase64(validated.response.bodyBase64);
 }
 
 function cloneCassette(cassette: XRecentSearchCassette): XRecentSearchCassette {
@@ -296,21 +315,6 @@ export class MemoryCassetteStore implements XRecentSearchCassetteStore {
   async get(fingerprint: Sha256): Promise<unknown | undefined> {
     const cassette = this.#cassettes.get(fingerprint);
     return cassette === undefined ? undefined : cloneCassette(cassette);
-  }
-
-  async put(candidate: XRecentSearchCassette): Promise<void> {
-    const cassette = validateXRecentSearchCassette(candidate);
-    const existing = this.#cassettes.get(cassette.request.fingerprint);
-    if (existing !== undefined) {
-      if (!cassettesAreIdentical(existing, cassette)) {
-        throw new XCollectorError(
-          "INVALID_CASSETTE",
-          "A conflicting cassette already exists for this request fingerprint.",
-        );
-      }
-      return;
-    }
-    this.#cassettes.set(cassette.request.fingerprint, cassette);
   }
 
   snapshot(): readonly XRecentSearchCassette[] {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { CheckpointSigner, CheckpointVerifier } from "@rsi/checkpoints";
-import { ingestXRecentSearch } from "@rsi/ingestion";
+import { SqliteCaptureRegistry, ingestXRecentSearch } from "@rsi/ingestion";
 import { SqliteEventStore } from "@rsi/store";
 import { SnapshotVault } from "@rsi/vault";
 import {
@@ -17,7 +17,12 @@ import {
 } from "@rsi/x-collector";
 
 const ACQUIRED_AT = "2026-08-11T13:30:00.000Z";
+const BEGIN_AT = "2026-08-11T13:29:30.000Z";
+const COMMITTED_AT = "2026-08-11T13:30:30.000Z";
+const EXPIRES_AT = "2026-08-11T15:29:30.000Z";
 const CHECKPOINT_AT = "2026-08-11T13:31:00.000Z";
+const SESSION_ID = "018f784d-7d21-7a52-bfd1-5cd334bc81aa";
+const ATTEMPT_ID = "018f784d-7d21-7a52-bfd1-5cd334bc81ab";
 const QUERY = Object.freeze({
   query: "NFT momentum lang:en -is:retweet",
   maxResults: 10,
@@ -34,7 +39,7 @@ export interface OfflineIngestionDemoSummary {
     postCount: number | null;
     authorCount: number | null;
     rawContentEncrypted: true;
-    snapshotVerified: boolean;
+    captureVerified: boolean;
   }>;
   readonly eventStore: Readonly<{
     eventCount: number;
@@ -83,12 +88,18 @@ export async function runOfflineIngestionDemo(): Promise<OfflineIngestionDemoSum
   const directory = await mkdtemp(join(tmpdir(), "rsi-offline-ingestion-"));
   const store = new SqliteEventStore(join(directory, "events.sqlite"));
   let vault: SnapshotVault | undefined;
+  let captureRegistry: SqliteCaptureRegistry | undefined;
 
   try {
     vault = await SnapshotVault.open({
       directory: join(directory, "vault"),
-      key: randomBytes(32),
-      maxSnapshotBytes: 128 * 1024,
+      wrappingKey: randomBytes(32),
+      maxCaptureBytes: 128 * 1024,
+    });
+    captureRegistry = SqliteCaptureRegistry.open({
+      expectedProfile: "dev",
+      path: join(directory, "registry", "captures.sqlite"),
+      registryKey: randomBytes(32),
     });
 
     const request = prepareRecentSearchRequest(QUERY);
@@ -99,12 +110,34 @@ export async function runOfflineIngestionDemo(): Promise<OfflineIngestionDemoSum
       recordedResponseBody(),
       ACQUIRED_AT,
     );
+    const cassette = createXRecentSearchCassette(request, quarantined);
+    quarantined.destroy();
     const collector = createXRecentSearchCollector({
       mode: "replay",
-      cassetteStore: new MemoryCassetteStore([createXRecentSearchCassette(request, quarantined)]),
+      cassetteStore: new MemoryCassetteStore([cassette]),
     });
-    const ingestion = await ingestXRecentSearch({ collector, store, vault }, QUERY);
-    const snapshot = await vault.verify(ingestion.snapshotAddress);
+    const clockValues = [BEGIN_AT, COMMITTED_AT] as const;
+    let clockIndex = 0;
+    const ingestion = await ingestXRecentSearch(
+      {
+        captureRegistry,
+        collector,
+        now: () => clockValues[Math.min(clockIndex++, clockValues.length - 1)]!,
+        store,
+        vault,
+      },
+      {
+        attemptId: ATTEMPT_ID,
+        expiresAt: EXPIRES_AT,
+        lane: "discovery",
+        profile: "dev",
+        sessionId: SESSION_ID,
+      },
+      QUERY,
+    );
+    const attempt = captureRegistry.getAttempt(ATTEMPT_ID);
+    if (attempt?.state !== "committed") throw new Error("capture was not committed");
+    const capture = await vault.verify(attempt.captureId);
 
     const externalDirectory = join(directory, "external-checkpoints");
     await mkdir(externalDirectory, { mode: 0o700 });
@@ -140,7 +173,7 @@ export async function runOfflineIngestionDemo(): Promise<OfflineIngestionDemoSum
         postCount: ingestion.postCount,
         authorCount: ingestion.authorCount,
         rawContentEncrypted: true,
-        snapshotVerified: snapshot.valid,
+        captureVerified: capture.valid,
       }),
       eventStore: Object.freeze({
         eventCount: integrity.eventCount,
@@ -155,6 +188,7 @@ export async function runOfflineIngestionDemo(): Promise<OfflineIngestionDemoSum
     });
   } finally {
     await vault?.close();
+    captureRegistry?.close();
     store.close();
     await rm(directory, { force: true, recursive: true });
   }

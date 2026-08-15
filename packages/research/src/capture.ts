@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { MediaTypeSchema, Sha256IdSchema, type Observation } from "@rsi/domain";
 
 export const MAX_RAW_FIXTURE_BYTES = 128 * 1024;
+const RAW_FIXTURE_CAPTURE_CONSTRUCTION_TOKEN = Object.freeze({});
 
 export type RawCaptureMetadata = Observation["raw"];
 
@@ -20,7 +21,10 @@ export class RawFixtureCapture {
   readonly metadata: Readonly<RawCaptureMetadata>;
   readonly #bytes: Uint8Array;
 
-  private constructor(bytes: Uint8Array, metadata: RawCaptureMetadata) {
+  private constructor(bytes: Uint8Array, metadata: RawCaptureMetadata, constructionToken: unknown) {
+    if (constructionToken !== RAW_FIXTURE_CAPTURE_CONSTRUCTION_TOKEN) {
+      throw new Error("RawFixtureCapture must be created through RawFixtureCapture.capture");
+    }
     this.#bytes = bytes.slice();
     this.metadata = Object.freeze({ ...metadata });
   }
@@ -42,11 +46,15 @@ export class RawFixtureCapture {
       throw new Error(`raw fixture exceeds ${maxBytes} byte capture limit`);
     }
 
-    return new RawFixtureCapture(bytes, {
-      contentHash: sha256Id(bytes),
-      contentType,
-      byteLength: bytes.byteLength,
-    });
+    return new RawFixtureCapture(
+      bytes,
+      {
+        contentHash: sha256Id(bytes),
+        contentType,
+        byteLength: bytes.byteLength,
+      },
+      RAW_FIXTURE_CAPTURE_CONSTRUCTION_TOKEN,
+    );
   }
 
   copyBytes(): Uint8Array {

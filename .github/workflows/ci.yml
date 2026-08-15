@@ -1,0 +1,115 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out full history without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install exact Node release
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .node-version
+          check-latest: false
+
+      - name: Install exact pnpm release
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          version: 11.20.0
+          run_install: false
+
+      - name: Verify runtime pins
+        run: pnpm ci:runtime
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify action pins
+        run: pnpm ci:actions
+
+      - name: Scan working tree and Git history for secrets
+        run: pnpm ci:secrets
+
+      - name: Verify production contract and traceability
+        run: pnpm ci:contract
+
+      - name: Verify format, types, and tests
+        run: pnpm check
+
+      - name: Verify offline demos
+        run: pnpm ci:demos
+
+      - name: Run Stage A drills with external destinations denied
+        run: pnpm ci:drills
+
+      # pnpm audit necessarily contacts the package registry. It is the only
+      # quality-job step beyond action/dependency retrieval that needs egress.
+      - name: Audit all dependencies
+        run: pnpm audit --audit-level=low
+
+      - name: Reject generated or dirty state
+        run: pnpm ci:clean
+
+  gitleaks:
+    name: gitleaks-history
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out full history without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install checksum-pinned Gitleaks
+        env:
+          GITLEAKS_SHA256: e4eb209d04e20339d77122a3bdf9cd41351255cfb27ebcb75e85325e04f88924
+          GITLEAKS_URL: https://github.com/gitleaks/gitleaks/releases/download/v8.29.1/gitleaks_8.29.1_linux_x64.tar.gz
+        run: |
+          set -euo pipefail
+          tool_dir="${RUNNER_TEMP}/rsi-gitleaks-8.29.1"
+          archive="${tool_dir}/gitleaks.tar.gz"
+          mkdir -p "${tool_dir}"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error "${GITLEAKS_URL}" --output "${archive}"
+          printf '%s  %s\n' "${GITLEAKS_SHA256}" "${archive}" | sha256sum --check --strict
+          tar -xzf "${archive}" -C "${tool_dir}" gitleaks
+          "${tool_dir}/gitleaks" version
+          printf '%s\n' "${tool_dir}" >> "${GITHUB_PATH}"
+
+      - name: Prove scanner detects a synthetic credential
+        run: |
+          set -euo pipefail
+          smoke_dir="$(mktemp -d "${RUNNER_TEMP}/rsi-gitleaks-smoke.XXXXXX")"
+          token_prefix='ghp_'
+          token_material="$(openssl rand -hex 32)"
+          token_suffix="${token_material:0:36}"
+          printf 'github_token = "%s%s"\n' "${token_prefix}" "${token_suffix}" > "${smoke_dir}/fixture.txt"
+          if gitleaks dir --config=.github/gitleaks.toml --no-banner --redact=100 "${smoke_dir}"; then
+            echo 'Gitleaks smoke test failed to detect its synthetic fixture.' >&2
+            exit 1
+          fi
+
+      - name: Scan working tree and complete Git history with redaction
+        run: |
+          set -euo pipefail
+          gitleaks dir --config=.github/gitleaks.toml --no-banner --redact=100 --verbose .
+          gitleaks git --config=.github/gitleaks.toml --no-banner --redact=100 --verbose .

@@ -1,173 +1,161 @@
-import { SnapshotValidationError } from "./errors.js";
-import type { SnapshotMetadata, SnapshotMetadataValue } from "./types.js";
+import { SnapshotIntegrityError, SnapshotValidationError } from "./errors.js";
+import type {
+  CaptureDeletionReason,
+  CaptureDeletionReceiptV1,
+  CaptureId,
+  CaptureMetadataV1,
+  CaptureSource,
+} from "./types.js";
 
-const MAX_METADATA_DEPTH = 16;
-const MAX_METADATA_NODES = 2_048;
-const MAX_METADATA_PROPERTIES = 256;
-const MAX_METADATA_ARRAY_LENGTH = 256;
-const MAX_METADATA_KEY_BYTES = 256;
-const MAX_METADATA_STRING_BYTES = 16_384;
-const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-
-interface ValidationState {
-  readonly ancestors: WeakSet<object>;
-  nodes: number;
-}
+const CANONICAL_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const MEDIA_TYPE =
+  /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}(?:; ?[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}=[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,127})*$/;
+const SOURCES = new Set<CaptureSource>(["alchemy", "fixture", "opensea", "x"]);
+const DELETION_REASONS = new Set<CaptureDeletionReason>(["expired", "explicit"]);
+const METADATA_KEYS = ["acquiredAt", "expiresAt", "mediaType", "schemaVersion", "source"];
+const RECEIPT_KEYS = ["captureId", "deletedAt", "keyDestroyed", "reason", "schemaVersion", "state"];
 
 export interface PreparedMetadata {
   readonly bytes: Buffer;
-  readonly value: SnapshotMetadata;
+  readonly value: CaptureMetadataV1;
 }
 
-export function prepareMetadata(
-  metadata: SnapshotMetadata | undefined,
-  maxBytes: number,
-): PreparedMetadata {
-  const source: unknown = metadata ?? {};
-  if (!isPlainObject(source)) {
-    throw new SnapshotValidationError("Snapshot metadata must be a plain object");
+export interface PreparedDeletionReceipt {
+  readonly bytes: Buffer;
+  readonly value: CaptureDeletionReceiptV1;
+}
+
+export function prepareCaptureMetadata(value: unknown, maxBytes: number): PreparedMetadata {
+  const record = exactDataRecord(value, METADATA_KEYS, "Capture metadata");
+  if (record.schemaVersion !== 1) {
+    throw new SnapshotValidationError("Capture metadata schemaVersion must be 1");
+  }
+  if (typeof record.source !== "string" || !SOURCES.has(record.source as CaptureSource)) {
+    throw new SnapshotValidationError("Capture metadata source is unsupported");
+  }
+  const acquiredAt = validateCanonicalTimestamp(record.acquiredAt, "acquiredAt");
+  const expiresAt = validateCanonicalTimestamp(record.expiresAt, "expiresAt");
+  if (Date.parse(expiresAt) < Date.parse(acquiredAt)) {
+    throw new SnapshotValidationError("Capture metadata expiresAt must not precede acquiredAt");
+  }
+  if (typeof record.mediaType !== "string" || !MEDIA_TYPE.test(record.mediaType)) {
+    throw new SnapshotValidationError("Capture metadata mediaType is invalid");
   }
 
-  const state: ValidationState = { ancestors: new WeakSet(), nodes: 0 };
-  const value = cloneValue(source, 0, state);
-  if (!isPlainObject(value)) {
-    throw new SnapshotValidationError("Snapshot metadata must be a plain object");
-  }
-
-  const canonical = canonicalJson(value);
-  const bytes = Buffer.from(canonical, "utf8");
+  const metadata: CaptureMetadataV1 = Object.freeze({
+    acquiredAt,
+    expiresAt,
+    mediaType: record.mediaType,
+    schemaVersion: 1,
+    source: record.source as CaptureSource,
+  });
+  const bytes = Buffer.from(JSON.stringify(metadata), "utf8");
   if (bytes.byteLength > maxBytes) {
-    throw new SnapshotValidationError("Snapshot metadata exceeds the configured byte limit");
+    bytes.fill(0);
+    throw new SnapshotValidationError("Capture metadata exceeds the configured byte limit");
   }
-
-  return { bytes, value: value as SnapshotMetadata };
+  return { bytes, value: metadata };
 }
 
-function cloneValue(value: unknown, depth: number, state: ValidationState): SnapshotMetadataValue {
-  state.nodes += 1;
-  if (state.nodes > MAX_METADATA_NODES || depth > MAX_METADATA_DEPTH) {
-    throw new SnapshotValidationError("Snapshot metadata exceeds structural limits");
+export function prepareDeletionReceipt(
+  value: unknown,
+  expectedCaptureId?: CaptureId,
+): PreparedDeletionReceipt {
+  const record = exactDataRecord(value, RECEIPT_KEYS, "Capture deletion receipt");
+  if (record.schemaVersion !== 1 || record.state !== "deleted" || record.keyDestroyed !== true) {
+    throw new SnapshotValidationError("Capture deletion receipt has an invalid schema");
   }
-
-  if (value === null || typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new SnapshotValidationError("Snapshot metadata contains an unsupported number");
-    }
-    return Object.is(value, -0) ? 0 : value;
-  }
-  if (typeof value === "string") {
-    if (Buffer.byteLength(value, "utf8") > MAX_METADATA_STRING_BYTES) {
-      throw new SnapshotValidationError("Snapshot metadata contains an oversized string");
-    }
-    return value;
-  }
-  if (typeof value !== "object") {
-    throw new SnapshotValidationError("Snapshot metadata contains an unsupported value");
-  }
-  if (state.ancestors.has(value)) {
-    throw new SnapshotValidationError("Snapshot metadata must not contain cycles");
-  }
-
-  state.ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      return cloneArray(value, depth, state);
-    }
-    if (!isPlainObject(value)) {
-      throw new SnapshotValidationError("Snapshot metadata must contain only plain JSON values");
-    }
-    return cloneObject(value, depth, state);
-  } finally {
-    state.ancestors.delete(value);
-  }
-}
-
-function cloneArray(
-  value: readonly unknown[],
-  depth: number,
-  state: ValidationState,
-): readonly SnapshotMetadataValue[] {
-  if (value.length > MAX_METADATA_ARRAY_LENGTH) {
-    throw new SnapshotValidationError("Snapshot metadata array exceeds the item limit");
-  }
-
-  const ownKeys = Reflect.ownKeys(value);
   if (
-    ownKeys.some(
-      (key) =>
-        typeof key !== "string" ||
-        (key !== "length" &&
-          (!/^(0|[1-9][0-9]*)$/.test(key) ||
-            !Number.isSafeInteger(Number(key)) ||
-            Number(key) >= value.length ||
-            String(Number(key)) !== key)),
-    )
+    typeof record.captureId !== "string" ||
+    (expectedCaptureId !== undefined && record.captureId !== expectedCaptureId)
   ) {
-    throw new SnapshotValidationError("Snapshot metadata arrays must not have custom properties");
+    throw new SnapshotValidationError("Capture deletion receipt has an invalid capture ID");
   }
-
-  const result: SnapshotMetadataValue[] = [];
-  for (let index = 0; index < value.length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
-      throw new SnapshotValidationError("Snapshot metadata arrays must be dense data arrays");
-    }
-    result.push(cloneValue(descriptor.value, depth + 1, state));
+  const deletedAt = validateCanonicalTimestamp(record.deletedAt, "deletedAt");
+  if (
+    typeof record.reason !== "string" ||
+    !DELETION_REASONS.has(record.reason as CaptureDeletionReason)
+  ) {
+    throw new SnapshotValidationError("Capture deletion receipt reason is unsupported");
   }
-  return Object.freeze(result);
+  const receipt: CaptureDeletionReceiptV1 = Object.freeze({
+    captureId: record.captureId as CaptureId,
+    deletedAt,
+    keyDestroyed: true,
+    reason: record.reason as CaptureDeletionReason,
+    schemaVersion: 1,
+    state: "deleted",
+  });
+  return { bytes: Buffer.from(JSON.stringify(receipt), "utf8"), value: receipt };
 }
 
-function cloneObject(
-  value: Readonly<Record<string, unknown>>,
-  depth: number,
-  state: ValidationState,
-): Readonly<Record<string, SnapshotMetadataValue>> {
-  const ownKeys = Reflect.ownKeys(value);
-  if (ownKeys.length > MAX_METADATA_PROPERTIES || ownKeys.some((key) => typeof key !== "string")) {
-    throw new SnapshotValidationError("Snapshot metadata object exceeds the property limit");
-  }
-
-  const result: Record<string, SnapshotMetadataValue> = {};
-  for (const key of (ownKeys as string[]).sort()) {
-    if (UNSAFE_KEYS.has(key) || Buffer.byteLength(key, "utf8") > MAX_METADATA_KEY_BYTES) {
-      throw new SnapshotValidationError("Snapshot metadata contains an unsafe property name");
-    }
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
-      throw new SnapshotValidationError(
-        "Snapshot metadata properties must be enumerable data values",
-      );
-    }
-    result[key] = cloneValue(descriptor.value, depth + 1, state);
-  }
-  return Object.freeze(result);
+export function decodeMetadata(bytes: Buffer, maxBytes: number): PreparedMetadata {
+  return decodeCanonical(bytes, (parsed) => prepareCaptureMetadata(parsed, maxBytes));
 }
 
-function canonicalJson(value: SnapshotMetadataValue): string {
-  if (value === null || typeof value === "boolean" || typeof value === "number") {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "string") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
-  }
-
-  const objectValue = value as Readonly<Record<string, SnapshotMetadataValue>>;
-  return `{${Object.keys(objectValue)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson(objectValue[key]!)}`)
-    .join(",")}}`;
+export function decodeDeletionReceipt(
+  bytes: Buffer,
+  expectedCaptureId: CaptureId,
+): PreparedDeletionReceipt {
+  return decodeCanonical(bytes, (parsed) => prepareDeletionReceipt(parsed, expectedCaptureId));
 }
 
-function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
+export function validateCanonicalTimestamp(value: unknown, field: string): string {
+  if (typeof value !== "string" || !CANONICAL_TIMESTAMP.test(value)) {
+    throw new SnapshotValidationError(`Capture ${field} must be a canonical UTC timestamp`);
+  }
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds) || new Date(milliseconds).toISOString() !== value) {
+    throw new SnapshotValidationError(`Capture ${field} must be a canonical UTC timestamp`);
+  }
+  return value;
+}
+
+function decodeCanonical<T extends { readonly bytes: Buffer }>(
+  bytes: Buffer,
+  prepare: (parsed: unknown) => T,
+): T {
+  let prepared: T | undefined;
+  try {
+    const decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    prepared = prepare(JSON.parse(decoded) as unknown);
+    if (!prepared.bytes.equals(bytes)) {
+      throw new SnapshotIntegrityError();
+    }
+    return prepared;
+  } catch {
+    prepared?.bytes.fill(0);
+    throw new SnapshotIntegrityError();
+  }
+}
+
+function exactDataRecord(
+  value: unknown,
+  expectedKeys: readonly string[],
+  label: string,
+): Readonly<Record<string, unknown>> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return false;
+    throw new SnapshotValidationError(`${label} must be a plain object`);
   }
   const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new SnapshotValidationError(`${label} must be a plain object`);
+  }
+  const keys = Reflect.ownKeys(value);
+  if (
+    keys.length !== expectedKeys.length ||
+    keys.some((key) => typeof key !== "string") ||
+    !(keys as string[]).every((key) => expectedKeys.includes(key))
+  ) {
+    throw new SnapshotValidationError(`${label} must match its exact schema`);
+  }
+  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of expectedKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new SnapshotValidationError(`${label} must contain enumerable data properties`);
+    }
+    result[key] = descriptor.value;
+  }
+  return Object.freeze(result);
 }
