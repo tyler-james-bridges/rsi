@@ -72,8 +72,12 @@ Consequently, no readiness label in the v1 ladder has yet been signed or attaine
 
 ### Explicit Stage A integration blockers
 
-- Assemble and verify the exact release inventory from Git, retain its signed
-  evidence, and obtain a clean private-repository CI receipt.
+- Convert the verified clean-tree release inventory and retained private-repository
+  CI result into signed release evidence with the separately held MacBook release
+  key; no signing key is present in this repository or on the observer host.
+- Enable the accepted private-branch enforcement after GitHub makes that feature
+  available to the repository. The current private-plan API refused the rule; the
+  repository was not made public and the protection contract was not weakened.
 - Perform the final traceability/release review and record the Stage A handoff with
   exact commands, hashes, review verdict, zero spend, and zero external provider
   changes.
