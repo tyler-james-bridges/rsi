@@ -16,7 +16,7 @@
     "ci:contract": "node scripts/ci/verify-production-contract.mjs",
     "ci:demos": "node scripts/ci/run-offline-demos.mjs",
     "ci:drills": "node scripts/ci/run-stage-a-drills.mjs",
-    "ci:release": "tsx scripts/release/verify-foundation-inventory.ts",
+    "ci:release": "node scripts/ci/verify-release-inventory-reproducible.mjs",
     "ci:runtime": "node scripts/ci/assert-runtime.mjs",
     "ci:secrets": "node scripts/ci/secret-scan.mjs",
     "demo": "pnpm --filter @rsi/cli start",

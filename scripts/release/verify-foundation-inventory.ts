@@ -181,6 +181,10 @@ async function main(): Promise<void> {
   const commitSha = git(["rev-parse", "HEAD"]).trim();
   const gitTreeSha = git(["rev-parse", "HEAD^{tree}"]).trim();
   if (!/^[0-9a-f]{40}$/u.test(commitSha) || !/^[0-9a-f]{40}$/u.test(gitTreeSha)) fail();
+  const commitTimestamp = git(["show", "-s", "--format=%cI", commitSha]).trim();
+  const commitTime = new Date(commitTimestamp);
+  if (commitTimestamp.length === 0 || Number.isNaN(commitTime.getTime())) fail();
+  const completedAt = commitTime.toISOString();
   const trackedPaths = git(["ls-files", "-z"])
     .split("\0")
     .filter((path) => path.length > 0);
@@ -216,7 +220,6 @@ async function main(): Promise<void> {
     }),
   );
   phase = "test-summary";
-  const completedAt = new Date().toISOString();
   artifacts.push(
     generatedArtifact("release/test-summary.v1.json", "test-summary", {
       commitSha,
