@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   REQUIRED_CONFIG_SCHEMA_NAMES,
   REQUIRED_TEST_CHECKS,
+  ReleaseBundleError,
   deriveReleaseArtifactBindings,
   type ReleaseArtifactInputV1,
   type ReleaseArtifactMediaType,
@@ -252,4 +253,7 @@ async function main(): Promise<void> {
   );
 }
 
-await main().catch(() => fail());
+await main().catch((error: unknown) => {
+  if (error instanceof ReleaseBundleError) phase = `release-policy-${error.code.toLowerCase()}`;
+  fail();
+});
