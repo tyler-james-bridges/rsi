@@ -11,6 +11,7 @@ regexTarget = "line"
 paths = [
   '''^packages/checkpoints/src/types\.ts$''',
   '''^packages/checkpoints/test/checkpoints\.test\.ts$''',
+  '''^packages/external-anchor/src/types\.ts$''',
 ]
 regexes = [
   '''^\s*readonly privateKey: Ed25519PrivateKeyMaterial;\s*$''',
