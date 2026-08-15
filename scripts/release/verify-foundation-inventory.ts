@@ -135,7 +135,7 @@ function parseLockComponents(lockfile: string): readonly Record<string, string>[
   if (start < 0 || end <= start) fail();
   const components = new Map<string, Record<string, string>>();
   for (const line of lockfile.slice(start + 1, end).split("\n")) {
-    const match = /^  (?:(?:"([^"]+)")|([^"].*)):\s*$/u.exec(line);
+    const match = /^  (?:(?:"([^"]+)")|([^" ][^:]*)):\s*$/u.exec(line);
     const key = match?.[1] ?? match?.[2];
     if (key === undefined) continue;
     const separator = key.lastIndexOf("@");
