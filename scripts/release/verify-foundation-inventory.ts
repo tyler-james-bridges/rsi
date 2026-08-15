@@ -40,9 +40,10 @@ const ROOT_PATH_MAPPINGS = new Map<string, readonly [string, ReleaseArtifactRole
   [".prettierrc.json", ["source/scripts/prettier-config.json", "source"]],
   ["SECURITY.md", ["runbooks/security.md", "runbook"]],
 ]);
+let phase = "preconditions";
 
 function fail(): never {
-  process.stderr.write("Foundation release-inventory verification failed.\n");
+  process.stderr.write(`Foundation release-inventory verification failed during ${phase}.\n`);
   process.exit(1);
 }
 
@@ -175,6 +176,7 @@ async function main(): Promise<void> {
   const pnpmVersion = /(?:^|\s)pnpm\/([^\s]+)/u.exec(process.env.npm_config_user_agent ?? "")?.[1];
   if (pnpmVersion !== EXPECTED_PNPM) fail();
 
+  phase = "git-identity";
   const commitSha = git(["rev-parse", "HEAD"]).trim();
   const gitTreeSha = git(["rev-parse", "HEAD^{tree}"]).trim();
   if (!/^[0-9a-f]{40}$/u.test(commitSha) || !/^[0-9a-f]{40}$/u.test(gitTreeSha)) fail();
@@ -183,11 +185,13 @@ async function main(): Promise<void> {
     .filter((path) => path.length > 0);
   if (trackedPaths.length === 0 || new Set(trackedPaths).size !== trackedPaths.length) fail();
 
+  phase = "tracked-inventory";
   const artifacts: ReleaseArtifactInputV1[] = [];
   for (const path of trackedPaths) {
     const [releasePath, role] = mappedTrackedPath(path);
     artifacts.push(await artifactFromFile(path, releasePath, role));
   }
+  phase = "schema-inventory";
   for (const name of REQUIRED_CONFIG_SCHEMA_NAMES) {
     artifacts.push(
       generatedArtifact(`config-schemas/${name}.schema.json`, "config-schema", {
@@ -199,6 +203,7 @@ async function main(): Promise<void> {
     );
   }
 
+  phase = "sbom-inventory";
   const lockfile = await readFile(new URL("../../pnpm-lock.yaml", import.meta.url), "utf8");
   artifacts.push(
     generatedArtifact("release/sbom.cdx.json", "sbom", {
@@ -209,6 +214,7 @@ async function main(): Promise<void> {
       version: 1,
     }),
   );
+  phase = "test-summary";
   const completedAt = new Date().toISOString();
   artifacts.push(
     generatedArtifact("release/test-summary.v1.json", "test-summary", {
@@ -227,7 +233,9 @@ async function main(): Promise<void> {
     }),
   );
 
+  phase = "release-policy";
   const bindings = deriveReleaseArtifactBindings(artifacts);
+  phase = "report";
   process.stdout.write(
     `${canonicalJson({
       artifactCount: artifacts.length,
