@@ -61,6 +61,7 @@ export const REQUIRED_TEST_CHECKS = Object.freeze([
   "generated-files",
   "offline-drills",
   "offline-demos",
+  "release-inventory",
   "test",
   "typecheck",
   "working-tree-clean",

@@ -65,6 +65,9 @@ jobs:
       - name: Reject generated or dirty state
         run: pnpm ci:clean
 
+      - name: Verify the closed foundation inventory candidate
+        run: pnpm ci:release
+
   gitleaks:
     name: gitleaks-history
     runs-on: ubuntu-24.04

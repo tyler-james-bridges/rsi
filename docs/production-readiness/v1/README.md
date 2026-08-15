@@ -23,6 +23,7 @@ mutation, DNS change, deployment, publication, payment, or transaction.
 | [Incident and reset taxonomy](./incident-reset-taxonomy.md)             | Stop conditions, Class A/B/C effects, response ownership, and disclosure rules                              |
 | [Readiness and qualification protocol](./qualification-protocol.md)     | Readiness labels, session state machine, drills, commissioning, qualification, activation, and burn-in      |
 | [Runbook index](./runbooks/README.md)                                   | Bounded response procedures and the evidence each procedure must produce                                    |
+| [Sanitized restore procedure](./recovery/observer-restore.md)           | Verify-before-restore process for the three closed recovery companions                                      |
 
 ## Normative language and precedence
 

@@ -3,7 +3,11 @@ export {
   restoreSignedReleaseBundle,
   verifySignedReleaseBundle,
 } from "./release-bundle.js";
-export { deriveReleaseArtifactBindings } from "./artifacts.js";
+export {
+  REQUIRED_CONFIG_SCHEMA_NAMES,
+  REQUIRED_TEST_CHECKS,
+  deriveReleaseArtifactBindings,
+} from "./artifacts.js";
 export { ReleaseBundleError, type ReleaseBundleErrorCode } from "./errors.js";
 export {
   RELEASE_BUNDLE_RECEIPT_TYPE,

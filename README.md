@@ -61,9 +61,15 @@ pnpm demo
 pnpm demo:pipeline
 pnpm demo:ingestion
 pnpm ci:drills
+pnpm ci:release
 ```
 
 `pnpm demo` exercises the original in-memory policy decision. `pnpm demo:pipeline` runs five recorded scenarios through quarantine, typed extraction, correlation, durable events, and policy evaluation. `pnpm demo:ingestion` runs an entirely offline X cassette through encrypted snapshot storage, a sanitized event, and a signed checkpoint. All demos use fictional data and cannot execute anything.
+
+`pnpm ci:release` runs only on a clean committed tree. It classifies every tracked file into the
+closed release inventory and validates the resulting source/config/runbook/SBOM/test-summary
+candidate. It does not sign or publish a release; the retained CI receipts and separate MacBook
+release key are required for that later step.
 
 To seed a local database and inspect its read-only API:
 
