@@ -254,6 +254,11 @@ async function main(): Promise<void> {
 }
 
 await main().catch((error: unknown) => {
-  if (error instanceof ReleaseBundleError) phase = `release-policy-${error.code.toLowerCase()}`;
+  if (error instanceof ReleaseBundleError) {
+    process.stderr.write(
+      `Foundation release-inventory verification failed during release-policy-${error.code.toLowerCase()}: ${error.message}\n`,
+    );
+    process.exit(1);
+  }
   fail();
 });
