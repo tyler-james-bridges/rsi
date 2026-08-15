@@ -95,7 +95,7 @@ const SOURCE_ROOT_PATHS = new Set([
   "source/tsconfig.json",
   "source/vitest.config.ts",
 ]);
-const SOURCE_EXTENSION_PATTERN = /\.(?:cjs|css|html|js|json|md|mjs|sql|toml|ts|tsx|yaml|yml)$/;
+const SOURCE_EXTENSION_PATTERN = /\.(?:cjs|css|html|js|json|md|mjs|sql|toml|ts|tsx|txt|yaml|yml)$/;
 const RUNTIME_SOURCE_PATTERN =
   /^source\/(?:apps|packages)\/[a-z0-9][a-z0-9-]{0,62}\/.+\.(?:cjs|js|mjs|ts|tsx)$/;
 const SECRET_PATTERNS = Object.freeze([

@@ -272,6 +272,22 @@ describe("signed release bundle", () => {
       ]),
     ).toThrowError(ReleaseBundleError);
 
+    const normalizedTextArtifact: ReleaseArtifactInputV1 = {
+      bytes: utf8("24.19.0\n"),
+      mediaType: "text/plain",
+      path: "source/scripts/node-version.txt",
+      role: "source",
+    };
+    expect(() =>
+      deriveReleaseArtifactBindings([...artifacts, normalizedTextArtifact]),
+    ).not.toThrow();
+    expect(() =>
+      deriveReleaseArtifactBindings([
+        ...artifacts,
+        { ...normalizedTextArtifact, path: "source/scripts/.node-version" },
+      ]),
+    ).toThrowError(ReleaseBundleError);
+
     const secret = ["sk", "fixture"].join("-") + "A".repeat(32);
     expect(() =>
       deriveReleaseArtifactBindings([
