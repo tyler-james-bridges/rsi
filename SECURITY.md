@@ -12,4 +12,10 @@ RSI is pre-alpha software. It is not ready to custody funds or execute live tran
 
 ## Reporting
 
-Until a private reporting channel exists, do not include exploitable details or secrets in public issues. Preserve a minimal reproduction and contact the repository owner directly.
+Do not include exploitable details, credentials, private data, or unredacted
+reproductions in a public issue. Use GitHub's **Report a vulnerability** flow under
+the repository Security tab so the report reaches the maintainer privately.
+
+Include the smallest sanitized reproduction that establishes impact. If private
+vulnerability reporting is unavailable, open a public issue containing only a
+request for a private contact channel—never the vulnerability details.

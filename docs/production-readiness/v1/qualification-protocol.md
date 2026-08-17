@@ -30,7 +30,8 @@ or a live call, Stage A MUST complete:
 
 - versioned specification, threat model, classification/permission matrices,
   runbooks, qualification protocol, diagrams, and Q1-Q195 traceability;
-- private GitHub repository, full-history secret scan, secret-free offline CI,
+- public GitHub repository after disclosure review, full-history secret scan,
+  secret-free offline CI,
   signed foundation tag/release evidence, Node 24 and pnpm 11 pins;
 - non-mutating host-preflight tooling;
 - Vault v2 with per-capture keys/index/deletion/orphan recovery;

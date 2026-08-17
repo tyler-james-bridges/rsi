@@ -12,6 +12,11 @@ RSI researches markets, converts adversarial internet activity into typed eviden
 > [!WARNING]
 > RSI is pre-alpha foundation code. State-changing adapters are disabled; paid collectors are quarantined and have not passed credentialed live canaries. The repository does not connect financial accounts, sign orders, or send transactions. Do not provision credentials until every Observer v1 readiness gate passes.
 
+> [!NOTE]
+> RSI is built in public. Public source visibility does not expose operational data
+> or grant live authority. No open-source license has been selected yet; adding one
+> is a separate owner decision.
+
 ## What exists now
 
 - Strict schemas for observations, claims, NFT purchase intents, policies, and mutable strategies.

@@ -88,4 +88,4 @@ Exit: the optional connector can be disconnected without affecting RSI's onchain
 
 ## Near-term next session
 
-Finish the signed foundation-release handoff, private-repository CI receipt, and provisioning input checklist. Only after those gates and explicit provisioning approval may RSI configure external checkpoint/alert resources or run the one-call X commissioning canary. Keep every paid and state-changing capability disabled.
+Finish the signed foundation-release handoff, protected public-repository CI receipt, and provisioning input checklist. Only after those gates and explicit provisioning approval may RSI configure external checkpoint/alert resources or run the one-call X commissioning canary. Keep every paid and state-changing capability disabled.

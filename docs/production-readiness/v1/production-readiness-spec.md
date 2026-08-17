@@ -450,9 +450,9 @@ The hard recurring ceiling is $50 with no automatic recharge or upgrade:
 | ------------------------------------------------------ | ------------: |
 | X                                                      |           $25 |
 | Optional post-session OpenAI analysis                  |            $5 |
-| GitHub Pro, only if required                           |            $4 |
+| GitHub paid plan                                       |            $0 |
 | Backblaze B2                                           |            $5 |
-| Unallocated reserve                                    |  at least $11 |
+| Unallocated reserve                                    |  at least $15 |
 | Cloudflare, R2, Resend, Healthchecks, Alchemy, OpenSea | $0 paid usage |
 
 Existing domain renewal and separately approved hardware are outside the recurring
@@ -582,7 +582,7 @@ transition freezes the affected publication or collection plane.
 
 Permanent shutdown MUST disable scheduling and egress, revoke provider credentials,
 destroy wrapping keys and cursors, purge ephemeral data, write a final signed
-checkpoint, and archive the private repository read-only. Sanitized governance
+checkpoint, and archive the public repository read-only. Sanitized governance
 records retain only for the approved 365-day period and unavoidable B2 locks, then
 are crypto-shredded unless a specific legal requirement applies. Public output is
 limited to a signed content-free retired status and correction history.
@@ -592,11 +592,12 @@ limited to a signed content-free retired status and correction history.
 ### OBS-REL-001 — Repository and CI
 
 The canonical repository is `/Users/tjb/code/rsi`. The approved remote is the
-private `tyler-james-bridges/rsi` repository. Before first push, the full local Git
-history receives a secret scan. Existing unsigned foundation commits are retained;
-a signed `foundation-v1` tag and manifest establish the reviewed root. After first
-push, the local and remote commit graphs MUST match exactly before CI configuration
-or duplicate-repository cleanup proceeds.
+public `tyler-james-bridges/rsi` repository. Before public disclosure, the tracked
+tree and full local Git history receive both repository-owned and independent
+secret scans plus the accepted disclosure review. Existing unsigned foundation
+commits are retained; a signed `foundation-v1` tag and manifest establish the
+reviewed root. The local and remote commit graphs MUST match exactly before
+duplicate-repository cleanup proceeds.
 
 CI pins Node 24 and pnpm 11, uses a frozen lockfile and full-commit-SHA actions,
 read-only permissions, and no cache, artifacts, secrets, or network-dependent
@@ -735,7 +736,7 @@ NOT treat the bundle as spend authorization or call back to mutate Observer.
 
 ### OBS-BLD-001 — Stage A scope
 
-Stage A covers documentation/traceability, private repository and secret-free CI,
+Stage A covers documentation/traceability, public repository and secret-free CI,
 Node 24 pinning, host-preflight tooling, Vault v2, content-free events, cost/cursor
 and session state machines, checkpoint/backup interfaces, alerts, dashboard, public
 projection, offline adapters, failure-drill harness, and independent adversarial
@@ -771,7 +772,7 @@ external changes, rollback, and next required local input.
 ### OBS-BLD-004 — Duplicate repository cleanup
 
 The verified-empty duplicate `/Users/tjb/Documents/ChatGPT/RSI` may be moved to
-Trash only after the private remote and backup are both independently verified. It
+Trash only after the public remote and backup are both independently verified. It
 MUST NOT be recursively deleted or removed earlier.
 
 ### OBS-BLD-005 — Streaming and disclosure
@@ -779,5 +780,6 @@ MUST NOT be recursively deleted or removed earlier.
 Livestreams use only `dev` with synthetic fixtures and scrubbed demo accounts.
 Canary/production screens, terminals, Keychain prompts, provider consoles, queries,
 raw responses, logs, DNS, credentials, exact defenses, and live alerts are never
-shown. Recordings are reviewed before retention or publication. Source code remains
-private through qualification; open sourcing requires a separate disclosure review.
+shown. Recordings are reviewed before retention or publication. Source code is
+built in public after the accepted disclosure review; public source visibility
+never broadens operational-data, hidden-fixture, credential, or runtime authority.
