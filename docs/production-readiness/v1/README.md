@@ -77,8 +77,6 @@ Consequently, no readiness label in the v1 ladder has yet been signed or attaine
 - Convert the verified clean-tree release inventory and retained public-repository
   CI result into signed release evidence with the separately held MacBook release
   key; no signing key is present in this repository or on the observer host.
-- Complete and retain the accepted public-repository visibility, branch-protection,
-  and private-vulnerability-reporting evidence.
 - Perform the final traceability/release review and record the Stage A handoff with
   exact commands, hashes, review verdict, zero spend, and zero external provider
   changes.

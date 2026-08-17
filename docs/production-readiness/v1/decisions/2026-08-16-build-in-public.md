@@ -43,6 +43,20 @@ by this decision; adding one requires a separate owner decision.
 - Every future source change remains subject to the same disclosure and release
   boundaries. Public development does not make operational data public.
 
+## Applied controls
+
+- GitHub reports repository visibility as `public`.
+- `main` requires pull requests and strict successful `quality` plus
+  `gitleaks-history` checks, including for the administrator.
+- Force pushes and branch deletion are disabled; unresolved review conversations
+  block merging.
+- Private vulnerability reporting, public-repository secret scanning, and push
+  protection are enabled.
+- Hosted run
+  [31994805712](https://github.com/tyler-james-bridges/rsi/actions/runs/31994805712)
+  passed both required checks on the disclosure commit before the visibility
+  transition.
+
 ## Irreversibility and rollback
 
 Repository visibility can be changed later, but public commits may already have
