@@ -13,9 +13,12 @@ RSI researches markets, converts adversarial internet activity into typed eviden
 > RSI is pre-alpha foundation code. State-changing adapters are disabled; paid collectors are quarantined and have not passed credentialed live canaries. The repository does not connect financial accounts, sign orders, or send transactions. Do not provision credentials until every Observer v1 readiness gate passes.
 
 > [!NOTE]
-> RSI is built in public. Public source visibility does not expose operational data
-> or grant live authority. No open-source license has been selected yet; adding one
-> is a separate owner decision.
+> RSI is a public project developed in the public
+> [`tyler-james-bridges/rsi`](https://github.com/tyler-james-bridges/rsi)
+> repository. Public project and source visibility do not expose operational data
+> or grant live authority. The workspace's `"private": true` package metadata only
+> prevents accidental npm publication. No open-source license has been selected yet;
+> adding one is a separate owner decision.
 
 ## What exists now
 

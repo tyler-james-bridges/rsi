@@ -2,7 +2,15 @@
   "name": "rsi",
   "version": "0.0.0",
   "private": true,
-  "description": "Recursive Self-Improvement: a gated, read-only market research observer.",
+  "description": "Public Recursive Self-Improvement project: a gated, read-only market research observer.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tyler-james-bridges/rsi.git"
+  },
+  "homepage": "https://github.com/tyler-james-bridges/rsi#readme",
+  "bugs": {
+    "url": "https://github.com/tyler-james-bridges/rsi/issues"
+  },
   "type": "module",
   "packageManager": "pnpm@11.20.0",
   "engines": {

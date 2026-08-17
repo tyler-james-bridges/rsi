@@ -582,7 +582,7 @@ transition freezes the affected publication or collection plane.
 
 Permanent shutdown MUST disable scheduling and egress, revoke provider credentials,
 destroy wrapping keys and cursors, purge ephemeral data, write a final signed
-checkpoint, and archive the public repository read-only. Sanitized governance
+checkpoint, and archive the public project repository read-only. Sanitized governance
 records retain only for the approved 365-day period and unavoidable B2 locks, then
 are crypto-shredded unless a specific legal requirement applies. Public output is
 limited to a signed content-free retired status and correction history.
@@ -591,13 +591,13 @@ limited to a signed content-free retired status and correction history.
 
 ### OBS-REL-001 — Repository and CI
 
-The canonical repository is `/Users/tjb/code/rsi`. The approved remote is the
-public `tyler-james-bridges/rsi` repository. Before public disclosure, the tracked
-tree and full local Git history receive both repository-owned and independent
-secret scans plus the accepted disclosure review. Existing unsigned foundation
-commits are retained; a signed `foundation-v1` tag and manifest establish the
-reviewed root. The local and remote commit graphs MUST match exactly before
-duplicate-repository cleanup proceeds.
+The canonical repository is `/Users/tjb/code/rsi`. RSI is a public project, and its
+approved remote is the public `tyler-james-bridges/rsi` repository. Before public
+disclosure, the tracked tree and full local Git history receive both
+repository-owned and independent secret scans plus the accepted disclosure review.
+Existing unsigned foundation commits are retained; a signed `foundation-v1` tag and
+manifest establish the reviewed root. The local and remote commit graphs MUST match
+exactly before duplicate-repository cleanup proceeds.
 
 CI pins Node 24 and pnpm 11, uses a frozen lockfile and full-commit-SHA actions,
 read-only permissions, and no cache, artifacts, secrets, or network-dependent
@@ -736,11 +736,11 @@ NOT treat the bundle as spend authorization or call back to mutate Observer.
 
 ### OBS-BLD-001 — Stage A scope
 
-Stage A covers documentation/traceability, public repository and secret-free CI,
-Node 24 pinning, host-preflight tooling, Vault v2, content-free events, cost/cursor
-and session state machines, checkpoint/backup interfaces, alerts, dashboard, public
-projection, offline adapters, failure-drill harness, and independent adversarial
-review. It makes zero live calls and uses zero credentials.
+Stage A covers documentation/traceability, public project/repository and secret-free
+CI, Node 24 pinning, host-preflight tooling, Vault v2, content-free events,
+cost/cursor and session state machines, checkpoint/backup interfaces, alerts,
+dashboard, public projection, offline adapters, failure-drill harness, and
+independent adversarial review. It makes zero live calls and uses zero credentials.
 
 Stage A does not authorize host mutation, DNS, provider resources, credentials,
 deployment, paid requests, or live canaries. Those require explicit local approval.
@@ -780,6 +780,7 @@ MUST NOT be recursively deleted or removed earlier.
 Livestreams use only `dev` with synthetic fixtures and scrubbed demo accounts.
 Canary/production screens, terminals, Keychain prompts, provider consoles, queries,
 raw responses, logs, DNS, credentials, exact defenses, and live alerts are never
-shown. Recordings are reviewed before retention or publication. Source code is
-built in public after the accepted disclosure review; public source visibility
-never broadens operational-data, hidden-fixture, credential, or runtime authority.
+shown. Recordings are reviewed before retention or publication. RSI is a public
+project and its source code is built in public after the accepted disclosure review;
+public project/source visibility never broadens operational-data, hidden-fixture,
+credential, or runtime authority.

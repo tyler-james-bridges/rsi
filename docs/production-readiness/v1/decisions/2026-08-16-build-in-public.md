@@ -1,16 +1,22 @@
-# Build-in-public repository decision
+# Public project and build-in-public repository decision
 
 - Status: **accepted**
 - Accepted: **2026-08-16**
-- Scope: source-repository visibility and repository controls
+- Scope: project identity, source-repository visibility, and repository controls
 - Supersedes: repository-privacy portions of `DEC-Q024`, `DEC-Q028`, `DEC-Q077`,
-  `DEC-Q078`, `DEC-Q090`, and `DEC-Q195`
+  `DEC-Q078`, `DEC-Q090`, `DEC-Q176`, and `DEC-Q195`
 
 ## Decision
 
-RSI is developed in the public `tyler-james-bridges/rsi` GitHub repository. Public
-source visibility is intentional and does not grant any runtime, provider,
-credential, deployment, payment, wallet, order, or transaction authority.
+RSI is a public project developed in the public `tyler-james-bridges/rsi` GitHub
+repository. Public project and source visibility are intentional and do not grant
+any runtime, provider, credential, deployment, payment, wallet, order, or
+transaction authority.
+
+The public project identity covers its reviewed source, engineering documentation,
+roadmap, issues, and sanitized progress evidence. It does not promise publication
+of operational data, hidden evaluation material, credentials, provider responses,
+or production diagnostics.
 
 The public repository contains only reviewed source, documentation, synthetic or
 licensed visible fixtures, and content-free verification evidence. Credentials,
@@ -34,6 +40,8 @@ by this decision; adding one requires a separate owner decision.
 
 ## Required public controls
 
+- The project and canonical GitHub repository MUST remain public unless a later
+  explicit owner decision supersedes this decision.
 - `main` MUST require pull requests plus the `quality` and `gitleaks-history` checks.
 - Force pushes and branch deletion MUST remain disabled.
 - GitHub private vulnerability reporting MUST be enabled and `SECURITY.md` MUST
