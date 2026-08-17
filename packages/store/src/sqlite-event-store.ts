@@ -23,6 +23,7 @@ const GENESIS_HASH = "0".repeat(64);
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const MAX_IDENTIFIER_BYTES = 512;
 const MAX_PAYLOAD_BYTES = 1_048_576;
+const authenticSqliteEventStores = new WeakSet<object>();
 
 interface EventRow {
   aggregate_id: string;
@@ -94,6 +95,7 @@ export class SqliteEventStore {
       this.database.close();
       throw error;
     }
+    authenticSqliteEventStores.add(this);
   }
 
   append(input: AppendEventInput): StoredEvent {
@@ -272,6 +274,15 @@ export class SqliteEventStore {
     validateIdentifier(eventId, "eventId");
     const row = this.database.prepare(`${EVENT_COLUMNS} WHERE event_id = ?`).get(eventId) as
       EventRow | undefined;
+    return row === undefined ? undefined : rowToEvent(row);
+  }
+
+  getByIdempotencyKey(idempotencyKey: string): StoredEvent | undefined {
+    this.assertOpen();
+    validateIdentifier(idempotencyKey, "idempotencyKey");
+    const row = this.database
+      .prepare(`${EVENT_COLUMNS} WHERE idempotency_key = ?`)
+      .get(idempotencyKey) as EventRow | undefined;
     return row === undefined ? undefined : rowToEvent(row);
   }
 
@@ -585,6 +596,16 @@ export class SqliteEventStore {
       valid: errors.length === 0,
     });
   }
+}
+
+/** Returns true only for an event store whose constructor completed successfully. */
+export function isSqliteEventStore(value: unknown): value is SqliteEventStore {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    authenticSqliteEventStores.has(value) &&
+    Object.getPrototypeOf(value) === SqliteEventStore.prototype
+  );
 }
 
 const EVENT_COLUMNS = `SELECT sequence, event_id, idempotency_key, event_type,

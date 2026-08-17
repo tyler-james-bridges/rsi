@@ -74,6 +74,9 @@ export class ScenarioRunConflictError extends Error {
   }
 }
 
+const RSI_FIXTURE_PIPELINE_CONSTRUCTION_TOKEN = Object.freeze({});
+const AUTHENTIC_RSI_FIXTURE_PIPELINES = new WeakSet<object>();
+
 function jsonValue(value: unknown): JsonValue {
   const encoded = JSON.stringify(value);
   if (encoded === undefined) throw new Error("event payload is not JSON serializable");
@@ -301,14 +304,23 @@ export class RsiFixturePipeline {
   static open(path: string, policy: PolicyConfig): RsiFixturePipeline {
     const store = new SqliteEventStore(path);
     try {
-      return new RsiFixturePipeline(store, policy);
+      const pipeline = new RsiFixturePipeline(
+        store,
+        policy,
+        RSI_FIXTURE_PIPELINE_CONSTRUCTION_TOKEN,
+      );
+      AUTHENTIC_RSI_FIXTURE_PIPELINES.add(pipeline);
+      return pipeline;
     } catch (error) {
       store.close();
       throw error;
     }
   }
 
-  private constructor(store: SqliteEventStore, policy: PolicyConfig) {
+  private constructor(store: SqliteEventStore, policy: PolicyConfig, constructionToken: unknown) {
+    if (constructionToken !== RSI_FIXTURE_PIPELINE_CONSTRUCTION_TOKEN) {
+      throw new Error("RsiFixturePipeline must be created through RsiFixturePipeline.open");
+    }
     const probe = new PolicyKernel(policy);
     const state = restoreKernelState(store, probe.policyHash);
     // Parse and validate any reconstructed state before exposing the pipeline.
@@ -322,6 +334,7 @@ export class RsiFixturePipeline {
     rawScenario: FixtureScenarioName,
     options: RunScenarioOptions,
   ): Promise<ScenarioRunReport> {
+    this.assertAuthentic();
     const integrity = this.store.verifyIntegrity();
     if (!integrity.valid) throw new EventStoreIntegrityError(integrity);
     const scenario = FixtureScenarioNameSchema.parse(rawScenario);
@@ -446,6 +459,25 @@ export class RsiFixturePipeline {
   }
 
   close(): void {
+    this.assertAuthentic();
     this.store.close();
   }
+
+  private assertAuthentic(): void {
+    if (
+      Object.getPrototypeOf(this) !== RsiFixturePipeline.prototype ||
+      !AUTHENTIC_RSI_FIXTURE_PIPELINES.has(this)
+    ) {
+      throw new Error("RsiFixturePipeline was not created through its authenticated factory");
+    }
+  }
+}
+
+export function isRsiFixturePipeline(value: unknown): value is RsiFixturePipeline {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Object.getPrototypeOf(value) === RsiFixturePipeline.prototype &&
+    AUTHENTIC_RSI_FIXTURE_PIPELINES.has(value)
+  );
 }

@@ -17,7 +17,7 @@ describe("offline ingestion demo", () => {
         postCount: 1,
         authorCount: 1,
         rawContentEncrypted: true,
-        snapshotVerified: true,
+        captureVerified: true,
       },
       eventStore: {
         eventCount: 1,

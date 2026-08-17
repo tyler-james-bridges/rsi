@@ -11,6 +11,7 @@ import {
   EventStoreIntegrityError,
   InvalidEventError,
   SqliteEventStore,
+  isSqliteEventStore,
 } from "../src/index.js";
 
 const temporaryDirectories: string[] = [];
@@ -43,6 +44,9 @@ describe("canonicalJson", () => {
 describe("SqliteEventStore", () => {
   it("appends a monotonic, hash-linked event chain", () => {
     const store = new SqliteEventStore(makeDatabasePath());
+    expect(isSqliteEventStore(store)).toBe(true);
+    expect(isSqliteEventStore(Object.create(SqliteEventStore.prototype))).toBe(false);
+    expect(isSqliteEventStore({ append: () => undefined })).toBe(false);
     const first = store.append({
       aggregateId: "research:base",
       eventId: "event-1",
@@ -91,6 +95,8 @@ describe("SqliteEventStore", () => {
 
     const reopened = new SqliteEventStore(path);
     expect(reopened.getByEventId(appended.eventId)).toEqual(appended);
+    expect(reopened.getByIdempotencyKey("strategy-rsi-v1-proposed")).toEqual(appended);
+    expect(reopened.getByIdempotencyKey("missing-key")).toBeUndefined();
     expect(reopened.verifyIntegrity().valid).toBe(true);
     reopened.close();
   });

@@ -1,0 +1,30 @@
+{
+  "name": "@rsi/session-controller",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "format:check": "prettier --check .",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@rsi/alerts": "workspace:*",
+    "@rsi/backup": "workspace:*",
+    "@rsi/capture-registry": "workspace:*",
+    "@rsi/checkpoints": "workspace:*",
+    "@rsi/event-archive": "workspace:*",
+    "@rsi/ingestion": "workspace:*",
+    "@rsi/operations": "workspace:*",
+    "@rsi/release-bundle": "workspace:*",
+    "@rsi/session-lifecycle": "workspace:*",
+    "@rsi/store": "workspace:*",
+    "@rsi/vault": "workspace:*"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}

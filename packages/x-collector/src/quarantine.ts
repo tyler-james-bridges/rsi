@@ -77,10 +77,13 @@ function readExactMetadata(value: unknown): Record<QuarantineMetadataField, unkn
 export class QuarantinedXRecentSearchResponse {
   readonly metadata: XQuarantineMetadata;
   readonly #bytes: Uint8Array;
+  #destroyed = false;
 
   constructor(metadata: XQuarantineMetadata, bytes: Uint8Array) {
     const values = readExactMetadata(metadata);
-    const copiedBytes = bytes instanceof Uint8Array ? bytes.slice() : undefined;
+    // Buffer overrides Uint8Array#slice with a zero-copy view. Constructing a
+    // fresh Uint8Array guarantees quarantine owns independent storage.
+    const copiedBytes = bytes instanceof Uint8Array ? new Uint8Array(bytes) : undefined;
     if (
       values === undefined ||
       copiedBytes === undefined ||
@@ -101,6 +104,7 @@ export class QuarantinedXRecentSearchResponse {
       sha256(copiedBytes) !== values.responseHash ||
       (values.provenance !== "network" && values.provenance !== "cassette")
     ) {
+      copiedBytes?.fill(0);
       throw new XCollectorError("INVALID_RESPONSE_SCHEMA", "Invalid quarantine metadata.");
     }
     this.metadata = Object.freeze({
@@ -120,7 +124,20 @@ export class QuarantinedXRecentSearchResponse {
   }
 
   copyBytes(): Uint8Array {
+    if (this.#destroyed) {
+      throw new XCollectorError(
+        "INVALID_RESPONSE_SCHEMA",
+        "The quarantined response has been destroyed.",
+      );
+    }
     return this.#bytes.slice();
+  }
+
+  /** Best-effort in-process destruction after the encrypted capture boundary finishes. */
+  destroy(): void {
+    if (this.#destroyed) return;
+    this.#bytes.fill(0);
+    this.#destroyed = true;
   }
 
   toJSON(): Readonly<{ metadata: XQuarantineMetadata; body: "quarantined" }> {

@@ -2,19 +2,29 @@
   "name": "rsi",
   "version": "0.0.0",
   "private": true,
-  "description": "Recursive Self-Improvement: a live economic agent with a non-self-modifying safety kernel.",
+  "description": "Recursive Self-Improvement: a gated, read-only market research observer.",
   "type": "module",
   "packageManager": "pnpm@11.20.0",
   "engines": {
-    "node": ">=24"
+    "node": "24.19.0",
+    "pnpm": "11.20.0"
   },
   "scripts": {
-    "check": "pnpm typecheck && pnpm test",
+    "check": "pnpm format:check && pnpm typecheck && pnpm test",
+    "ci:actions": "node scripts/ci/verify-actions-pinned.mjs",
+    "ci:clean": "node scripts/ci/verify-clean.mjs",
+    "ci:contract": "node scripts/ci/verify-production-contract.mjs",
+    "ci:demos": "node scripts/ci/run-offline-demos.mjs",
+    "ci:drills": "node scripts/ci/run-stage-a-drills.mjs",
+    "ci:release": "node scripts/ci/verify-release-inventory-reproducible.mjs",
+    "ci:runtime": "node scripts/ci/assert-runtime.mjs",
+    "ci:secrets": "node scripts/ci/secret-scan.mjs",
     "demo": "pnpm --filter @rsi/cli start",
     "demo:ingestion": "pnpm --filter @rsi/cli ingestion",
     "demo:pipeline": "pnpm --filter @rsi/cli pipeline",
     "operator": "pnpm --filter @rsi/cli run operator --",
     "operator:demo": "pnpm --filter @rsi/cli run operator -- --seed",
+    "preflight": "pnpm --filter @rsi/preflight run preflight",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
@@ -22,7 +32,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
+    "@types/node": "24.13.3",
     "prettier": "^3.9.6",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2",

@@ -12,6 +12,26 @@ import {
 } from "../src/index.js";
 
 describe("bounded raw fixture capture", () => {
+  it("requires the validated capture factory at runtime", () => {
+    const RuntimeCapture = RawFixtureCapture as unknown as new (
+      bytes: Uint8Array,
+      metadata: object,
+      constructionToken: object,
+    ) => RawFixtureCapture;
+    expect(
+      () =>
+        new RuntimeCapture(
+          new Uint8Array([1]),
+          {
+            byteLength: 1,
+            contentHash: `sha256:${"0".repeat(64)}`,
+            contentType: "application/json",
+          },
+          Object.freeze({}),
+        ),
+    ).toThrow("RawFixtureCapture must be created through RawFixtureCapture.capture");
+  });
+
   it("hashes the exact bytes and owns a defensive copy", () => {
     const source = new TextEncoder().encode('{"fixture":"hostile"}');
     const expectedHash = `sha256:${createHash("sha256").update(source).digest("hex")}`;

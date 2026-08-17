@@ -1,12 +1,4 @@
-import type {
-  BinaryLike,
-  JsonWebKeyInput,
-  KeyObject,
-  PrivateKeyInput,
-  PublicKeyInput,
-  RawPrivateKeyInput,
-  RawPublicKeyInput,
-} from "node:crypto";
+import type { JsonWebKeyInput, KeyObject, PrivateKeyInput, PublicKeyInput } from "node:crypto";
 
 export const CHECKPOINT_PAYLOAD_VERSION = 1 as const;
 export const CHECKPOINT_TYPE = "rsi.store.head" as const;
@@ -14,11 +6,11 @@ export const CHECKPOINT_JOURNAL_GENESIS_HASH = "0".repeat(64);
 
 /** Private key material accepted by node:crypto.createPrivateKey(). */
 export type Ed25519PrivateKeyMaterial =
-  BinaryLike | JsonWebKeyInput | KeyObject | PrivateKeyInput | RawPrivateKeyInput;
+  string | Buffer | JsonWebKeyInput | KeyObject | PrivateKeyInput;
 
 /** Public key material accepted by node:crypto.createPublicKey(). */
 export type Ed25519PublicKeyMaterial =
-  BinaryLike | JsonWebKeyInput | KeyObject | PublicKeyInput | RawPublicKeyInput;
+  string | Buffer | JsonWebKeyInput | KeyObject | PublicKeyInput;
 
 export interface CheckpointPayloadV1 {
   readonly checkpointType: typeof CHECKPOINT_TYPE;

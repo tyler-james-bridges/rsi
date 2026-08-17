@@ -1,5 +1,11 @@
 # Standards profile
 
+> [!IMPORTANT]
+> These standards describe future integration options. Under the active
+> [Observer v1 production-readiness contract](./production-readiness/v1/README.md),
+> AgentCash, x402, ERC-8004, ERC-8257, ERC-4337, EIP-712 execution, Robinhood, and
+> marketplace-write components remain disabled placeholders.
+
 RSI deliberately keeps the standards surface small. Draft standards are version-pinned behind adapters so their future changes do not leak through the system.
 
 ## Adopt

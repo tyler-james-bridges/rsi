@@ -1,5 +1,12 @@
 # Threat model
 
+> [!IMPORTANT]
+> This document includes the future execution threat surface. The active
+> [Observer v1 threat model](./production-readiness/v1/observer-threat-model.md) and
+> [data-retention contract](./production-readiness/v1/data-classification-retention.md)
+> govern the current read-only release. Observer has no raw-data forensics-retention
+> exception and no capital authority.
+
 ## Prime assumption
 
 An attacker can observe RSI's public prompts, queries, scoring logic, wallet activity, livestream narrative, approved collections, and prior strategy updates. They can then manufacture the exact social or tool signal RSI is looking for.
@@ -36,10 +43,11 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 ## Research storage and checkpoint threats
 
 - X bearer credentials are constructor-injected, never accepted in a query, cassette, event, demo output, or vault metadata. The collector rejects redirects and response bodies containing its credential.
-- Exact external bytes and their metadata are encrypted before parsing. Malformed data produces a bounded rejection event while the encrypted snapshot remains available for isolated forensic review.
-- Snapshot addresses reveal a SHA-256 digest and ciphertext size. They do not make low-entropy content secret from an attacker who can guess and hash it; do not treat content addressing as confidentiality.
-- Vault compromise is contained with a dedicated directory, strict permissions, authenticated encryption, bounded objects, and symlink/hard-link checks. A same-user attacker with the live in-process key can still decrypt data, so production deployment requires process isolation and managed key custody.
-- SQLite's internal hash chain cannot detect replacement with another internally consistent database. Signed checkpoints bind exact historical heads, but suffix rollback is detectable only when the latest journal head is retained outside the journal. Production activation requires publishing or storing that head in an independently controlled system and testing recovery.
+- Exact external bytes and their metadata are encrypted before parsing. Malformed data has no retention exception: it follows the same bounded expiry, verified deletion, and content-free error path as every other capture.
+- Capture identifiers are opaque random values rather than content hashes. The encrypted registry keeps source identifiers and request bindings outside permanent events, and verified cleanup destroys its per-attempt key material.
+- Vault compromise is contained with a dedicated directory, strict permissions, authenticated encryption, per-capture keys, bounded objects, and filesystem identity checks. A same-user process holding a live wrapping key can still decrypt active data, so production deployment requires process and Keychain isolation.
+- SQLite's internal hash chain cannot detect replacement with another internally consistent database. Signed checkpoints and the external-anchor verifier can prove an independently pinned suffix, but production still requires real B2 Object Lock publication, separate Mini/MacBook permissions, and recovery drills.
+- Recovery archives are intentionally split into state evidence, sanitized event history, and a signed release bundle. No single component may claim complete restoration, and lifecycle acceptance records all three exact archive hashes.
 
 ## Tool activation
 

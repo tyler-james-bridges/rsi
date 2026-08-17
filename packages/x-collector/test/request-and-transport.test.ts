@@ -16,8 +16,17 @@ import {
   FIXED_CLOCK,
   TEST_BEARER_TOKEN,
   jsonResponse,
+  testAttemptAuthorization,
   validResponseBytes,
 } from "./helpers.js";
+
+function createLiveCollector(options: Record<string, unknown>) {
+  return createXRecentSearchCollector({
+    attemptAuthorization: testAttemptAuthorization(),
+    now: FIXED_CLOCK,
+    ...options,
+  } as never);
+}
 
 describe("closed and pinned requests", () => {
   it("pins the production endpoint, method, parameters, fields, headers, and redirect policy", async () => {
@@ -36,12 +45,17 @@ describe("closed and pinned requests", () => {
       expect(url.searchParams.get("post.fields")).toBe(X_RECENT_SEARCH_POST_FIELDS.join(","));
       expect(url.searchParams.get("expansions")).toBe(X_RECENT_SEARCH_EXPANSIONS.join(","));
       expect(url.searchParams.get("user.fields")).toBe(X_RECENT_SEARCH_USER_FIELDS.join(","));
-      expect([...request.headers.keys()].sort()).toEqual(["accept", "authorization"]);
+      expect([...request.headers.keys()].sort()).toEqual([
+        "accept",
+        "accept-encoding",
+        "authorization",
+      ]);
       expect(request.headers.get("accept")).toBe("application/json");
+      expect(request.headers.get("accept-encoding")).toBe("identity");
       expect(request.headers.get("authorization")).toBe(`Bearer ${TEST_BEARER_TOKEN}`);
       return jsonResponse();
     });
-    const collector = createXRecentSearchCollector({
+    const collector = createLiveCollector({
       bearerToken: TEST_BEARER_TOKEN,
       fetch,
       now: FIXED_CLOCK,
@@ -55,17 +69,22 @@ describe("closed and pinned requests", () => {
     const serialized = JSON.stringify(raw);
     expect(serialized).not.toContain(TEST_BEARER_TOKEN);
     expect(serialized).not.toContain("nft evidence");
+    raw.destroy();
+    raw.destroy();
+    expect(() => raw.copyBytes()).toThrowError(
+      expect.objectContaining({ code: "INVALID_RESPONSE_SCHEMA" }),
+    );
   });
 
   it("builds a credential-free deterministic fingerprint and supports one bounded page token", () => {
     const first = prepareRecentSearchRequest({
       query: "same query",
-      maxResults: 100,
+      maxResults: 10,
       nextToken: "ABC_123",
     });
     const second = prepareRecentSearchRequest({
       nextToken: "ABC_123",
-      maxResults: 100,
+      maxResults: 10,
       query: "same query",
     });
 
@@ -79,7 +98,7 @@ describe("closed and pinned requests", () => {
     "rejects caller-supplied %s before transport",
     async (property) => {
       const fetch = vi.fn<XRecentSearchFetch>();
-      const collector = createXRecentSearchCollector({
+      const collector = createLiveCollector({
         bearerToken: TEST_BEARER_TOKEN,
         fetch,
       });
@@ -93,9 +112,9 @@ describe("closed and pinned requests", () => {
   it.each([
     { query: "" },
     { query: "   " },
-    { query: "x".repeat(4_097) },
+    { query: "x".repeat(513) },
     { query: "ok", maxResults: 9 },
-    { query: "ok", maxResults: 101 },
+    { query: "ok", maxResults: 11 },
     { query: "ok", maxResults: 10.5 },
     { query: "ok", nextToken: "not url safe!" },
   ])("rejects an out-of-bounds query shape", (input) => {
@@ -107,18 +126,88 @@ describe("closed and pinned requests", () => {
   it("rejects method/header/URL configuration channels at collector creation", () => {
     for (const property of ["url", "method", "headers", "redirect"] as const) {
       expect(() =>
-        createXRecentSearchCollector({
+        createLiveCollector({
           bearerToken: TEST_BEARER_TOKEN,
           [property]: "untrusted",
         } as never),
       ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
     }
   });
+
+  it("refuses to construct a live collector without a reserved one-shot authorization", () => {
+    expect(() =>
+      createXRecentSearchCollector({ bearerToken: TEST_BEARER_TOKEN } as never),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
+  });
+
+  it("rejects underfunded or wrong-operation attempt authorizations", () => {
+    expect(() =>
+      createXRecentSearchCollector({
+        attemptAuthorization: testAttemptAuthorization({ reservedAtomic: "1" }),
+        bearerToken: TEST_BEARER_TOKEN,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
+    expect(() =>
+      createXRecentSearchCollector({
+        attemptAuthorization: testAttemptAuthorization({
+          operation: "alchemy.json-rpc.v1",
+          sourcePlane: "canonical_chain",
+        }),
+        bearerToken: TEST_BEARER_TOKEN,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
+  });
 });
 
 describe("network trust-boundary handling", () => {
+  it("wipes streamed and handoff copies, leaving only the destroyable quarantine copy", async () => {
+    const expected = validResponseBytes();
+    const sourceChunk = new Uint8Array(expected);
+    const allocations: Uint8Array[] = [];
+    const NativeUint8Array = globalThis.Uint8Array;
+    const TrackingUint8Array = new Proxy(NativeUint8Array, {
+      construct(target, argumentsList, newTarget) {
+        const allocation = Reflect.construct(target, argumentsList, newTarget) as Uint8Array;
+        allocations.push(allocation);
+        return allocation;
+      },
+    });
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(sourceChunk);
+        controller.close();
+      },
+    });
+    vi.stubGlobal("Uint8Array", TrackingUint8Array);
+    let raw: Awaited<ReturnType<ReturnType<typeof createLiveCollector>["collectRaw"]>> | undefined;
+    try {
+      const collector = createLiveCollector({
+        bearerToken: TEST_BEARER_TOKEN,
+        fetch: async () =>
+          new Response(stream as unknown as ConstructorParameters<typeof Response>[0], {
+            headers: { "content-type": "application/json" },
+          }),
+      });
+      raw = await collector.collectRaw({ query: "wipe transient buffers" });
+      expect([...sourceChunk]).toEqual(new Array(expected.byteLength).fill(0));
+      const readableRawCopies = allocations.filter(
+        (allocation) =>
+          allocation.byteLength === expected.byteLength &&
+          allocation.every((byte, index) => byte === expected[index]),
+      );
+      expect(readableRawCopies).toHaveLength(1);
+
+      raw.destroy();
+      expect([...readableRawCopies[0]!]).toEqual(new Array(expected.byteLength).fill(0));
+    } finally {
+      raw?.destroy();
+      vi.unstubAllGlobals();
+      expected.fill(0);
+    }
+  });
+
   it("rejects malformed JSON only at the explicit parse boundary", async () => {
-    const collector = createXRecentSearchCollector({
+    const collector = createLiveCollector({
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () => jsonResponse("{not-json"),
       now: FIXED_CLOCK,
@@ -138,7 +227,7 @@ describe("network trust-boundary handling", () => {
         controller.close();
       },
     });
-    const collector = createXRecentSearchCollector({
+    const collector = createLiveCollector({
       bearerToken: TEST_BEARER_TOKEN,
       maxResponseBytes: 16,
       fetch: async () =>
@@ -155,7 +244,7 @@ describe("network trust-boundary handling", () => {
     ["shorter", "{}", "3"],
     ["longer", "{}", "1"],
   ])("rejects a body %s than its declared Content-Length", async (_label, body, declared) => {
-    const collector = createXRecentSearchCollector({
+    const collector = createLiveCollector({
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () =>
         new Response(body, {
@@ -170,8 +259,28 @@ describe("network trust-boundary handling", () => {
     });
   });
 
+  it("requests identity encoding and rejects a compressed response before length comparison", async () => {
+    const collector = createLiveCollector({
+      bearerToken: TEST_BEARER_TOKEN,
+      fetch: async (request: Request) => {
+        expect(request.headers.get("accept-encoding")).toBe("identity");
+        return new Response(validResponseBytes(), {
+          headers: {
+            "content-encoding": "gzip",
+            "content-length": "37",
+            "content-type": "application/json",
+          },
+        });
+      },
+    });
+
+    await expect(collector.collectRaw({ query: "compressed response" })).rejects.toMatchObject({
+      code: "UNSUPPORTED_CONTENT_ENCODING",
+    });
+  });
+
   it("rejects non-allowlisted JSON-like content types", async () => {
-    const collector = createXRecentSearchCollector({
+    const collector = createLiveCollector({
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () =>
         new Response(validResponseBytes(), {
@@ -184,7 +293,7 @@ describe("network trust-boundary handling", () => {
   });
 
   it("refuses redirects and non-200 statuses without consuming their bodies", async () => {
-    const redirectCollector = createXRecentSearchCollector({
+    const redirectCollector = createLiveCollector({
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () =>
         new Response(null, { status: 302, headers: { location: "https://example.invalid" } }),
@@ -193,7 +302,7 @@ describe("network trust-boundary handling", () => {
       code: "REDIRECT_REFUSED",
     });
 
-    const statusCollector = createXRecentSearchCollector({
+    const statusCollector = createLiveCollector({
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () => new Response(TEST_BEARER_TOKEN, { status: 429 }),
     });
@@ -204,10 +313,10 @@ describe("network trust-boundary handling", () => {
   });
 
   it("times out a transport that does not complete and redacts its eventual error", async () => {
-    const collector = createXRecentSearchCollector({
+    const collector = createLiveCollector({
       bearerToken: TEST_BEARER_TOKEN,
       timeoutMs: 5,
-      fetch: async (request) =>
+      fetch: async (request: Request) =>
         new Promise<Response>((_resolve, reject) => {
           request.signal.addEventListener(
             "abort",
@@ -226,7 +335,7 @@ describe("network trust-boundary handling", () => {
 
   it("supports caller abort without starting an already-aborted request", async () => {
     const fetch = vi.fn<XRecentSearchFetch>();
-    const collector = createXRecentSearchCollector({ bearerToken: TEST_BEARER_TOKEN, fetch });
+    const collector = createLiveCollector({ bearerToken: TEST_BEARER_TOKEN, fetch });
     const controller = new AbortController();
     controller.abort();
     await expect(
@@ -235,8 +344,33 @@ describe("network trust-boundary handling", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("permits exactly one network dispatch per reserved attempt", async () => {
+    const fetch = vi.fn<XRecentSearchFetch>(async () => jsonResponse());
+    const collector = createLiveCollector({ bearerToken: TEST_BEARER_TOKEN, fetch });
+
+    await collector.collectRaw({ query: "first authorized request" });
+    await expect(
+      collector.collectRaw({ query: "second unauthorized request" }),
+    ).rejects.toMatchObject({ code: "ATTEMPT_AUTHORIZATION_FAILED" });
+
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when the clock moves backward during a request", async () => {
+    const instants = [new Date("2026-08-11T19:20:22.000Z"), new Date("2026-08-11T19:20:21.000Z")];
+    const collector = createLiveCollector({
+      bearerToken: TEST_BEARER_TOKEN,
+      fetch: async () => jsonResponse(),
+      now: () => instants.shift() ?? new Date("2026-08-11T19:20:21.000Z"),
+    });
+
+    await expect(collector.collectRaw({ query: "clock regression" })).rejects.toMatchObject({
+      code: "CLOCK_REGRESSION",
+    });
+  });
+
   it("does not retain a transport error that contains the credential", async () => {
-    const collector = createXRecentSearchCollector({
+    const collector = createLiveCollector({
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () => {
         throw new Error(`request failed with Authorization: Bearer ${TEST_BEARER_TOKEN}`);
@@ -251,7 +385,7 @@ describe("network trust-boundary handling", () => {
 
   it("rejects credential material in query fields before it can enter a URL or cassette", async () => {
     const fetch = vi.fn<XRecentSearchFetch>();
-    const collector = createXRecentSearchCollector({
+    const collector = createLiveCollector({
       bearerToken: TEST_BEARER_TOKEN,
       fetch,
     });
@@ -262,7 +396,7 @@ describe("network trust-boundary handling", () => {
   });
 
   it("refuses to quarantine or record a body that echoes the Bearer Token", async () => {
-    const collector = createXRecentSearchCollector({
+    const collector = createLiveCollector({
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () => jsonResponse(JSON.stringify({ leaked: TEST_BEARER_TOKEN })),
     });

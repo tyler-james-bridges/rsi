@@ -8,8 +8,8 @@ importers:
   .:
     devDependencies:
       "@types/node":
-        specifier: ^26.2.0
-        version: 26.2.0
+        specifier: 24.13.3
+        version: 24.13.3
       prettier:
         specifier: ^3.9.6
         version: 3.9.6
@@ -21,7 +21,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: ^4.1.10
-        version: 4.1.10(@types/node@26.2.0)(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(tsx@4.23.12))
+        version: 4.1.10(@types/node@24.13.3)(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.2)(tsx@4.23.12))
 
   apps/cli:
     dependencies:
@@ -56,7 +56,11 @@ importers:
         specifier: ^4.23.12
         version: 4.23.12
 
-  apps/operator: {}
+  apps/operator:
+    dependencies:
+      "@rsi/session-lifecycle":
+        specifier: workspace:*
+        version: link:../../packages/session-lifecycle
 
   packages/adapters:
     dependencies:
@@ -66,6 +70,23 @@ importers:
       "@rsi/policy":
         specifier: workspace:*
         version: link:../policy
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/alerts:
+    dependencies:
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/backup: {}
+
+  packages/capture-registry:
+    dependencies:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -94,8 +115,26 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/event-archive:
+    dependencies:
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
+
+  packages/external-anchor:
+    dependencies:
+      "@rsi/checkpoints":
+        specifier: workspace:*
+        version: link:../checkpoints
+
   packages/ingestion:
     dependencies:
+      "@rsi/capture-registry":
+        specifier: workspace:*
+        version: link:../capture-registry
+      "@rsi/operations":
+        specifier: workspace:*
+        version: link:../operations
       "@rsi/store":
         specifier: workspace:*
         version: link:../store
@@ -105,10 +144,22 @@ importers:
       "@rsi/x-collector":
         specifier: workspace:*
         version: link:../x-collector
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       "@rsi/checkpoints":
         specifier: workspace:*
         version: link:../checkpoints
+
+  packages/operations:
+    dependencies:
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/pipeline:
     dependencies:
@@ -140,6 +191,16 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/preflight: {}
+
+  packages/public-projection:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/release-bundle: {}
+
   packages/research:
     dependencies:
       "@rsi/domain":
@@ -149,11 +210,63 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/session-controller:
+    dependencies:
+      "@rsi/alerts":
+        specifier: workspace:*
+        version: link:../alerts
+      "@rsi/backup":
+        specifier: workspace:*
+        version: link:../backup
+      "@rsi/capture-registry":
+        specifier: workspace:*
+        version: link:../capture-registry
+      "@rsi/checkpoints":
+        specifier: workspace:*
+        version: link:../checkpoints
+      "@rsi/event-archive":
+        specifier: workspace:*
+        version: link:../event-archive
+      "@rsi/ingestion":
+        specifier: workspace:*
+        version: link:../ingestion
+      "@rsi/operations":
+        specifier: workspace:*
+        version: link:../operations
+      "@rsi/release-bundle":
+        specifier: workspace:*
+        version: link:../release-bundle
+      "@rsi/session-lifecycle":
+        specifier: workspace:*
+        version: link:../session-lifecycle
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
+      "@rsi/vault":
+        specifier: workspace:*
+        version: link:../vault
+
+  packages/session-lifecycle:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/source-contracts:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
   packages/store: {}
 
   packages/vault: {}
 
-  packages/x-collector: {}
+  packages/x-collector:
+    dependencies:
+      "@rsi/operations":
+        specifier: workspace:*
+        version: link:../operations
 
 packages:
   "@adraffy/ens-normalize@1.11.1":
@@ -609,10 +722,10 @@ packages:
         integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==,
       }
 
-  "@types/node@26.2.0":
+  "@types/node@24.13.3":
     resolution:
       {
-        integrity: sha512-5IviulTZeRNp2vAJ514cc/HUlY5nZ9fCbq9DMyC52BrhFZACo3nI0R7qBxhQmo/d27NFe96ur/b7Wwxklda+kg==,
+        integrity: sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q==,
       }
 
   "@typescript/typescript-aix-ppc64@7.0.2":
@@ -1199,10 +1312,10 @@ packages:
     engines: { node: ">=16.20.0" }
     hasBin: true
 
-  undici-types@8.3.0:
+  undici-types@7.18.2:
     resolution:
       {
-        integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==,
+        integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==,
       }
 
   viem@2.55.13:
@@ -1496,9 +1609,9 @@ snapshots:
 
   "@types/estree@1.0.9": {}
 
-  "@types/node@26.2.0":
+  "@types/node@24.13.3":
     dependencies:
-      undici-types: 8.3.0
+      undici-types: 7.18.2
 
   "@typescript/typescript-aix-ppc64@7.0.2":
     optional: true
@@ -1569,13 +1682,13 @@ snapshots:
       chai: 6.2.2
       tinyrainbow: 3.1.1
 
-  "@vitest/mocker@4.1.10(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(tsx@4.23.12))":
+  "@vitest/mocker@4.1.10(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.2)(tsx@4.23.12))":
     dependencies:
       "@vitest/spy": 4.1.10
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(tsx@4.23.12)
+      vite: 8.2.1(@types/node@24.13.3)(esbuild@0.28.2)(tsx@4.23.12)
 
   "@vitest/pretty-format@4.1.10":
     dependencies:
@@ -1818,7 +1931,7 @@ snapshots:
       "@typescript/typescript-win32-arm64": 7.0.2
       "@typescript/typescript-win32-x64": 7.0.2
 
-  undici-types@8.3.0: {}
+  undici-types@7.18.2: {}
 
   viem@2.55.13(typescript@7.0.2)(zod@4.4.3):
     dependencies:
@@ -1837,7 +1950,7 @@ snapshots:
       - utf-8-validate
       - zod
 
-  vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(tsx@4.23.12):
+  vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.2)(tsx@4.23.12):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.5
@@ -1845,15 +1958,15 @@ snapshots:
       rolldown: 1.2.3
       tinyglobby: 0.2.17
     optionalDependencies:
-      "@types/node": 26.2.0
+      "@types/node": 24.13.3
       esbuild: 0.28.2
       fsevents: 2.3.3
       tsx: 4.23.12
 
-  vitest@4.1.10(@types/node@26.2.0)(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(tsx@4.23.12)):
+  vitest@4.1.10(@types/node@24.13.3)(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.2)(tsx@4.23.12)):
     dependencies:
       "@vitest/expect": 4.1.10
-      "@vitest/mocker": 4.1.10(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(tsx@4.23.12))
+      "@vitest/mocker": 4.1.10(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.2)(tsx@4.23.12))
       "@vitest/pretty-format": 4.1.10
       "@vitest/runner": 4.1.10
       "@vitest/snapshot": 4.1.10
@@ -1870,10 +1983,10 @@ snapshots:
       tinyexec: 1.3.0
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.1
-      vite: 8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(tsx@4.23.12)
+      vite: 8.2.1(@types/node@24.13.3)(esbuild@0.28.2)(tsx@4.23.12)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      "@types/node": 26.2.0
+      "@types/node": 24.13.3
     transitivePeerDependencies:
       - msw
 

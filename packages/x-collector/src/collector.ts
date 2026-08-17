@@ -1,5 +1,10 @@
 import {
-  createXRecentSearchCassette,
+  isNetworkAttemptAuthorization,
+  type NetworkAttemptBinding,
+  type NetworkAttemptAuthorization,
+} from "@rsi/operations";
+
+import {
   decodeXRecentSearchCassetteBody,
   validateXRecentSearchCassette,
   type XRecentSearchCassetteStore,
@@ -10,6 +15,7 @@ import {
   X_RECENT_SEARCH_DEFAULT_TIMEOUT_MS,
   X_RECENT_SEARCH_MAX_RESPONSE_BYTES,
   X_RECENT_SEARCH_MAX_TIMEOUT_MS,
+  X_RECENT_SEARCH_RESERVED_USD_MICRO,
 } from "./constants.js";
 import { XCollectorError } from "./errors.js";
 import {
@@ -24,17 +30,8 @@ export type XRecentSearchFetch = (request: Request) => Promise<Response>;
 
 export type XRecentSearchLiveOptions = Readonly<{
   mode?: "live";
+  attemptAuthorization: NetworkAttemptAuthorization;
   bearerToken: string;
-  fetch?: XRecentSearchFetch;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
-  now?: XCollectorClock;
-}>;
-
-export type XRecentSearchRecordOptions = Readonly<{
-  mode: "record";
-  bearerToken: string;
-  cassetteStore: XRecentSearchCassetteStore;
   fetch?: XRecentSearchFetch;
   timeoutMs?: number;
   maxResponseBytes?: number;
@@ -47,28 +44,43 @@ export type XRecentSearchReplayOptions = Readonly<{
   maxResponseBytes?: number;
 }>;
 
-export type XRecentSearchCollectorOptions =
-  XRecentSearchLiveOptions | XRecentSearchRecordOptions | XRecentSearchReplayOptions;
+export type XRecentSearchCollectorOptions = XRecentSearchLiveOptions | XRecentSearchReplayOptions;
 
 export type XRecentSearchCollectOptions = Readonly<{
   signal?: AbortSignal;
 }>;
 
 export interface XRecentSearchCollector {
-  readonly mode: "live" | "record" | "replay";
+  readonly attemptBinding: NetworkAttemptBinding | null;
+  readonly mode: "live" | "replay";
   collectRaw(
     query: unknown,
     options?: XRecentSearchCollectOptions,
   ): Promise<QuarantinedXRecentSearchResponse>;
 }
 
+const AUTHENTIC_X_COLLECTORS = new WeakSet<object>();
+
+/** Rejects structural lookalikes that did not pass the collector factory's closed validation. */
+export function isXRecentSearchCollector(value: unknown): value is XRecentSearchCollector {
+  return (
+    (typeof value === "object" || typeof value === "function") &&
+    value !== null &&
+    AUTHENTIC_X_COLLECTORS.has(value)
+  );
+}
+
+function authenticateCollector(collector: XRecentSearchCollector): XRecentSearchCollector {
+  AUTHENTIC_X_COLLECTORS.add(collector);
+  return Object.freeze(collector);
+}
+
 type ValidatedCollectOptions = Readonly<{ signal?: AbortSignal }>;
 
-const LIVE_KEYS = new Set(["mode", "bearerToken", "fetch", "timeoutMs", "maxResponseBytes", "now"]);
-const RECORD_KEYS = new Set([
+const LIVE_KEYS = new Set([
   "mode",
+  "attemptAuthorization",
   "bearerToken",
-  "cassetteStore",
   "fetch",
   "timeoutMs",
   "maxResponseBytes",
@@ -128,10 +140,9 @@ function validateStore(value: unknown): XRecentSearchCassetteStore {
   if (
     (typeof value !== "object" && typeof value !== "function") ||
     value === null ||
-    typeof (value as Partial<XRecentSearchCassetteStore>).get !== "function" ||
-    typeof (value as Partial<XRecentSearchCassetteStore>).put !== "function"
+    typeof (value as Partial<XRecentSearchCassetteStore>).get !== "function"
   ) {
-    invalidConfiguration("cassetteStore must implement get() and put().");
+    invalidConfiguration("cassetteStore must implement get().");
   }
   return value as XRecentSearchCassetteStore;
 }
@@ -177,17 +188,27 @@ function includesBytes(haystack: Uint8Array, needle: Uint8Array): boolean {
 
 function credentialRepresentations(bearerToken: string): readonly Uint8Array[] {
   const encoder = new TextEncoder();
-  return [
-    bearerToken,
-    `Bearer ${bearerToken}`,
-    encodeURIComponent(bearerToken),
-    Buffer.from(bearerToken, "utf8").toString("base64"),
-    JSON.stringify(bearerToken).slice(1, -1),
-  ].map((representation) => encoder.encode(representation));
+  const tokenBytes = Buffer.from(bearerToken, "utf8");
+  try {
+    return [
+      bearerToken,
+      `Bearer ${bearerToken}`,
+      encodeURIComponent(bearerToken),
+      tokenBytes.toString("base64"),
+      JSON.stringify(bearerToken).slice(1, -1),
+    ].map((representation) => encoder.encode(representation));
+  } finally {
+    tokenBytes.fill(0);
+  }
 }
 
 function containsCredential(bytes: Uint8Array, bearerToken: string): boolean {
-  return credentialRepresentations(bearerToken).some((needle) => includesBytes(bytes, needle));
+  const representations = credentialRepresentations(bearerToken);
+  try {
+    return representations.some((needle) => includesBytes(bytes, needle));
+  } finally {
+    for (const representation of representations) representation.fill(0);
+  }
 }
 
 function assertCredentialAbsentFromResponse(bytes: Uint8Array, bearerToken: string): void {
@@ -203,11 +224,16 @@ function assertCredentialAbsentFromRequest(
   prepared: PreparedXRecentSearchRequest,
   bearerToken: string,
 ): void {
-  if (containsCredential(new TextEncoder().encode(prepared.canonicalRequest), bearerToken)) {
-    throw new XCollectorError(
-      "CREDENTIAL_IN_REQUEST",
-      "The request was rejected because a query field contained credential material.",
-    );
+  const requestBytes = new TextEncoder().encode(prepared.canonicalRequest);
+  try {
+    if (containsCredential(requestBytes, bearerToken)) {
+      throw new XCollectorError(
+        "CREDENTIAL_IN_REQUEST",
+        "The request was rejected because a query field contained credential material.",
+      );
+    }
+  } finally {
+    requestBytes.fill(0);
   }
 }
 
@@ -254,34 +280,46 @@ async function readBoundedBody(
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  while (true) {
-    const result = await Promise.race([reader.read(), gate]);
-    if (result.done) break;
-    const chunk = result.value;
-    total += chunk.byteLength;
-    if (total > limitBytes) {
-      void reader.cancel().catch(() => undefined);
-      throw new XCollectorError("RESPONSE_TOO_LARGE", "The response exceeds the byte limit.", {
-        limitBytes,
-        receivedBytes: total,
-      });
+  let assembled: Uint8Array | undefined;
+  try {
+    while (true) {
+      const result = await Promise.race([reader.read(), gate]);
+      if (result.done) break;
+      const sourceChunk = result.value;
+      const chunk = new Uint8Array(sourceChunk);
+      sourceChunk.fill(0);
+      total += chunk.byteLength;
+      if (total > limitBytes) {
+        chunk.fill(0);
+        void reader.cancel().catch(() => undefined);
+        throw new XCollectorError("RESPONSE_TOO_LARGE", "The response exceeds the byte limit.", {
+          limitBytes,
+          receivedBytes: total,
+        });
+      }
+      chunks.push(chunk);
     }
-    chunks.push(chunk.slice());
-  }
 
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
+    assembled = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      assembled.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    if (declaredLength !== undefined && declaredLength !== total) {
+      throw new XCollectorError(
+        "CONTENT_LENGTH_MISMATCH",
+        "The response length did not match Content-Length.",
+      );
+    }
+    return assembled;
+  } catch (error) {
+    assembled?.fill(0);
+    void reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    for (const chunk of chunks) chunk.fill(0);
   }
-  if (declaredLength !== undefined && declaredLength !== total) {
-    throw new XCollectorError(
-      "CONTENT_LENGTH_MISMATCH",
-      "The response length did not match Content-Length.",
-    );
-  }
-  return bytes;
 }
 
 async function executeNetworkRequest(
@@ -292,6 +330,7 @@ async function executeNetworkRequest(
   maxResponseBytes: number,
   externalSignal: AbortSignal | undefined,
   clock: XCollectorClock,
+  dispatchedAt: string,
 ): Promise<QuarantinedXRecentSearchResponse> {
   if (externalSignal?.aborted === true) {
     throw new XCollectorError("ABORTED", "The recent-search request was aborted.");
@@ -316,6 +355,7 @@ async function executeNetworkRequest(
       method: "GET",
       headers: {
         accept: "application/json",
+        "accept-encoding": "identity",
         authorization: `Bearer ${bearerToken}`,
       },
       body: null,
@@ -344,11 +384,28 @@ async function executeNetworkRequest(
         status: response.status,
       });
     }
+    const contentEncoding = response.headers.get("content-encoding");
+    if (contentEncoding !== null && contentEncoding.trim().toLowerCase() !== "identity") {
+      throw new XCollectorError(
+        "UNSUPPORTED_CONTENT_ENCODING",
+        "The X API returned a compressed response despite the identity-only request.",
+      );
+    }
     const contentType = normalizeJsonContentType(response.headers.get("content-type"));
     const bytes = await readBoundedBody(response, maxResponseBytes, gate);
-    assertCredentialAbsentFromResponse(bytes, bearerToken);
-    const acquiredAt = readAcquiredAt(clock);
-    return quarantineNetworkResponse(prepared, 200, contentType, bytes, acquiredAt);
+    try {
+      assertCredentialAbsentFromResponse(bytes, bearerToken);
+      const acquiredAt = readAcquiredAt(clock);
+      if (Date.parse(acquiredAt) < Date.parse(dispatchedAt)) {
+        throw new XCollectorError(
+          "CLOCK_REGRESSION",
+          "The collector clock moved backward during the request.",
+        );
+      }
+      return quarantineNetworkResponse(prepared, 200, contentType, bytes, acquiredAt);
+    } finally {
+      bytes.fill(0);
+    }
   } catch (error) {
     if (error instanceof XCollectorError) throw error;
     if (timedOut) {
@@ -370,10 +427,10 @@ export function createXRecentSearchCollector(
 export function createXRecentSearchCollector(options: unknown): XRecentSearchCollector {
   if (!isPlainRecord(options)) invalidConfiguration("Collector options must be a plain object.");
   const mode = options.mode === undefined ? "live" : options.mode;
-  if (mode !== "live" && mode !== "record" && mode !== "replay") {
-    invalidConfiguration("mode must be live, record, or replay.");
+  if (mode !== "live" && mode !== "replay") {
+    invalidConfiguration("mode must be live or replay; live response recording is forbidden.");
   }
-  const allowed = mode === "live" ? LIVE_KEYS : mode === "record" ? RECORD_KEYS : REPLAY_KEYS;
+  const allowed = mode === "live" ? LIVE_KEYS : REPLAY_KEYS;
   if (!hasOnlyKeys(options, allowed)) {
     invalidConfiguration("Collector options contain an unsupported property.");
   }
@@ -388,6 +445,7 @@ export function createXRecentSearchCollector(options: unknown): XRecentSearchCol
   if (mode === "replay") {
     const cassetteStore = validateStore(options.cassetteStore);
     const collector: XRecentSearchCollector = {
+      attemptBinding: null,
       mode,
       async collectRaw(query, collectOptions) {
         const { signal } = validateCollectOptions(collectOptions);
@@ -418,24 +476,43 @@ export function createXRecentSearchCollector(options: unknown): XRecentSearchCol
           );
         }
         const bytes = decodeXRecentSearchCassetteBody(cassette);
-        if (bytes.byteLength > maxResponseBytes) {
-          throw new XCollectorError("RESPONSE_TOO_LARGE", "The replay exceeds the byte limit.", {
-            limitBytes: maxResponseBytes,
-          });
+        try {
+          if (bytes.byteLength > maxResponseBytes) {
+            throw new XCollectorError("RESPONSE_TOO_LARGE", "The replay exceeds the byte limit.", {
+              limitBytes: maxResponseBytes,
+            });
+          }
+          return quarantineCassetteResponse(
+            prepared,
+            cassette.response.contentType,
+            cassette.response.bodySha256,
+            bytes,
+            cassette.acquiredAt,
+          );
+        } finally {
+          bytes.fill(0);
         }
-        return quarantineCassetteResponse(
-          prepared,
-          cassette.response.contentType,
-          cassette.response.bodySha256,
-          bytes,
-          cassette.acquiredAt,
-        );
       },
     };
-    return Object.freeze(collector);
+    return authenticateCollector(collector);
   }
 
   const bearerToken = validateCredential(options.bearerToken);
+  const attemptAuthorization = options.attemptAuthorization;
+  if (!isNetworkAttemptAuthorization(attemptAuthorization)) {
+    invalidConfiguration(
+      "Live collectors require a reserved one-shot network attempt authorization.",
+    );
+  }
+  if (
+    attemptAuthorization.binding.operation !== "x.recent-search.v1" ||
+    attemptAuthorization.binding.sourcePlane !== "social" ||
+    attemptAuthorization.binding.reservedAtomic !== X_RECENT_SEARCH_RESERVED_USD_MICRO
+  ) {
+    invalidConfiguration(
+      "The network attempt must be reserved for one fully funded X recent-search call.",
+    );
+  }
   const fetchImplementation =
     options.fetch === undefined
       ? globalThis.fetch.bind(globalThis)
@@ -454,14 +531,22 @@ export function createXRecentSearchCollector(options: unknown): XRecentSearchCol
       : typeof options.now === "function"
         ? (options.now as XCollectorClock)
         : invalidConfiguration("now must be a clock function.");
-  const cassetteStore = mode === "record" ? validateStore(options.cassetteStore) : undefined;
-
   const collector: XRecentSearchCollector = {
+    attemptBinding: attemptAuthorization.binding,
     mode,
     async collectRaw(query, collectOptions) {
       const { signal } = validateCollectOptions(collectOptions);
       const prepared = prepareRecentSearchRequest(query);
       assertCredentialAbsentFromRequest(prepared, bearerToken);
+      const dispatchedAt = readAcquiredAt(clock);
+      try {
+        attemptAuthorization.consume(dispatchedAt);
+      } catch {
+        throw new XCollectorError(
+          "ATTEMPT_AUTHORIZATION_FAILED",
+          "The reserved network attempt could not be authorized.",
+        );
+      }
       const response = await executeNetworkRequest(
         prepared,
         bearerToken,
@@ -470,20 +555,10 @@ export function createXRecentSearchCollector(options: unknown): XRecentSearchCol
         maxResponseBytes,
         signal,
         clock,
+        dispatchedAt,
       );
-      if (mode === "record" && cassetteStore !== undefined) {
-        const cassette = createXRecentSearchCassette(prepared, response);
-        try {
-          await cassetteStore.put(cassette);
-        } catch {
-          throw new XCollectorError(
-            "CASSETTE_STORAGE_FAILURE",
-            "The cassette store could not record the response.",
-          );
-        }
-      }
       return response;
     },
   };
-  return Object.freeze(collector);
+  return authenticateCollector(collector);
 }

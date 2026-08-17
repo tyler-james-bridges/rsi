@@ -1,5 +1,11 @@
 # Build roadmap
 
+> [!IMPORTANT]
+> This roadmap predates the accepted Q1-Q195 production design. The active
+> [Observer v1 production-readiness contract](./production-readiness/v1/README.md)
+> controls scope, build order, readiness labels, and live-call gates. In particular,
+> no paid or state-changing phase is authorized by this roadmap.
+
 Each phase produces evidence that unlocks the next. “Live” begins with bounded canaries; no phase silently grants broader authority.
 
 ## Phase 0 — Foundation
@@ -26,13 +32,19 @@ Status: **offline provenance and quarantined X ingestion complete through Build 
 - [x] Durable end-to-end runs covering safe, prompt-injection, coordinated-shill, stale-evidence, and contract-substitution cases.
 - [x] Read-only local operator API showing integrity, evidence lineage, decisions, and abstentions without raw hostile text.
 - [x] Portable Ed25519-signed event-log checkpoints with an independent journal and verifier.
-- [ ] Publish or retain the newest trusted checkpoint head in an independently controlled system and test backup/recovery.
-- [x] Separate content-addressed AES-256-GCM snapshot vault with encrypted metadata and adversarial filesystem tests.
-- [x] Credential-injected, read-only X recent-search collector with pinned transport/schema and offline record/replay fixtures.
+- [x] Signed external-anchor envelope, authenticated publication outbox, pinned-suffix verifier, and offline retention simulations.
+- [ ] Connect the anchor protocol to independently controlled B2 Object Lock storage and complete the two-device verification drill.
+- [x] Opaque-ID AES-256-GCM capture vault with per-capture keys, encrypted metadata, expiry, deletion, and restart recovery.
+- [x] Profile-bound encrypted capture registry and exact-attempt X ingestion reconciliation.
+- [x] Credential-injected, read-only X recent-search collector with pinned transport/schema and synthetic offline replay fixtures; no live recording mode.
+- [x] Supervised session lifecycle, content-free alert outbox, and closed state-evidence/event-archive/release-bundle components.
+- [x] Build the genuine-store local closure controller, loopback dashboard controls, signed public projection, and offline Stage A drill gate.
+- [ ] Complete isolated physical two-copy restore, real alert handoff, and provider-backed session-close drills.
 - [ ] Run a credentialed X canary in a network-isolated process, reconcile the current official documentation dialect, and approve or revise the pinned contract.
-- [ ] Authenticated OpenSea and chain read adapters with recorded replay fixtures.
+- [x] Exact offline OpenSea REST/Stream and finalized Base/Robinhood Chain request/fixture contracts with asset, block, runtime-code, and EIP-1967 bindings.
+- [ ] Quarantined authenticated OpenSea and chain read transports plus separately approved canaries.
 - [ ] Stable-account history, edit tracking, exact proxy/deployer resolution, and wash-trade/funding graphs.
-- [ ] A richer local UI; the current operator surface is JSON HTTP plus CLI.
+- [x] A fixed loopback dashboard with same-origin assets and a closed lifecycle-control vocabulary.
 
 Exit: recorded adversarial corpus produces zero policy escapes; no state-changing credentials exist.
 
@@ -76,4 +88,4 @@ Exit: the optional connector can be disconnected without affecting RSI's onchain
 
 ## Near-term next session
 
-Externally retain/publish the checkpoint journal head, run the X collector's credentialed network-isolated canary, and add authenticated OpenSea plus chain read adapters with encrypted record/replay snapshots. Keep every paid and state-changing capability disabled.
+Finish the signed foundation-release handoff, protected public-repository CI receipt, and provisioning input checklist. Only after those gates and explicit provisioning approval may RSI configure external checkpoint/alert resources or run the one-call X commissioning canary. Keep every paid and state-changing capability disabled.

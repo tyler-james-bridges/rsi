@@ -16,7 +16,11 @@ The contract was reviewed against official X documentation on 2026-08-11. `X_REC
 | User fields           | `user.fields=id,name,username,created_at`                                                 |
 | Content types         | `application/json` and the two explicit UTF-8 variants exported as `X_JSON_CONTENT_TYPES` |
 
-The caller supplies only a closed `{ query, maxResults?, nextToken? }` object. `query` is bounded by the endpoint's documented 1–4096 range, `maxResults` by 10–100, and `nextToken` by a bounded URL-safe opaque-token grammar. Unknown properties are rejected. URL, method, headers, redirect behavior, expansions, fields, and arbitrary parameters cannot be supplied by a caller.
+The caller supplies only a closed `{ query, maxResults?, nextToken? }` object. RSI
+tightens the endpoint limits to a 1–512 character query and exactly 10 results per
+request. `nextToken` uses a bounded URL-safe opaque-token grammar. Unknown properties
+are rejected. URL, method, headers, redirect behavior, expansions, fields, and arbitrary
+parameters cannot be supplied by a caller.
 
 The endpoint-specific [Search Posts Recent API reference](https://docs.x.com/x-api/posts/search-recent-posts) currently names `post.fields` and models `edit_history_post_ids`. It lists `id`, `text`, and `created_at` as selectable fields; `author_id` is obtained by the fixed author expansion, and edit history is modeled as a default response field.
 
@@ -34,7 +38,8 @@ import {
 } from "@rsi/x-collector";
 
 const collector = createXRecentSearchCollector({
-  bearerToken: process.env.X_BEARER_TOKEN!,
+  attemptAuthorization,
+  bearerToken: keychainInjectedBearerToken,
 });
 
 const raw = await collector.collectRaw({
@@ -48,23 +53,33 @@ const raw = await collector.collectRaw({
 const typed = parseXRecentSearchResponse(raw);
 ```
 
+Collectors are branded in a module-private `WeakSet` by the closed factory.
+`isXRecentSearchCollector` rejects structural clones and lookalikes, allowing the
+ingestion boundary to fail before egress if a caller tries to bypass factory
+validation. Tests instrument injected fetch functions or replay stores rather
+than wrapping the collector object.
+
 `collectRaw` never parses JSON. It returns defensive-copy raw bytes plus bounded metadata: endpoint, request fingerprint, response hash, byte count, status, content type, canonical UTC `acquiredAt`, result limit, and provenance. JSON serialization emits only that metadata and a `"quarantined"` marker; it omits the canonical request and research query.
 
 `parseXRecentSearchResponse` is a separate trust-boundary operation. It requires the endpoint-specific closed response shape, string stable IDs, edit history containing the current Post ID, canonical timestamps, exact result counts/newest/oldest IDs, and a one-to-one set correlation between Post `author_id` values and `includes.users`. Author creation must precede the Post, and Post creation must not be later than `acquiredAt`. Partial-error or extra-field responses are rejected rather than laundered into typed evidence.
 
-## Record and replay
+## Synthetic fixtures and replay
 
-Recording is opt-in and storage is injected:
+The callable collector has no live recording mode. A live paid response can only
+leave quarantine through the encrypted Vault v2 ingestion boundary; it cannot be
+copied into an injected cassette sink. Tests build explicitly synthetic cassettes
+offline and seed a read-only replay source:
 
 ```ts
-const cassettes = new MemoryCassetteStore();
-const recorder = createXRecentSearchCollector({
-  mode: "record",
-  bearerToken: process.env.X_BEARER_TOKEN!,
-  cassetteStore: cassettes,
-});
-
-const recorded = await recorder.collectRaw({ query: "fictional example" });
+const request = prepareRecentSearchRequest({ query: "fictional example" });
+const synthetic = quarantineNetworkResponse(
+  request,
+  200,
+  "application/json",
+  fictionalBytes,
+  fixedFixtureTime,
+);
+const cassettes = new MemoryCassetteStore([createXRecentSearchCassette(request, synthetic)]);
 
 const replay = createXRecentSearchCollector({
   mode: "replay",
@@ -73,12 +88,25 @@ const replay = createXRecentSearchCollector({
 const replayed = await replay.collectRaw({ query: "fictional example" });
 ```
 
-Replay configuration rejects both credentials and fetch implementations, so a replay cannot fall through to the network. Cassettes are keyed by a SHA-256 fingerprint of a credential-free canonical request and bind the exact response bytes, response hash, content metadata, and canonical `acquiredAt` with an integrity hash. Replay revalidates the closed envelope, pinned request, base64 encoding, all hashes, timestamp, and byte length before returning byte-identical quarantine data. Exact duplicate writes are idempotent; a changed response for an existing request fingerprint fails closed.
+Replay configuration rejects both credentials and fetch implementations, so a replay cannot fall through to the network. Cassettes are keyed by a SHA-256 fingerprint of a credential-free canonical request and bind the exact response bytes, response hash, content metadata, and canonical `acquiredAt` with an integrity hash. Replay revalidates the closed envelope, pinned request, base64 encoding, all hashes, timestamp, and byte length before returning byte-identical quarantine data. Exact duplicate synthetic seeds are idempotent; a changed seed for an existing request fingerprint fails closed.
 
-Only an in-memory store is included. There is intentionally no automatic plaintext filesystem recorder. Live response bodies must go through the encrypted `@rsi/vault` before any durable metadata/event is written. Committed fixtures must be fictional and credential-free. Authorization headers are never part of canonical requests, quarantines, errors, or cassettes; a network body that echoes the injected token is refused before quarantine or recording.
+Only an in-memory synthetic-fixture store is included. There is no network
+recorder or automatic plaintext filesystem recorder. Committed fixtures must be
+fictional and credential-free. Authorization headers are never part of canonical
+requests, quarantines, errors, or cassettes; a network body that echoes the
+injected token is refused before quarantine.
 
 ## Transport boundary
 
-The collector builds its own `Request`, sends only `GET`, sets only `Accept` and `Authorization`, omits ambient credentials, and uses `redirect: "error"`. It also rejects redirect statuses, redirected/final-URL responses, non-200 statuses, non-allowlisted media types, invalid or excessive declared lengths, and streamed bodies that cross the configured byte limit. A private abort controller covers both response establishment and streaming; callers may also provide an `AbortSignal`. Transport errors and response bodies are never copied into errors.
+The collector builds its own `Request`, sends only `GET`, sets `Accept`,
+`Accept-Encoding: identity`, and `Authorization`, omits ambient credentials, and
+uses `redirect: "error"`. It rejects any non-identity content encoding so native
+fetch cannot compare a decompressed body against a compressed wire
+`Content-Length`. It also rejects redirect statuses, redirected/final-URL
+responses, non-200 statuses, non-allowlisted media types, invalid or excessive
+declared lengths, and streamed bodies that cross the configured byte limit. A
+private abort controller covers both response establishment and streaming;
+callers may also provide an `AbortSignal`. Transport errors and response bodies
+are never copied into errors.
 
 Tests use only injected fetch functions and Web streams. They do not contact X or any other network service.

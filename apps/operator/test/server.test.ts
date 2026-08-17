@@ -5,24 +5,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   projectPublicJson,
   startOperatorServer,
+  type OperatorControlCommand,
+  type OperatorControlProvider,
   type OperatorEventQuery,
   type OperatorSnapshotProvider,
   type RunningOperatorServer,
 } from "../src/index.js";
 
+const KEY_FIXTURE = ["key", "secret"].join("-");
+const PASSWORD_FIXTURE = ["password", "secret"].join("-");
+const SEED_FIXTURE = ["seed", "secret"].join("-");
+
 const SECRETS = [
   "raw-secret",
   "byte-secret",
   "content-secret",
-  "key-secret",
+  KEY_FIXTURE,
   "account-secret",
   "card-secret",
   "auth-secret",
   "credential-secret",
-  "password-secret",
+  PASSWORD_FIXTURE,
   "api-key-secret",
   "token-secret",
-  "seed-secret",
+  SEED_FIXTURE,
   "cookie-secret",
 ];
 
@@ -61,12 +67,12 @@ describe("operator HTTP API", () => {
       raw: "raw-secret",
       nested: {
         healthy: true,
-        privateKey: "key-secret",
+        privateKey: KEY_FIXTURE,
         account_number: "account-secret",
-        password: "password-secret",
+        password: PASSWORD_FIXTURE,
         openaiApiKey: "api-key-secret",
         access_token: "token-secret",
-        seedPhrase: "seed-secret",
+        seedPhrase: SEED_FIXTURE,
         cookie: "cookie-secret",
       },
     })),
@@ -116,6 +122,11 @@ describe("operator HTTP API", () => {
     return fetch(`${running.origin}${path}`);
   }
 
+  async function restartWithControls(controls: OperatorControlProvider): Promise<void> {
+    await running.close();
+    running = await startOperatorServer(provider, { controls, port: 0 });
+  }
+
   it("binds to loopback by default and serves JSON health with defensive headers", async () => {
     expect(running.host).toBe("127.0.0.1");
     expect(running.port).toBeGreaterThan(0);
@@ -128,6 +139,183 @@ describe("operator HTTP API", () => {
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
     expect(await response.json()).toEqual({ status: "ok" });
+  });
+
+  it("serves a fixed loopback dashboard and same-origin assets without embedding provider data", async () => {
+    const [page, stylesheet, script, capabilities] = await Promise.all([
+      get("/"),
+      get("/operator.css"),
+      get("/operator.js"),
+      get("/api/control/capabilities"),
+    ]);
+    const html = await page.text();
+    const css = await stylesheet.text();
+    const javascript = await script.text();
+
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(page.headers.get("content-security-policy")).toContain("script-src 'self'");
+    expect(page.headers.get("content-security-policy")).not.toContain("unsafe-inline");
+    expect(html).toContain("Observer console");
+    expect(html).toContain("no financial authority");
+    expect(html).not.toContain("raw-secret");
+    expect(css).toContain("prefers-reduced-motion");
+    expect(javascript).toContain("textContent = JSON.stringify(summary, null, 2)");
+    expect(javascript).not.toContain("innerHTML");
+    expect(await capabilities.json()).toEqual({ controls: { actions: [], enabled: false } });
+  });
+
+  it("accepts only the closed same-origin control vocabulary when controls are configured", async () => {
+    const commands: OperatorControlCommand[] = [];
+    const controls: OperatorControlProvider = {
+      supportedActions: [
+        "plan",
+        "start",
+        "acknowledge",
+        "abort",
+        "close",
+        "label",
+        "prepare-candidate",
+      ],
+      executeControl(command) {
+        commands.push(command);
+        return {
+          sessionId: "018f102a-8f54-4a93-8cce-2461c4f28a12",
+          privateKey: KEY_FIXTURE,
+        };
+      },
+    };
+    await restartWithControls(controls);
+    const originHeaders = {
+      "content-type": "application/json",
+      origin: running.origin,
+      "sec-fetch-site": "same-origin",
+      "x-rsi-operator-request": "1",
+    };
+    const sessionId = "018f102a-8f54-4a93-8cce-2461c4f28a12";
+    const payloads = [
+      { action: "plan", sessionId },
+      {
+        action: "start",
+        observerOnlyAcknowledgement: true,
+        sessionId,
+        typedSessionIdAcknowledgement: sessionId,
+      },
+      { action: "acknowledge", checkpoint: "minute-45", sessionId },
+      { action: "acknowledge", checkpoint: "minute-90", sessionId },
+      { action: "close", sessionId },
+      { action: "abort", sessionId },
+      { action: "label", findingId: "finding-1", label: "useful" },
+      { action: "prepare-candidate", findingId: "finding-1" },
+    ];
+
+    for (const payload of payloads) {
+      const response = await fetch(`${running.origin}/api/control`, {
+        body: JSON.stringify(payload),
+        headers: originHeaders,
+        method: "POST",
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body).toEqual({ result: { sessionId } });
+      assertNoSensitiveFields(body);
+    }
+
+    expect(commands).toEqual(payloads);
+    expect(commands.every(Object.isFrozen)).toBe(true);
+    expect(await (await get("/api/control/capabilities")).json()).toEqual({
+      controls: {
+        actions: ["plan", "start", "acknowledge", "abort", "close", "label", "prepare-candidate"],
+        enabled: true,
+      },
+    });
+  });
+
+  it("rejects cross-origin, non-JSON, malformed, oversized, and unsupported control requests", async () => {
+    const controls: OperatorControlProvider = {
+      supportedActions: [
+        "plan",
+        "start",
+        "acknowledge",
+        "abort",
+        "close",
+        "label",
+        "prepare-candidate",
+      ],
+      executeControl: vi.fn(() => ({ ok: true })),
+    };
+    await restartWithControls(controls);
+    const sessionId = "018f102a-8f54-4a93-8cce-2461c4f28a12";
+    const validHeaders = {
+      "content-type": "application/json",
+      origin: running.origin,
+      "x-rsi-operator-request": "1",
+    };
+    const cases: Array<Readonly<{ body: string; headers: Record<string, string> }>> = [
+      {
+        body: JSON.stringify({ action: "abort", sessionId }),
+        headers: { ...validHeaders, origin: "https://example.test" },
+      },
+      {
+        body: JSON.stringify({ action: "abort", sessionId }),
+        headers: { "content-type": "application/json", origin: running.origin },
+      },
+      {
+        body: JSON.stringify({ action: "abort", sessionId }),
+        headers: { ...validHeaders, "content-type": "text/plain" },
+      },
+      { body: "{", headers: validHeaders },
+      {
+        body: JSON.stringify({
+          action: "start",
+          observerOnlyAcknowledgement: false,
+          sessionId,
+          typedSessionIdAcknowledgement: sessionId,
+        }),
+        headers: validHeaders,
+      },
+      {
+        body: JSON.stringify({ action: "abort", sessionId, policy: "edit" }),
+        headers: validHeaders,
+      },
+      { body: JSON.stringify({ action: "edit-policy", sessionId }), headers: validHeaders },
+      {
+        body: JSON.stringify({ action: "label", findingId: "../private", label: "useful" }),
+        headers: validHeaders,
+      },
+      {
+        body: JSON.stringify({ action: "plan", sessionId, padding: "x".repeat(4_200) }),
+        headers: validHeaders,
+      },
+    ];
+
+    for (const item of cases) {
+      const response = await fetch(`${running.origin}/api/control`, {
+        body: item.body,
+        headers: item.headers,
+        method: "POST",
+      });
+      expect([400, 403, 413, 415]).toContain(response.status);
+    }
+    expect(controls.executeControl).not.toHaveBeenCalled();
+  });
+
+  it("keeps the dashboard read-only when no control provider is configured", async () => {
+    const response = await fetch(`${running.origin}/api/control`, {
+      body: JSON.stringify({
+        action: "plan",
+        sessionId: "018f102a-8f54-4a93-8cce-2461c4f28a12",
+      }),
+      headers: {
+        "content-type": "application/json",
+        origin: running.origin,
+        "x-rsi-operator-request": "1",
+      },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(501);
+    expect(await response.json()).toMatchObject({ error: { code: "controls_unavailable" } });
   });
 
   it("returns a deeply projected public summary", async () => {

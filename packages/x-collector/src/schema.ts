@@ -202,96 +202,101 @@ export function parseXRecentSearchResponse(
     schemaFailure("quarantine", "A quarantined recent-search response is required.");
   }
   const bytes = quarantine.copyBytes();
-  if (sha256(bytes) !== quarantine.metadata.responseHash) {
-    schemaFailure("quarantine", "Quarantined response integrity validation failed.");
-  }
-
-  let text: string;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    throw new XCollectorError("MALFORMED_JSON", "The response body is not valid UTF-8 JSON.");
-  }
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(text) as unknown;
-  } catch {
-    throw new XCollectorError("MALFORMED_JSON", "The response body is not valid JSON.");
-  }
+    if (sha256(bytes) !== quarantine.metadata.responseHash) {
+      schemaFailure("quarantine", "Quarantined response integrity validation failed.");
+    }
 
-  assertObject(decoded, "response");
-  assertExactKeys(decoded, ["meta"], ["data", "includes"], "response");
-  const meta = parseMeta(decoded.meta);
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new XCollectorError("MALFORMED_JSON", "The response body is not valid UTF-8 JSON.");
+    }
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(text) as unknown;
+    } catch {
+      throw new XCollectorError("MALFORMED_JSON", "The response body is not valid JSON.");
+    }
 
-  const posts =
-    decoded.data === undefined
-      ? []
-      : (() => {
-          if (
-            !Array.isArray(decoded.data) ||
-            decoded.data.length < 1 ||
-            decoded.data.length > quarantine.metadata.maxResults
-          ) {
-            schemaFailure("data");
-          }
-          return decoded.data.map(parsePost);
-        })();
-  if (meta.result_count !== posts.length) schemaFailure("meta.result_count");
+    assertObject(decoded, "response");
+    assertExactKeys(decoded, ["meta"], ["data", "includes"], "response");
+    const meta = parseMeta(decoded.meta);
 
-  let users: readonly XRecentSearchUser[] = [];
-  if (decoded.includes !== undefined) {
-    assertObject(decoded.includes, "includes");
-    assertExactKeys(decoded.includes, ["users"], [], "includes");
-    if (
-      !Array.isArray(decoded.includes.users) ||
-      decoded.includes.users.length < 1 ||
-      decoded.includes.users.length > 100
-    ) {
+    const posts =
+      decoded.data === undefined
+        ? []
+        : (() => {
+            if (
+              !Array.isArray(decoded.data) ||
+              decoded.data.length < 1 ||
+              decoded.data.length > quarantine.metadata.maxResults
+            ) {
+              schemaFailure("data");
+            }
+            return decoded.data.map(parsePost);
+          })();
+    if (meta.result_count !== posts.length) schemaFailure("meta.result_count");
+
+    let users: readonly XRecentSearchUser[] = [];
+    if (decoded.includes !== undefined) {
+      assertObject(decoded.includes, "includes");
+      assertExactKeys(decoded.includes, ["users"], [], "includes");
+      if (
+        !Array.isArray(decoded.includes.users) ||
+        decoded.includes.users.length < 1 ||
+        decoded.includes.users.length > 100
+      ) {
+        schemaFailure("includes.users");
+      }
+      users = Object.freeze(decoded.includes.users.map(parseUser));
+    }
+
+    if ((posts.length === 0) !== (users.length === 0)) schemaFailure("includes.users");
+    if (posts.length === 0) {
+      if (meta.newest_id !== undefined || meta.oldest_id !== undefined) schemaFailure("meta");
+    } else {
+      if (meta.newest_id === undefined || meta.oldest_id === undefined) schemaFailure("meta");
+      const sortedIds = posts.map((post) => post.id).sort(compareIds);
+      if (meta.oldest_id !== sortedIds[0] || meta.newest_id !== sortedIds.at(-1)) {
+        schemaFailure("meta");
+      }
+    }
+
+    if (new Set(posts.map((post) => post.id)).size !== posts.length) schemaFailure("data");
+    if (new Set(users.map((user) => user.id)).size !== users.length)
       schemaFailure("includes.users");
-    }
-    users = Object.freeze(decoded.includes.users.map(parseUser));
-  }
 
-  if ((posts.length === 0) !== (users.length === 0)) schemaFailure("includes.users");
-  if (posts.length === 0) {
-    if (meta.newest_id !== undefined || meta.oldest_id !== undefined) schemaFailure("meta");
-  } else {
-    if (meta.newest_id === undefined || meta.oldest_id === undefined) schemaFailure("meta");
-    const sortedIds = posts.map((post) => post.id).sort(compareIds);
-    if (meta.oldest_id !== sortedIds[0] || meta.newest_id !== sortedIds.at(-1)) {
-      schemaFailure("meta");
+    const referencedAuthors = new Set(posts.map((post) => post.author_id));
+    const usersById: Record<XStableId, XRecentSearchUser> = Object.create(null) as Record<
+      XStableId,
+      XRecentSearchUser
+    >;
+    for (const user of users) {
+      if (!referencedAuthors.has(user.id)) schemaFailure("includes.users");
+      usersById[user.id] = user;
     }
-  }
-
-  if (new Set(posts.map((post) => post.id)).size !== posts.length) schemaFailure("data");
-  if (new Set(users.map((user) => user.id)).size !== users.length) schemaFailure("includes.users");
-
-  const referencedAuthors = new Set(posts.map((post) => post.author_id));
-  const usersById: Record<XStableId, XRecentSearchUser> = Object.create(null) as Record<
-    XStableId,
-    XRecentSearchUser
-  >;
-  for (const user of users) {
-    if (!referencedAuthors.has(user.id)) schemaFailure("includes.users");
-    usersById[user.id] = user;
-  }
-  for (const post of posts) {
-    const author = usersById[post.author_id];
-    if (author === undefined || Date.parse(author.created_at) > Date.parse(post.created_at)) {
-      schemaFailure("includes.users");
+    for (const post of posts) {
+      const author = usersById[post.author_id];
+      if (author === undefined || Date.parse(author.created_at) > Date.parse(post.created_at)) {
+        schemaFailure("includes.users");
+      }
+      if (Date.parse(post.created_at) > Date.parse(quarantine.metadata.acquiredAt)) {
+        schemaFailure("data");
+      }
     }
-    if (Date.parse(post.created_at) > Date.parse(quarantine.metadata.acquiredAt)) {
-      schemaFailure("data");
-    }
-  }
 
-  return Object.freeze({
-    posts: Object.freeze(posts),
-    users: Object.freeze(users),
-    usersById: Object.freeze(usersById),
-    meta,
-    requestFingerprint: quarantine.metadata.requestFingerprint,
-    responseHash: quarantine.metadata.responseHash,
-    acquiredAt: quarantine.metadata.acquiredAt,
-  });
+    return Object.freeze({
+      posts: Object.freeze(posts),
+      users: Object.freeze(users),
+      usersById: Object.freeze(usersById),
+      meta,
+      requestFingerprint: quarantine.metadata.requestFingerprint,
+      responseHash: quarantine.metadata.responseHash,
+      acquiredAt: quarantine.metadata.acquiredAt,
+    });
+  } finally {
+    bytes.fill(0);
+  }
 }

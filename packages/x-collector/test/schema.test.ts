@@ -1,9 +1,57 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { QuarantinedXRecentSearchResponse, parseXRecentSearchResponse } from "../src/index.js";
 import { quarantineObject, validResponseObject } from "./helpers.js";
 
 describe("closed endpoint-specific response schema", () => {
+  it("owns a defensive copy when the caller supplies a Node Buffer", async () => {
+    const source = await quarantineObject(validResponseObject());
+    const callerOwned = Buffer.from(source.copyBytes());
+    const expected = Buffer.from(callerOwned);
+    const quarantine = new QuarantinedXRecentSearchResponse(source.metadata, callerOwned);
+
+    quarantine.destroy();
+    expect(callerOwned).toEqual(expected);
+    expect(() => quarantine.copyBytes()).toThrowError(
+      expect.objectContaining({ code: "INVALID_RESPONSE_SCHEMA" }),
+    );
+    source.destroy();
+  });
+
+  it("wipes its defensive raw copy when constructor validation fails", async () => {
+    const source = await quarantineObject(validResponseObject());
+    const expected = source.copyBytes();
+    const allocations: Uint8Array[] = [];
+    const NativeUint8Array = globalThis.Uint8Array;
+    const TrackingUint8Array = new Proxy(NativeUint8Array, {
+      construct(target, argumentsList, newTarget) {
+        const allocation = Reflect.construct(target, argumentsList, newTarget) as Uint8Array;
+        allocations.push(allocation);
+        return allocation;
+      },
+    });
+    vi.stubGlobal("Uint8Array", TrackingUint8Array);
+    try {
+      const callerOwned = new Uint8Array(expected);
+      const allocationStart = allocations.length;
+      expect(
+        () =>
+          new QuarantinedXRecentSearchResponse(
+            { ...source.metadata, contentType: "text/plain" },
+            callerOwned,
+          ),
+      ).toThrowError(expect.objectContaining({ code: "INVALID_RESPONSE_SCHEMA" }));
+      expect(callerOwned).toEqual(expected);
+      const constructorCopies = allocations.slice(allocationStart);
+      expect(constructorCopies).toHaveLength(1);
+      expect([...constructorCopies[0]!]).toEqual(new Array(expected.byteLength).fill(0));
+    } finally {
+      vi.unstubAllGlobals();
+      expected.fill(0);
+      source.destroy();
+    }
+  });
+
   it("rejects hostile, extra, or accessor-based quarantine metadata", async () => {
     const raw = await quarantineObject(validResponseObject());
     const bytes = raw.copyBytes();
