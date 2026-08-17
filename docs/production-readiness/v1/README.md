@@ -3,7 +3,7 @@
 - Status: **accepted design; offline foundation integration in final verification**
 - Accepted decision set: **Q1-Q195**
 - Contract date: **2026-08-14**
-- Last revised: **2026-08-16 — build in public**
+- Last revised: **2026-08-17 — public project identity clarified**
 - Product role: **Observer**
 - Capital authority: **none**
 - Next attainable readiness label: **`FOUNDATION_BUILT`**
@@ -25,7 +25,7 @@ mutation, DNS change, deployment, publication, payment, or transaction.
 | [Readiness and qualification protocol](./qualification-protocol.md)     | Readiness labels, session state machine, drills, commissioning, qualification, activation, and burn-in      |
 | [Runbook index](./runbooks/README.md)                                   | Bounded response procedures and the evidence each procedure must produce                                    |
 | [Sanitized restore procedure](./recovery/observer-restore.md)           | Verify-before-restore process for the three closed recovery companions                                      |
-| [Build-in-public decision](./decisions/2026-08-16-build-in-public.md)   | Accepted public-repository disclosure, controls, exclusions, and irreversibility                            |
+| [Public project decision](./decisions/2026-08-16-build-in-public.md)    | Accepted public project/repository disclosure, controls, exclusions, and irreversibility                    |
 
 ## Normative language and precedence
 
