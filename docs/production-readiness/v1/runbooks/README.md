@@ -13,6 +13,33 @@ status, operator signature, and predecessor. It never records source text,
 identities, queries, URLs, provider origins, credentials, emails, stack traces,
 vault addresses, or exact defensive details.
 
+## Foundation release ceremony gate
+
+This pre-commissioning gate is not a twentieth incident runbook and grants no live
+authority. Before any provisioning input is accepted:
+
+1. Merge the reviewed change through protected public `main`; do not sign a dirty,
+   detached, feature-branch, or unpushed tree.
+2. Open the exact public GitHub Actions run, verify its full commit and both required
+   jobs, and retain the closed canonical CI evidence file plus its SHA-256. The file
+   is operator-retained evidence, not an independently signed GitHub attestation.
+3. On the designated MacBook, verify Node `24.19.0`, pnpm `11.20.0`, the public
+   `origin`, `main == origin/main`, the full 40-character commit, and that the
+   `foundation-v1` tag does not already exist.
+4. Use `pnpm foundation:ceremony -- --help` and then the closed command documented
+   in `packages/release-ceremony/README.md`. The command accepts no private-key,
+   key-path, Keychain-selector, signer-command, tag, push, or publication option.
+5. Retain the create-only `.rsi-release`, independent `.receipt.json`, and the
+   content-free verification report. Compare commit, release version, CI evidence
+   hash, archive/manifest hashes, and release-key fingerprint out of band.
+6. Stop on any refusal or mismatch. Do not bypass the MacBook check, change the
+   fixed Keychain alias, reuse a different signing key, overwrite an output, or
+   create/push a tag or GitHub release until that separate publication action is
+   explicitly approved.
+
+The current project has implemented and tested this wrapper but has not provisioned
+the release key or performed the real ceremony.
+
 ## Index
 
 | Runbook                                 | Trigger                                                                | Core steps                                                                                                                  | Successful exit                                                                                         |

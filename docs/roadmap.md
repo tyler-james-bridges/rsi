@@ -88,4 +88,4 @@ Exit: the optional connector can be disconnected without affecting RSI's onchain
 
 ## Near-term next session
 
-Finish the signed foundation-release handoff, protected public-repository CI receipt, and provisioning input checklist. Only after those gates and explicit provisioning approval may RSI configure external checkpoint/alert resources or run the one-call X commissioning canary. Keep every paid and state-changing capability disabled.
+Merge and verify the fail-closed foundation-ceremony wrapper, retain the resulting protected public-repository `main` CI record, then conduct the separately approved MacBook signing ceremony and independent release review. Only after those gates and explicit provisioning approval may RSI configure external checkpoint/alert resources or run the one-call X commissioning canary. Keep every paid and state-changing capability disabled.

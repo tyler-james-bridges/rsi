@@ -201,6 +201,12 @@ importers:
 
   packages/release-bundle: {}
 
+  packages/release-ceremony:
+    dependencies:
+      "@rsi/release-bundle":
+        specifier: workspace:*
+        version: link:../release-bundle
+
   packages/research:
     dependencies:
       "@rsi/domain":
