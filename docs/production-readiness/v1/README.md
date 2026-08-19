@@ -3,7 +3,7 @@
 - Status: **accepted design; offline foundation integration in final verification**
 - Accepted decision set: **Q1-Q195**
 - Contract date: **2026-08-14**
-- Last revised: **2026-08-17 — public project identity clarified**
+- Last revised: **2026-08-18 — offline foundation ceremony wrapper added**
 - Product role: **Observer**
 - Capital authority: **none**
 - Next attainable readiness label: **`FOUNDATION_BUILT`**
@@ -74,9 +74,11 @@ Consequently, no readiness label in the v1 ladder has yet been signed or attaine
 
 ### Explicit Stage A integration blockers
 
-- Convert the verified clean-tree release inventory and retained public-repository
-  CI result into signed release evidence with the separately held MacBook release
-  key; no signing key is present in this repository or on the observer host.
+- Review and retain the final public `main` CI record, provision the separately
+  approved MacBook release identity, and run the now-implemented create-only
+  foundation ceremony. The wrapper accepts no key argument and has not produced a
+  real signature, tag, or release; no signing key is present in this repository or
+  on the observer host.
 - Perform the final traceability/release review and record the Stage A handoff with
   exact commands, hashes, review verdict, zero spend, and zero external provider
   changes.

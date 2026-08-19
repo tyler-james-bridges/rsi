@@ -39,6 +39,7 @@ RSI researches markets, converts adversarial internet activity into typed eviden
 - A strict supervised-session lifecycle with deterministic acknowledgement windows, crash invalidation, cost gating, trusted-head rollback detection, and content-free acceptance evidence.
 - A content-free alert outbox with bounded delivery attempts, trusted-head recovery, and profile separation. No Resend or Healthchecks adapter is configured.
 - Three closed recovery components: signed state evidence, a restorable sanitized event archive, and a restorable signed release/code/runbook bundle. A genuine-store controller verifies their exact cross-bindings and local closure facts before advancing lifecycle state; physical two-copy restore remains pending.
+- A MacBook-only, create-only foundation ceremony wrapper that binds a reviewed public `main` CI record to the exact clean-tree release inventory, uses only one fixed Keychain alias, immediately verifies the signed bundle, and writes a separate retained receipt. No key has been provisioned and no real ceremony has run.
 - A read-only production preflight that fails closed on runtime, host, credential-presence, clock, wake-session, and environment-isolation requirements without reading secret values or changing the host.
 - A loopback-only operator dashboard/API with fixed same-origin assets, defensive headers, recursive sensitive-field redaction, and a closed set of local lifecycle controls. Without an authenticated control provider it remains read-only.
 - A signed, content-free public receipt/correction/tombstone chain with explicit approval, a 24-hour delay, retained-head rollback detection, and a browser-safe fail-closed verifier. It has no deployment or publication adapter.
@@ -70,6 +71,7 @@ pnpm demo:pipeline
 pnpm demo:ingestion
 pnpm ci:drills
 pnpm ci:release
+pnpm foundation:ceremony -- --help
 ```
 
 `pnpm demo` exercises the original in-memory policy decision. `pnpm demo:pipeline` runs five recorded scenarios through quarantine, typed extraction, correlation, durable events, and policy evaluation. `pnpm demo:ingestion` runs an entirely offline X cassette through encrypted snapshot storage, a sanitized event, and a signed checkpoint. All demos use fictional data and cannot execute anything.
@@ -78,6 +80,11 @@ pnpm ci:release
 closed release inventory and validates the resulting source/config/runbook/SBOM/test-summary
 candidate. It does not sign or publish a release; the retained CI receipts and separate MacBook
 release key are required for that later step.
+
+`pnpm foundation:ceremony -- --help` documents the separately approved MacBook-only signing
+step. The command accepts no key or signer argument, never tags or publishes, and currently
+remains unusable until the dedicated MacBook Keychain identity is provisioned under the
+production-readiness procedure.
 
 To seed a local database and inspect its read-only API:
 
@@ -119,6 +126,7 @@ packages/source-contracts Offline OpenSea/Stream/finalized-chain request contrac
 packages/backup      Signed sanitized state-evidence component
 packages/event-archive Restorable signed sanitized event history
 packages/release-bundle Restorable signed source/config/runbook release
+packages/release-ceremony MacBook-only foundation signing and retained-receipt wrapper
 docs/                Architecture, threat model, standards, charter, roadmap
 ```
 
@@ -136,6 +144,7 @@ Start with the normative [Observer v1 production-readiness contract](docs/produc
 - Policy spend/replay state survives a clean reopen, and SQLite serializes concurrent writers that share one database file. Separate database copies have no distributed coordinator and must never act as parallel execution authorities.
 - The X ingestion path encrypts exact response bytes and metadata before typed parsing, binds retries through the encrypted capture registry, destroys collector-owned raw copies, and reconciles pending or orphaned capture state after restart. A real credentialed canary and session-close orchestration remain prohibited until the broader Observer readiness gates pass.
 - Recovery files can now be created and verified in three closed components, and the local controller consumes their genuine verification reports. RSI does not yet have the production command that assembles them from one accepted session and writes/verifies both approved physical copies.
+- The foundation ceremony wrapper is implemented and adversarially tested, but the MacBook release key, retained final CI evidence, real signature, independently approved tag/release publication, and restore drill do not yet exist.
 - The complete test suite and Stage A drills pass when invoked with the pinned Node 24.19.0 toolchain. Host preflight still correctly reports this Mac as not production-ready: the dedicated standard account, host hardening, independent clock references, bounded wake evidence, and isolated Keychain credentials remain unprovisioned.
 - `node:sqlite` may emit an experimental-feature warning on supported Node releases.
 - There is no wallet, transaction signer, transaction builder, AgentCash payment, x402 request, Robinhood connection, or live-capital path in this build. The only signing code signs offchain event-store checkpoints.

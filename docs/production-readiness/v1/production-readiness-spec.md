@@ -612,10 +612,11 @@ the Mac mini.
 ### OBS-REL-002 — Releases and rollback
 
 A signed release records commit, lockfile, Node/runtime, configuration and policy
-hashes, SBOM, test summary, and signing-key identity. The Mac mini receives a
-read-only deploy key and installs only a manually approved complete bundle. A
-rollback selects the last known-good whole signed bundle with linked lineage; it
-never mixes code and dependencies.
+hashes, SBOM, test summary, and signing-key identity. The Mac mini installs only a
+manually approved complete bundle. Ordinary clone/fetch of the public repository
+requires no credential; any optional GitHub API credential is repository-scoped
+and read-only. A rollback selects the last known-good whole signed bundle with
+linked lineage; it never mixes code and dependencies.
 
 Keep the current and previous two Mac-compatible bundles, source tags, manifests,
 SBOMs, and verification results on the encrypted drive and MacBook for at least 365
