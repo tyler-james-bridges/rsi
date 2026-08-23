@@ -1,5 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { generateKeyPairSync, sign as signEd25519, type KeyObject } from "node:crypto";
+import {
+  createPublicKey,
+  generateKeyPairSync,
+  sign as signEd25519,
+  verify as verifyEd25519,
+  type KeyObject,
+} from "node:crypto";
 import {
   chmod,
   link,
@@ -9,6 +15,7 @@ import {
   readFile,
   readdir,
   realpath,
+  rename,
   rm,
   symlink,
   unlink,
@@ -32,12 +39,15 @@ import {
 } from "../src/index.js";
 import {
   ARCHIVE_MAGIC,
+  decodeEnvelopeForTest,
   manifestSignatureMessage,
+  verifyReleaseArchiveBytes,
   type ManifestEnvelopeV1,
   type ReleaseBundleManifestV1,
 } from "../src/archive.js";
 import { REQUIRED_CONFIG_SCHEMA_NAMES, REQUIRED_TEST_CHECKS } from "../src/artifacts.js";
 import { canonicalJson, sha256 } from "../src/canonical.js";
+import { publishBundleCreateOnly, restoreVerifiedReleaseArchive } from "../src/filesystem.js";
 
 const COMMIT = "a".repeat(40);
 const TREE = "b".repeat(40);
@@ -79,7 +89,11 @@ describe("signed release bundle", () => {
       bundleId: receipt.bundleId,
       commitSha: COMMIT,
       companionType: "signed-release-bundle",
+      createdAt: CREATED_AT,
       gitTreeSha: TREE,
+      nodeVersion: "24.19.0",
+      pnpmVersion: "11.20.0",
+      predecessorManifestSha256: null,
       recoveryCompleteness: "release-component",
       releaseVersion: RELEASE_VERSION,
       requiredCompanionArtifacts: ["sanitized-state-evidence", "sanitized-event-archive"],
@@ -137,6 +151,134 @@ describe("signed release bundle", () => {
     await expect(lstat(fixture.options.destinationPath)).rejects.toBeDefined();
   });
 
+  it("does not request a signature when the destination parent is invalid", async () => {
+    const fixture = makeFixture(join(root, "missing-parent", "release.rsi-release"));
+    let signatureCount = 0;
+
+    await expect(
+      createSignedReleaseBundle({
+        ...fixture.options,
+        signer: countingSigner(fixture, () => {
+          signatureCount += 1;
+        }),
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_UNSAFE" });
+
+    expect(signatureCount).toBe(0);
+    expect(await retainedPartialPaths(root)).toEqual([]);
+  });
+
+  it("does not request a signature when the destination is already occupied", async () => {
+    const destinationPath = join(root, "preflight-occupied.rsi-release");
+    await writeFile(destinationPath, "existing", { mode: 0o600 });
+    const fixture = makeFixture(destinationPath);
+    let signatureCount = 0;
+
+    await expect(
+      createSignedReleaseBundle({
+        ...fixture.options,
+        signer: countingSigner(fixture, () => {
+          signatureCount += 1;
+        }),
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_EXISTS" });
+
+    expect(signatureCount).toBe(0);
+    expect(await readFile(destinationPath, "utf8")).toBe("existing");
+    expect(await retainedPartialPaths(root)).toEqual([]);
+  });
+
+  it("does not request a signature when the owner-only reservation cannot be opened", async () => {
+    const lockedParent = join(root, "locked-parent");
+    await mkdir(lockedParent, { mode: 0o500 });
+    await chmod(lockedParent, 0o500);
+    const fixture = makeFixture(join(lockedParent, "release.rsi-release"));
+    let signatureCount = 0;
+    try {
+      await expect(
+        createSignedReleaseBundle({
+          ...fixture.options,
+          signer: countingSigner(fixture, () => {
+            signatureCount += 1;
+          }),
+        }),
+      ).rejects.toMatchObject({ code: "DESTINATION_UNSAFE" });
+    } finally {
+      await chmod(lockedParent, 0o700);
+    }
+
+    expect(signatureCount).toBe(0);
+    expect(await retainedPartialPaths(lockedParent)).toEqual([]);
+  });
+
+  it("retains the durable reservation when signing fails", async () => {
+    const fixture = makeFixture(join(root, "signer-failure.rsi-release"));
+    let signatureCount = 0;
+
+    await expect(
+      createSignedReleaseBundle({
+        ...fixture.options,
+        signer: {
+          ...fixture.signer,
+          sign() {
+            signatureCount += 1;
+            throw new Error("synthetic signer failure");
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: "SIGNER_FAILED" });
+
+    expect(signatureCount).toBe(1);
+    const [partialPath] = await retainedPartialPaths(root);
+    expect(partialPath).toBeDefined();
+    const partialStat = await lstat(partialPath!);
+    expect(partialStat.mode & 0o777).toBe(0o600);
+    expect(partialStat.nlink).toBe(1);
+    expect(partialStat.size).toBe(0);
+
+    await expect(
+      createSignedReleaseBundle({
+        ...fixture.options,
+        signer: countingSigner(fixture, () => {
+          signatureCount += 1;
+        }),
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_EXISTS" });
+    expect(signatureCount).toBe(1);
+    expect(await retainedPartialPaths(root)).toEqual([partialPath]);
+  });
+
+  it("retains the complete signed archive when publication loses a post-signature race", async () => {
+    const destinationPath = join(root, "post-signature-race.rsi-release");
+    const fixture = makeFixture(destinationPath);
+    let signatureCount = 0;
+
+    await expect(
+      createSignedReleaseBundle({
+        ...fixture.options,
+        signer: {
+          ...fixture.signer,
+          async sign(message) {
+            signatureCount += 1;
+            const signature = await fixture.signer.sign(message);
+            await writeFile(destinationPath, "competing output", { mode: 0o600 });
+            return signature;
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_EXISTS" });
+
+    expect(signatureCount).toBe(1);
+    expect(await readFile(destinationPath, "utf8")).toBe("competing output");
+    const [partialPath] = await retainedPartialPaths(root);
+    expect(partialPath).toBeDefined();
+    const partialStat = await lstat(partialPath!);
+    expect(partialStat.mode & 0o777).toBe(0o600);
+    expect(partialStat.nlink).toBe(1);
+    expect(partialStat.size).toBeGreaterThan(0);
+    expectValidArchiveSignature(await readFile(partialPath!), fixture.publicKeySpkiDer);
+  });
+
   it("uses retained receipts to reject tamper, truncation, and rollback", async () => {
     const first = makeFixture(join(root, "first.rsi-release"));
     const firstReceipt = await createSignedReleaseBundle(first.options);
@@ -180,6 +322,17 @@ describe("signed release bundle", () => {
     });
     expect(second.options.release).toMatchObject(secondBindings);
     const secondReceipt = await createSignedReleaseBundle(second.options);
+    await expect(
+      verifySignedReleaseBundle({
+        archivePath: second.options.destinationPath,
+        trust: trust(secondReceipt, second.publicKeySpkiDer),
+      }),
+    ).resolves.toMatchObject({
+      createdAt: CREATED_AT,
+      nodeVersion: "24.19.0",
+      pnpmVersion: "11.20.0",
+      predecessorManifestSha256: firstReceipt.manifestSha256,
+    });
 
     await expect(
       verifySignedReleaseBundle({
@@ -281,6 +434,45 @@ describe("signed release bundle", () => {
     expect(() =>
       deriveReleaseArtifactBindings([...artifacts, normalizedTextArtifact]),
     ).not.toThrow();
+    const swiftArtifact: ReleaseArtifactInputV1 = {
+      bytes: utf8("import Foundation\n\nprivate let fixedHelper = true\n"),
+      mediaType: "text/x-swift",
+      path: "source/packages/release-key-provisioning/native/keychain-helper.swift",
+      role: "source",
+    };
+    expect(() => deriveReleaseArtifactBindings([...artifacts, swiftArtifact])).not.toThrow();
+    for (const path of [
+      "source/config/foundation-independent-reviewer-identity.v1.json",
+      "source/config/foundation-release-identity.v1.json",
+      "source/config/foundation-release-key-helper-compatibility.v1.json",
+      "source/config/foundation-release-key-provisioning-receipt.v1.json",
+    ]) {
+      expect(() =>
+        deriveReleaseArtifactBindings([
+          ...artifacts,
+          {
+            bytes: utf8('{"status":"public-evidence-fixture"}\n'),
+            mediaType: "application/json",
+            path,
+            role: "source",
+          },
+        ]),
+      ).not.toThrow();
+    }
+    expect(() =>
+      deriveReleaseArtifactBindings([
+        ...artifacts,
+        {
+          bytes: utf8('{"status":"not-allowlisted"}\n'),
+          mediaType: "application/json",
+          path: "source/config/unreviewed.json",
+          role: "source",
+        },
+      ]),
+    ).toThrowError(ReleaseBundleError);
+    expect(() =>
+      deriveReleaseArtifactBindings([...artifacts, { ...swiftArtifact, mediaType: "text/plain" }]),
+    ).toThrowError(ReleaseBundleError);
     expect(() =>
       deriveReleaseArtifactBindings([
         ...artifacts,
@@ -438,18 +630,147 @@ describe("signed release bundle", () => {
     const occupiedPath = join(root, "occupied.rsi-release");
     await symlink(fixture.options.destinationPath, occupiedPath);
     const occupiedFixture = makeFixture(occupiedPath);
-    await expect(createSignedReleaseBundle(occupiedFixture.options)).rejects.toMatchObject({
-      code: "DESTINATION_EXISTS",
-    });
+    let signatureCount = 0;
+    await expect(
+      createSignedReleaseBundle({
+        ...occupiedFixture.options,
+        signer: countingSigner(occupiedFixture, () => {
+          signatureCount += 1;
+        }),
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_EXISTS" });
+    expect(signatureCount).toBe(0);
+  });
+
+  it("retains an owner-only signed partial when publication fails before linking", async () => {
+    const source = makeFixture(join(root, "before-link-source.rsi-release"));
+    const receipt = await createSignedReleaseBundle(source.options);
+    const signedArchive = await readFile(source.options.destinationPath);
+    await unlink(source.options.destinationPath);
+    const destinationPath = join(root, "before-link.rsi-release");
+
+    await expect(
+      publishBundleCreateOnly(destinationPath, signedArchive, {
+        beforeLink() {
+          throw new Error("synthetic before-link failure");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_UNSAFE" });
+
+    await expect(lstat(destinationPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const [partialPath] = await retainedPartialPaths(root);
+    expect(partialPath).toBeDefined();
+    const partialStat = await lstat(partialPath!);
+    expect(partialStat.mode & 0o777).toBe(0o600);
+    expect(partialStat.nlink).toBe(1);
+    await expect(
+      verifySignedReleaseBundle({
+        archivePath: partialPath!,
+        trust: trust(receipt, source.publicKeySpkiDer),
+      }),
+    ).resolves.toMatchObject({ status: "verified-restorable-release-component" });
+  });
+
+  it("retains the signed partial when the create-only link loses a race", async () => {
+    const source = makeFixture(join(root, "link-race-source.rsi-release"));
+    const receipt = await createSignedReleaseBundle(source.options);
+    const signedArchive = await readFile(source.options.destinationPath);
+    await unlink(source.options.destinationPath);
+    const destinationPath = join(root, "link-race.rsi-release");
+
+    await expect(
+      publishBundleCreateOnly(destinationPath, signedArchive, {
+        beforeLink: () => writeFile(destinationPath, "competing output", { mode: 0o600 }),
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_EXISTS" });
+
+    expect(await readFile(destinationPath, "utf8")).toBe("competing output");
+    const [partialPath] = await retainedPartialPaths(root);
+    expect(partialPath).toBeDefined();
+    const partialStat = await lstat(partialPath!);
+    expect(partialStat.mode & 0o777).toBe(0o600);
+    expect(partialStat.nlink).toBe(1);
+    await expect(
+      verifySignedReleaseBundle({
+        archivePath: partialPath!,
+        trust: trust(receipt, source.publicKeySpkiDer),
+      }),
+    ).resolves.toMatchObject({ status: "verified-restorable-release-component" });
+  });
+
+  it("keeps both signed names when publication fails before destination-link fsync", async () => {
+    const source = makeFixture(join(root, "after-link-source.rsi-release"));
+    await createSignedReleaseBundle(source.options);
+    const signedArchive = await readFile(source.options.destinationPath);
+    await unlink(source.options.destinationPath);
+    const destinationPath = join(root, "after-link.rsi-release");
+
+    await expect(
+      publishBundleCreateOnly(destinationPath, signedArchive, {
+        afterLink() {
+          throw new Error("synthetic after-link failure");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_UNSAFE" });
+
+    const destinationStat = await lstat(destinationPath);
+    expect(destinationStat.mode & 0o777).toBe(0o600);
+    expect(destinationStat.nlink).toBe(2);
+    const [partialPath] = await retainedPartialPaths(root);
+    expect(partialPath).toBeDefined();
+    const partialStat = await lstat(partialPath!);
+    expect(partialStat.nlink).toBe(2);
+    expect(partialStat.dev).toBe(destinationStat.dev);
+    expect(partialStat.ino).toBe(destinationStat.ino);
+    expectValidArchiveSignature(await readFile(destinationPath), source.publicKeySpkiDer);
+    expectValidArchiveSignature(await readFile(partialPath!), source.publicKeySpkiDer);
+  });
+
+  it("cannot report success when the guarded parent is replaced at final cleanup sync", async () => {
+    const source = makeFixture(join(root, "cleanup-parent-source.rsi-release"));
+    await createSignedReleaseBundle(source.options);
+    const signedArchive = await readFile(source.options.destinationPath);
+    await unlink(source.options.destinationPath);
+    const publicationParent = join(root, "cleanup-parent");
+    const displacedParent = join(root, "cleanup-parent-displaced");
+    await mkdir(publicationParent, { mode: 0o700 });
+    const destinationPath = join(publicationParent, "release.rsi-release");
+
+    await expect(
+      publishBundleCreateOnly(destinationPath, signedArchive, {
+        async beforeFinalCleanupSync() {
+          await rename(publicationParent, displacedParent);
+          await mkdir(publicationParent, { mode: 0o700 });
+        },
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_UNSAFE" });
+
+    await expect(lstat(destinationPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const retainedDestination = join(displacedParent, "release.rsi-release");
+    expect(await readFile(retainedDestination)).toEqual(signedArchive);
+    expect((await lstat(retainedDestination)).nlink).toBe(1);
+    expect(await retainedPartialPaths(displacedParent)).toEqual([]);
   });
 
   it("allows exactly one concurrent create-only publication", async () => {
     const destinationPath = join(root, "concurrent.rsi-release");
     const fixture = makeFixture(destinationPath);
+    let signatureCount = 0;
+    const options: CreateSignedReleaseBundleOptions = {
+      ...fixture.options,
+      signer: {
+        ...fixture.signer,
+        sign(message) {
+          signatureCount += 1;
+          return fixture.signer.sign(message);
+        },
+      },
+    };
     const results = await Promise.allSettled([
-      createSignedReleaseBundle(fixture.options),
-      createSignedReleaseBundle(fixture.options),
+      createSignedReleaseBundle(options),
+      createSignedReleaseBundle(options),
     ]);
+    expect(signatureCount).toBe(1);
     expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
     expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1);
     const fulfilled = results.find(
@@ -463,9 +784,124 @@ describe("signed release bundle", () => {
         trust: trust(fulfilled!.value, fixture.publicKeySpkiDer),
       }),
     ).resolves.toMatchObject({ status: "verified-restorable-release-component" });
-    expect((await readdir(root)).some((name) => name.startsWith(".rsi-release-partial-"))).toBe(
-      false,
+    expect(await retainedPartialPaths(root)).toEqual([]);
+  });
+
+  it("fails closed before writing restore contents when root-link durability cannot proceed", async () => {
+    const fixture = makeFixture(join(root, "restore-root-sync-source.rsi-release"));
+    const receipt = await createSignedReleaseBundle(fixture.options);
+    const trusted = trust(receipt, fixture.publicKeySpkiDer);
+    const archiveBytes = await readFile(fixture.options.destinationPath);
+    const verified = verifyReleaseArchiveBytes(archiveBytes, trusted);
+    const destination = join(root, "restore-root-sync-failure");
+
+    await expect(
+      restoreVerifiedReleaseArchive(destination, verified, {
+        beforeOuterParentSync() {
+          throw new Error("synthetic outer-parent sync failure");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_UNSAFE" });
+
+    const destinationStat = await lstat(destination);
+    expect(destinationStat.isDirectory()).toBe(true);
+    expect(destinationStat.mode & 0o777).toBe(0o700);
+    expect(await readdir(destination)).toEqual([]);
+  });
+
+  it("durably restores artifacts before exposing the signed manifest name", async () => {
+    const fixture = makeFixture(join(root, "restore-manifest-prelink-source.rsi-release"));
+    const receipt = await createSignedReleaseBundle(fixture.options);
+    const trusted = trust(receipt, fixture.publicKeySpkiDer);
+    const verified = verifyReleaseArchiveBytes(
+      await readFile(fixture.options.destinationPath),
+      trusted,
     );
+    const destination = join(root, "restore-manifest-prelink-failure");
+
+    await expect(
+      restoreVerifiedReleaseArchive(destination, verified, {
+        beforeManifestLink() {
+          throw new Error("synthetic manifest-link failure");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_UNSAFE" });
+
+    const manifest = join(destination, "release", "signed-release-manifest.v1.json");
+    await expect(lstat(manifest)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(destination, "source/package.json"), "utf8")).toContain(
+      '"name":"rsi"',
+    );
+    const partials = await retainedPartialPaths(join(destination, "release"));
+    expect(partials).toHaveLength(1);
+    expect(await readFile(partials[0]!, "utf8")).toBe(canonicalJson(verified.envelope));
+  });
+
+  it("retains both complete manifest names when final-link durability is interrupted", async () => {
+    const fixture = makeFixture(join(root, "restore-manifest-postlink-source.rsi-release"));
+    const receipt = await createSignedReleaseBundle(fixture.options);
+    const trusted = trust(receipt, fixture.publicKeySpkiDer);
+    const verified = verifyReleaseArchiveBytes(
+      await readFile(fixture.options.destinationPath),
+      trusted,
+    );
+    const destination = join(root, "restore-manifest-postlink-failure");
+
+    await expect(
+      restoreVerifiedReleaseArchive(destination, verified, {
+        afterManifestLink() {
+          throw new Error("synthetic post-manifest-link failure");
+        },
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_UNSAFE" });
+
+    const manifest = join(destination, "release", "signed-release-manifest.v1.json");
+    const [partial] = await retainedPartialPaths(join(destination, "release"));
+    expect(partial).toBeDefined();
+    const [manifestStat, partialStat] = await Promise.all([lstat(manifest), lstat(partial!)]);
+    expect(manifestStat.nlink).toBe(2);
+    expect(partialStat.nlink).toBe(2);
+    expect(manifestStat.ino).toBe(partialStat.ino);
+    expect(await readFile(manifest, "utf8")).toBe(canonicalJson(verified.envelope));
+  });
+
+  it("refuses restore success when an artifact changes while the manifest is finalized", async () => {
+    const fixture = makeFixture(join(root, "restore-artifact-race-source.rsi-release"));
+    const receipt = await createSignedReleaseBundle(fixture.options);
+    const verified = verifyReleaseArchiveBytes(
+      await readFile(fixture.options.destinationPath),
+      trust(receipt, fixture.publicKeySpkiDer),
+    );
+    const destination = join(root, "restore-artifact-race");
+    const artifactPath = join(destination, "source/package.json");
+
+    await expect(
+      restoreVerifiedReleaseArchive(destination, verified, {
+        async afterManifestLink() {
+          const bytes = await readFile(artifactPath);
+          bytes[0] = bytes[0]! ^ 1;
+          await writeFile(artifactPath, bytes);
+        },
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_UNSAFE" });
+  });
+
+  it("refuses restore success when a restored subtree changes during manifest publication", async () => {
+    const fixture = makeFixture(join(root, "restore-directory-race-source.rsi-release"));
+    const receipt = await createSignedReleaseBundle(fixture.options);
+    const verified = verifyReleaseArchiveBytes(
+      await readFile(fixture.options.destinationPath),
+      trust(receipt, fixture.publicKeySpkiDer),
+    );
+    const destination = join(root, "restore-directory-race");
+
+    await expect(
+      restoreVerifiedReleaseArchive(destination, verified, {
+        async afterManifestLink() {
+          await chmod(join(destination, "source"), 0o755);
+        },
+      }),
+    ).rejects.toMatchObject({ code: "DESTINATION_UNSAFE" });
   });
 
   it("fully verifies before restore and never overwrites a restore destination", async () => {
@@ -487,6 +923,7 @@ describe("signed release bundle", () => {
     expect(
       await readFile(join(destination, "release/signed-release-manifest.v1.json"), "utf8"),
     ).toContain('"signature"');
+    expect(await retainedPartialPaths(join(destination, "release"))).toEqual([]);
 
     await expect(
       restoreSignedReleaseBundle({
@@ -550,6 +987,34 @@ function makeFixture(
     signer,
   };
   return Object.freeze({ artifacts, options, privateKey, publicKeySpkiDer, signer });
+}
+
+async function retainedPartialPaths(directory: string): Promise<string[]> {
+  return (await readdir(directory))
+    .filter((name) => name.startsWith(".rsi-release-partial-"))
+    .map((name) => join(directory, name));
+}
+
+function expectValidArchiveSignature(bytes: Buffer, publicKeySpkiDer: Uint8Array): void {
+  const envelope = decodeEnvelopeForTest(bytes);
+  expect(
+    verifyEd25519(
+      null,
+      manifestSignatureMessage(envelope.manifest),
+      createPublicKey({ format: "der", key: Buffer.from(publicKeySpkiDer), type: "spki" }),
+      Buffer.from(envelope.signature, "base64url"),
+    ),
+  ).toBe(true);
+}
+
+function countingSigner(fixture: Fixture, onSign: () => void): ReleaseBundleSignerV1 {
+  return {
+    ...fixture.signer,
+    sign(message) {
+      onSign();
+      return fixture.signer.sign(message);
+    },
+  };
 }
 
 function makeArtifacts(

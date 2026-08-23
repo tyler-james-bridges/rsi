@@ -18,27 +18,64 @@ vault addresses, or exact defensive details.
 This pre-commissioning gate is not a twentieth incident runbook and grants no live
 authority. Before any provisioning input is accepted:
 
-1. Merge the reviewed change through protected public `main`; do not sign a dirty,
-   detached, feature-branch, or unpushed tree.
-2. Open the exact public GitHub Actions run, verify its full commit and both required
-   jobs, and retain the closed canonical CI evidence file plus its SHA-256. The file
-   is operator-retained evidence, not an independently signed GitHub attestation.
-3. On the designated MacBook, verify Node `24.19.0`, pnpm `11.20.0`, the public
-   `origin`, `main == origin/main`, the full 40-character commit, and that the
-   `foundation-v1` tag does not already exist.
-4. Use `pnpm foundation:ceremony -- --help` and then the closed command documented
-   in `packages/release-ceremony/README.md`. The command accepts no private-key,
-   key-path, Keychain-selector, signer-command, tag, push, or publication option.
-5. Retain the create-only `.rsi-release`, independent `.receipt.json`, and the
-   content-free verification report. Compare commit, release version, CI evidence
-   hash, archive/manifest hashes, and release-key fingerprint out of band.
-6. Stop on any refusal or mismatch. Do not bypass the MacBook check, change the
-   fixed Keychain alias, reuse a different signing key, overwrite an output, or
-   create/push a tag or GitHub release until that separate publication action is
-   explicitly approved.
+1. Merge and independently review the v2 implementation through protected public
+   `main`; do not provision or sign a dirty, detached, feature-branch, or unpushed
+   tree.
+2. Before any real key exists, pass and retain the throwaway-MacBook drill for the
+   exact tracked helper: stable source/compiler/binary evidence, exact Data
+   Protection Keychain attributes, disabled synchronization, device-only custody,
+   and two separate user-presence prompts with no persistent approval.
+3. On the designated MacBook, pre-create the owner-only, non-synced fixed-intent
+   parent and an owner-only evidence directory. Prepare two distinct encrypted
+   external APFS physical disks and separate recovery directories. Stop recording,
+   physically disconnect networking, and verify Node `24.19.0`, pnpm `11.20.0`,
+   public `origin`, clean `main == origin/main`, and no existing `foundation-v1`.
+   The intent binds a domain-separated platform UUID hash; no different MacBook may
+   resume provisioning or perform the final ceremony.
+4. Run the fixed release-key create command in
+   `packages/release-key-provisioning/README.md`. Enter two different recovery
+   passphrases only through the echo-disabled `/dev/tty`. For each disk, complete
+   the safe eject, physical disconnect/reconnect, unlock, reread, and decrypt
+   restore check. Store the disks separately.
+5. If any provisioning write or crash is ambiguous, preserve the fixed intent and
+   every partial envelope/evidence file. Do not delete or overwrite them. Diagnose
+   and use `--mode resume` with the exact commit, paths, and physical media so the
+   surviving identity is recovered rather than replaced.
+6. Review the nonsecret identity and provisioning receipt, then commit only those
+   canonical records at the fixed `config/` paths through protected public `main`.
+   The Keychain item, passphrases, local intent, and encrypted envelopes remain off
+   Git.
+7. Open the fresh public GitHub Actions run for the exact pinning commit. Verify the
+   full commit and both required jobs out of band, then use the fixed CI-retention
+   command to write the owner-only canonical evidence plus SHA-256. The record is
+   operator-retained evidence, not an independently signed GitHub attestation.
+8. Require a non-authoring agent to review that exact commit/tree. Retain canonical
+   `.review-evidence.json` no more than seven days before the ceremony. All five
+   fixed scopes must pass and every finding must be recorded as resolved with
+   finding/resolution hashes. The receipt's provisioning commit must be an ancestor
+   of the pinning commit and contain the attested helper source.
+9. Transfer both exact evidence records and the checkout to the designated
+   MacBook, disconnect every network interface again, and run the closed
+   two-signature command in `packages/release-ceremony/README.md`. The first
+   user-presence prompt signs and verifies the release bundle; the second signs and
+   verifies only detached `foundation-v1` tag-object bytes.
+10. Retain the create-only `.rsi-release`, `.receipt.json`,
+    `.readiness-conclusion.json`, `.foundation-tag`, and
+    `.ceremony-report.json`. Independently compare them with the retained CI,
+    bound review, public commit/tree/run, pinned identity/receipt,
+    platform/helper evidence, and signer fingerprint before deciding whether
+    `FOUNDATION_BUILT` is supported.
+11. Stop on every refusal or mismatch. Preserve partial durable artifacts; never
+    overwrite or reinterpret them as complete. The tooling does not install a Git
+    object, create a tag/ref or GitHub release, push, publish, or deploy. Each is a
+    separate explicit owner decision after successful review.
 
-The current project has implemented and tested this wrapper but has not provisioned
-the release key or performed the real ceremony.
+The exact commands and evidence bindings are in
+[Foundation Stage A v2](../foundation-stage-a-v2.md). The current project has not
+passed the physical helper drill, provisioned the platform-bound release key,
+verified the two real recovery media, pinned the resulting identity, retained final
+CI and five-scope review, or performed the two real signatures. It therefore does
+not claim `FOUNDATION_BUILT`.
 
 ## Index
 

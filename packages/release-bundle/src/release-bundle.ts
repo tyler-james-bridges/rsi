@@ -7,7 +7,7 @@ import {
 import { normalizeReleaseArtifacts } from "./artifacts.js";
 import { exactObject } from "./canonical.js";
 import {
-  publishBundleCreateOnly,
+  prepareBundleCreateOnly,
   readBundleFile,
   restoreVerifiedReleaseArchive,
 } from "./filesystem.js";
@@ -31,9 +31,15 @@ export async function createSignedReleaseBundle(
   const artifacts = normalizeReleaseArtifacts(options.artifacts);
   const release = normalizeReleaseIdentity(options.release, artifacts);
   const signer = normalizeSigner(options.signer);
-  const encoded = await encodeSignedReleaseArchive(artifacts, release, signer);
-  await publishBundleCreateOnly(options.destinationPath, encoded.bytes);
-  return encoded.receipt;
+  const prepared = await prepareBundleCreateOnly(options.destinationPath);
+  try {
+    const encoded = await encodeSignedReleaseArchive(artifacts, release, signer);
+    await prepared.publish(encoded.bytes);
+    return encoded.receipt;
+  } catch (error) {
+    await prepared.preserve();
+    throw error;
+  }
 }
 
 export async function verifySignedReleaseBundle(

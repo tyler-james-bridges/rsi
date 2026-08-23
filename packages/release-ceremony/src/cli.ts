@@ -5,26 +5,33 @@ import { canonicalJson } from "./canonical.js";
 import { runFoundationCeremony } from "./ceremony.js";
 import { FoundationCeremonyError } from "./errors.js";
 import {
+  assertCeremonyHostOffline,
   createMacBookKeychainCustody,
   readFoundationCiEvidenceFile,
+  readPinnedFoundationReleaseIdentity,
+  readFoundationIndependentReviewEvidenceFile,
   readPlatformModel,
-  removeFoundationOwnedOutput,
+  reserveFoundationOutput,
+  validateFoundationConclusionDestination,
   validateFoundationDestination,
   validateFoundationReceiptDestination,
-  writeFoundationReceipt,
+  validateFoundationReportDestination,
+  validateFoundationTagObjectDestination,
 } from "./host.js";
 import { collectFoundationReleaseInventory } from "./inventory.js";
 import { FOUNDATION_RELEASE_VERSION, type FoundationCeremonyOptions } from "./types.js";
+import { readPlatformIdentitySha256 } from "@rsi/release-key-provisioning/native-signing";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
 function usage(): string {
   return [
     "Usage:",
-    "  pnpm foundation:ceremony -- --ci-evidence <absolute .json> --output <absolute .rsi-release> --receipt <absolute .receipt.json> --confirm-commit <40-hex> --confirm-release 0.1.0-foundation.1",
+    "  pnpm foundation:ceremony -- --ci-evidence <absolute .json> --review-evidence <absolute .review-evidence.json> --output <absolute .rsi-release> --receipt <absolute .receipt.json> --conclusion <absolute .readiness-conclusion.json> --tag-object <absolute .foundation-tag> --report <absolute .ceremony-report.json> --confirm-commit <40-hex> --confirm-release 0.1.0-foundation.1",
     "",
-    "MacBook-only, offline, create-only foundation signing ceremony.",
-    "Reads only the fixed release-signing Keychain alias; no key argument is supported.",
+    "MacBook-only, physically offline, create-only foundation signing ceremony.",
+    "Uses only the repository-pinned identity and fixed native Keychain helper.",
+    "Creates detached tag bytes only; it never writes a Git object, ref, tag, release, or push.",
   ].join("\n");
 }
 
@@ -32,8 +39,12 @@ export function parseCliOptions(args: readonly string[]): FoundationCeremonyOpti
   const values = new Map<string, string>();
   const supported = new Set([
     "--ci-evidence",
+    "--conclusion",
     "--output",
     "--receipt",
+    "--review-evidence",
+    "--report",
+    "--tag-object",
     "--confirm-commit",
     "--confirm-release",
   ]);
@@ -50,14 +61,19 @@ export function parseCliOptions(args: readonly string[]): FoundationCeremonyOpti
     index += 1;
   }
   if (values.size !== supported.size) throw new TypeError("missing argument");
-  const release = values.get("--confirm-release");
-  if (release !== FOUNDATION_RELEASE_VERSION) throw new TypeError("invalid release");
+  if (values.get("--confirm-release") !== FOUNDATION_RELEASE_VERSION) {
+    throw new TypeError("invalid release");
+  }
   return Object.freeze({
     ciEvidencePath: values.get("--ci-evidence")!,
+    conclusionPath: values.get("--conclusion")!,
     confirmCommit: values.get("--confirm-commit")!,
     confirmReleaseVersion: FOUNDATION_RELEASE_VERSION,
     destinationPath: values.get("--output")!,
     receiptPath: values.get("--receipt")!,
+    reportPath: values.get("--report")!,
+    reviewEvidencePath: values.get("--review-evidence")!,
+    tagObjectPath: values.get("--tag-object")!,
   });
 }
 
@@ -74,17 +90,25 @@ async function main(): Promise<void> {
     process.stdout.write(`${usage()}\n`);
     return;
   }
-  const destinationPath = await validateFoundationDestination(
-    options.destinationPath,
-    repositoryRoot,
-  );
-  const receiptPath = await validateFoundationReceiptDestination(
-    options.receiptPath,
-    repositoryRoot,
-  );
+  const [destinationPath, receiptPath, conclusionPath, tagObjectPath, reportPath] =
+    await Promise.all([
+      validateFoundationDestination(options.destinationPath, repositoryRoot),
+      validateFoundationReceiptDestination(options.receiptPath, repositoryRoot),
+      validateFoundationConclusionDestination(options.conclusionPath, repositoryRoot),
+      validateFoundationTagObjectDestination(options.tagObjectPath, repositoryRoot),
+      validateFoundationReportDestination(options.reportPath, repositoryRoot),
+    ]);
   const report = await runFoundationCeremony(
-    { ...options, destinationPath, receiptPath },
     {
+      ...options,
+      conclusionPath,
+      destinationPath,
+      receiptPath,
+      reportPath,
+      tagObjectPath,
+    },
+    {
+      assertHostOffline: assertCeremonyHostOffline,
       collectInventory: (evidence, createdAt) =>
         collectFoundationReleaseInventory({
           ciEvidence: evidence,
@@ -92,13 +116,16 @@ async function main(): Promise<void> {
           mode: "ceremony",
           repositoryRoot,
         }),
-      custody: createMacBookKeychainCustody(),
+      custody: createMacBookKeychainCustody(repositoryRoot),
       now: () => new Date(),
+      platformIdentitySha256: readPlatformIdentitySha256,
       platformModel: readPlatformModel,
       readCiEvidence: (path) => readFoundationCiEvidenceFile(path, repositoryRoot),
-      removeOwnOutput: (path, receipt) =>
-        removeFoundationOwnedOutput(path, repositoryRoot, receipt),
-      writeReceipt: (path, receipt) => writeFoundationReceipt(path, repositoryRoot, receipt),
+      readPinnedIdentity: (commitSha) =>
+        readPinnedFoundationReleaseIdentity(repositoryRoot, commitSha),
+      readReviewEvidence: (path) =>
+        readFoundationIndependentReviewEvidenceFile(path, repositoryRoot, options.confirmCommit),
+      reserveOutput: (path, suffix) => reserveFoundationOutput(path, repositoryRoot, suffix),
     },
   );
   process.stdout.write(`${canonicalJson(report)}\n`);

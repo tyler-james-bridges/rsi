@@ -1,10 +1,9 @@
 import { constants, type BigIntStats } from "node:fs";
 import { link, lstat, mkdir, open, realpath, unlink, type FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { randomUUID } from "node:crypto";
 
 import { MAX_ARCHIVE_BYTES, type VerifiedReleaseArchive } from "./archive.js";
-import { canonicalJson } from "./canonical.js";
+import { canonicalJson, sha256 } from "./canonical.js";
 import { ReleaseBundleError, fail } from "./errors.js";
 
 const TEMP_PREFIX = ".rsi-release-partial-";
@@ -31,20 +30,31 @@ interface FileGuard {
 export interface PublishHooksForTest {
   readonly afterLink?: () => Promise<void> | void;
   readonly beforeLink?: () => Promise<void> | void;
+  readonly beforeFinalCleanupSync?: () => Promise<void> | void;
 }
 
-export async function publishBundleCreateOnly(
+export interface RestoreHooksForTest {
+  readonly afterManifestLink?: () => Promise<void> | void;
+  readonly beforeManifestLink?: () => Promise<void> | void;
+  readonly beforeOuterParentSync?: () => Promise<void> | void;
+}
+
+export interface PreparedBundlePublication {
+  preserve(): Promise<void>;
+  publish(bytes: Buffer, hooks?: PublishHooksForTest): Promise<void>;
+}
+
+type PublicationState = "prepared" | "preserved" | "published" | "publishing";
+
+export async function prepareBundleCreateOnly(
   destinationValue: unknown,
-  bytes: Buffer,
-  hooks: PublishHooksForTest = {},
-): Promise<void> {
+): Promise<PreparedBundlePublication> {
   const destinationPath = validateAbsolutePath(destinationValue, "Release destination");
   const parent = await guardExistingDirectory(dirname(destinationPath), "DESTINATION_UNSAFE");
   await assertMissing(destinationPath);
-  const temporaryPath = join(parent.path, `${TEMP_PREFIX}${randomUUID()}`);
+  const temporaryPath = publicationTemporaryPath(destinationPath);
   let temporary: FileHandle | undefined;
   let temporaryCreated = false;
-  let linked = false;
   try {
     temporary = await open(
       temporaryPath,
@@ -54,68 +64,253 @@ export async function publishBundleCreateOnly(
     temporaryCreated = true;
     await temporary.chmod(0o600);
     const initial = await temporary.stat({ bigint: true });
-    if (!initial.isFile() || initial.nlink !== 1n) {
-      fail("DESTINATION_UNSAFE", "Release temporary file is unsafe");
+    if (
+      !initial.isFile() ||
+      initial.nlink !== 1n ||
+      initial.uid !== currentUserId(initial.uid) ||
+      initial.size !== 0n ||
+      (Number(initial.mode) & 0o777) !== 0o600
+    ) {
+      fail("DESTINATION_UNSAFE", "Release reservation file is unsafe");
     }
-    await writeAll(temporary, bytes);
+
+    // The empty reservation and its directory entry must be durable before the
+    // one-shot signer is ever called. It becomes the retained attempt marker if
+    // signing or any later publication phase fails.
     await temporary.sync();
-    const written = await temporary.stat({ bigint: true });
-    if (
-      !written.isFile() ||
-      written.nlink !== 1n ||
-      written.size !== BigInt(bytes.length) ||
-      written.dev !== initial.dev ||
-      written.ino !== initial.ino
-    ) {
-      fail("DESTINATION_UNSAFE", "Release temporary file changed during publication");
-    }
-    await temporary.close();
-    temporary = undefined;
     await assertGuardUnchanged(parent);
-    if (hooks.beforeLink !== undefined) await hooks.beforeLink();
+    await syncGuardedDirectory(parent);
     await assertGuardUnchanged(parent);
-    const temporaryStat = await lstat(temporaryPath, { bigint: true }).catch(() => undefined);
+    const reservedHandle = await temporary.stat({ bigint: true });
+    const reservedPath = await lstat(temporaryPath, { bigint: true }).catch(() => undefined);
     if (
-      temporaryStat === undefined ||
-      !sameIdentity(temporaryStat, written) ||
-      temporaryStat.nlink !== 1n ||
-      temporaryStat.size !== written.size ||
-      (Number(temporaryStat.mode) & 0o777) !== 0o600
+      reservedPath === undefined ||
+      !sameIdentity(initial, reservedHandle) ||
+      !sameIdentity(reservedHandle, reservedPath) ||
+      reservedHandle.nlink !== 1n ||
+      reservedPath.nlink !== 1n ||
+      reservedHandle.size !== 0n ||
+      reservedPath.size !== 0n ||
+      reservedPath.uid !== initial.uid ||
+      (Number(reservedHandle.mode) & 0o777) !== 0o600 ||
+      (Number(reservedPath.mode) & 0o777) !== 0o600
     ) {
-      fail("DESTINATION_UNSAFE", "Release temporary path changed before publication");
+      fail("DESTINATION_UNSAFE", "Release reservation changed during preflight");
     }
-    try {
-      await link(temporaryPath, destinationPath);
-    } catch (error) {
-      if (isErrno(error, "EEXIST"))
-        fail("DESTINATION_EXISTS", "Release destination already exists");
-      throw error;
-    }
-    linked = true;
-    const linkedStat = await lstat(destinationPath, { bigint: true });
-    if (!sameIdentity(linkedStat, written) || linkedStat.nlink !== 2n) {
-      fail("DESTINATION_UNSAFE", "Release publication link is unsafe");
-    }
-    if (hooks.afterLink !== undefined) await hooks.afterLink();
-    await unlink(temporaryPath);
-    temporaryCreated = false;
-    await assertGuardUnchanged(parent);
-    const finalStat = await lstat(destinationPath, { bigint: true });
-    if (
-      !sameIdentity(finalStat, written) ||
-      finalStat.nlink !== 1n ||
-      finalStat.size !== BigInt(bytes.length) ||
-      (Number(finalStat.mode) & 0o777) !== 0o600
-    ) {
-      fail("DESTINATION_UNSAFE", "Published release archive is unsafe");
-    }
-    await syncDirectory(parent.path);
+    return new PreparedBundlePublicationImpl(
+      parent,
+      destinationPath,
+      temporaryPath,
+      temporary,
+      initial,
+    );
   } catch (error) {
     await temporary?.close().catch(() => undefined);
-    if (temporaryCreated) await unlink(temporaryPath).catch(() => undefined);
+    if (temporaryCreated) await syncGuardedDirectoryBestEffort(parent);
     if (error instanceof ReleaseBundleError) throw error;
-    if (linked) fail("DESTINATION_UNSAFE", "Release publication did not finish cleanly");
-    fail("DESTINATION_UNSAFE", "Release publication failed");
+    if (isErrno(error, "EEXIST")) {
+      fail("DESTINATION_EXISTS", "Release destination has a retained publication attempt");
+    }
+    fail("DESTINATION_UNSAFE", "Release destination reservation failed");
+  }
+}
+
+export async function publishBundleCreateOnly(
+  destinationValue: unknown,
+  bytes: Buffer,
+  hooks: PublishHooksForTest = {},
+): Promise<void> {
+  const prepared = await prepareBundleCreateOnly(destinationValue);
+  await prepared.publish(bytes, hooks);
+}
+
+class PreparedBundlePublicationImpl implements PreparedBundlePublication {
+  private handle: FileHandle | undefined;
+  private state: PublicationState = "prepared";
+
+  constructor(
+    private readonly parent: PathGuard,
+    private readonly destinationPath: string,
+    private readonly temporaryPath: string,
+    handle: FileHandle,
+    private readonly initial: BigIntStats,
+  ) {
+    this.handle = handle;
+  }
+
+  async preserve(): Promise<void> {
+    if (this.state === "published" || this.state === "preserved") return;
+    if (this.state === "publishing") {
+      fail("DESTINATION_UNSAFE", "Release publication reservation is busy");
+    }
+    this.state = "preserved";
+    await this.handle?.close().catch(() => undefined);
+    this.handle = undefined;
+    await syncGuardedDirectoryBestEffort(this.parent);
+  }
+
+  async publish(bytes: Buffer, hooks: PublishHooksForTest = {}): Promise<void> {
+    if (this.state !== "prepared" || this.handle === undefined) {
+      fail("DESTINATION_UNSAFE", "Release publication reservation is unavailable");
+    }
+    this.state = "publishing";
+    let linked = false;
+    let written: BigIntStats | undefined;
+    try {
+      await assertGuardUnchanged(this.parent);
+      const reservedHandle = await this.handle.stat({ bigint: true });
+      const reservedPath = await lstat(this.temporaryPath, { bigint: true }).catch(() => undefined);
+      if (
+        reservedPath === undefined ||
+        !sameIdentity(this.initial, reservedHandle) ||
+        !sameIdentity(reservedHandle, reservedPath) ||
+        reservedHandle.nlink !== 1n ||
+        reservedPath.nlink !== 1n ||
+        reservedHandle.size !== 0n ||
+        reservedPath.size !== 0n ||
+        reservedPath.uid !== this.initial.uid ||
+        (Number(reservedHandle.mode) & 0o777) !== 0o600 ||
+        (Number(reservedPath.mode) & 0o777) !== 0o600
+      ) {
+        fail("DESTINATION_UNSAFE", "Release reservation changed before publication");
+      }
+      await writeAll(this.handle, bytes);
+      await this.handle.sync();
+      written = await this.handle.stat({ bigint: true });
+      if (
+        !written.isFile() ||
+        written.nlink !== 1n ||
+        written.size !== BigInt(bytes.length) ||
+        written.dev !== this.initial.dev ||
+        written.ino !== this.initial.ino ||
+        written.uid !== this.initial.uid ||
+        (Number(written.mode) & 0o777) !== 0o600
+      ) {
+        fail("DESTINATION_UNSAFE", "Release temporary file changed during publication");
+      }
+      await this.handle.close();
+      this.handle = undefined;
+      await assertGuardUnchanged(this.parent);
+      if (hooks.beforeLink !== undefined) await hooks.beforeLink();
+      await assertGuardUnchanged(this.parent);
+      const temporaryStat = await lstat(this.temporaryPath, { bigint: true }).catch(
+        () => undefined,
+      );
+      if (
+        temporaryStat === undefined ||
+        !sameIdentity(temporaryStat, written) ||
+        temporaryStat.nlink !== 1n ||
+        temporaryStat.size !== written.size ||
+        (Number(temporaryStat.mode) & 0o777) !== 0o600
+      ) {
+        fail("DESTINATION_UNSAFE", "Release temporary path changed before publication");
+      }
+      try {
+        await link(this.temporaryPath, this.destinationPath);
+      } catch (error) {
+        if (isErrno(error, "EEXIST")) {
+          fail("DESTINATION_EXISTS", "Release destination already exists");
+        }
+        throw error;
+      }
+      linked = true;
+      const linkedStat = await lstat(this.destinationPath, { bigint: true });
+      if (!sameIdentity(linkedStat, written) || linkedStat.nlink !== 2n) {
+        fail("DESTINATION_UNSAFE", "Release publication link is unsafe");
+      }
+      if (hooks.afterLink !== undefined) await hooks.afterLink();
+      // Make the destination link durable while the already-synced temporary link
+      // still exists. A crash before temporary cleanup therefore cannot erase the
+      // only name for a completed signed archive.
+      await syncGuardedDirectory(this.parent);
+      await unlink(this.temporaryPath);
+      await assertGuardUnchanged(this.parent);
+      const finalStat = await lstat(this.destinationPath, { bigint: true });
+      if (
+        !sameIdentity(finalStat, written) ||
+        finalStat.nlink !== 1n ||
+        finalStat.size !== BigInt(bytes.length) ||
+        (Number(finalStat.mode) & 0o777) !== 0o600
+      ) {
+        fail("DESTINATION_UNSAFE", "Published release archive is unsafe");
+      }
+      if (hooks.beforeFinalCleanupSync !== undefined) await hooks.beforeFinalCleanupSync();
+      await syncGuardedDirectory(this.parent);
+      await assertGuardUnchanged(this.parent);
+      const durableFinalStat = await lstat(this.destinationPath, { bigint: true }).catch(
+        () => undefined,
+      );
+      if (
+        durableFinalStat === undefined ||
+        !sameStableFile(finalStat, durableFinalStat) ||
+        durableFinalStat.nlink !== 1n ||
+        durableFinalStat.size !== BigInt(bytes.length) ||
+        (Number(durableFinalStat.mode) & 0o777) !== 0o600
+      ) {
+        fail("DESTINATION_UNSAFE", "Published release archive changed during cleanup sync");
+      }
+      this.state = "published";
+    } catch (error) {
+      await this.handle?.close().catch(() => undefined);
+      this.handle = undefined;
+      if (linked && written !== undefined) {
+        await preserveUsableLinkedDestination(
+          this.parent,
+          this.temporaryPath,
+          this.destinationPath,
+          written,
+        ).catch(() => undefined);
+      }
+      await syncGuardedDirectoryBestEffort(this.parent);
+      this.state = "preserved";
+      if (error instanceof ReleaseBundleError) throw error;
+      if (linked) fail("DESTINATION_UNSAFE", "Release publication did not finish cleanly");
+      fail("DESTINATION_UNSAFE", "Release publication failed");
+    }
+  }
+}
+
+async function preserveUsableLinkedDestination(
+  parent: PathGuard,
+  temporaryPath: string,
+  destinationPath: string,
+  written: BigIntStats,
+): Promise<void> {
+  await assertGuardUnchanged(parent);
+  const destination = await lstat(destinationPath, { bigint: true }).catch(() => undefined);
+  if (
+    destination === undefined ||
+    !sameIdentity(destination, written) ||
+    destination.size !== written.size ||
+    (Number(destination.mode) & 0o777) !== 0o600
+  ) {
+    // The destination cannot be trusted, so retain our known temporary link.
+    await syncGuardedDirectoryBestEffort(parent);
+    return;
+  }
+
+  // A failed publication has not proven the destination directory entry
+  // durable. Keep the already-synced temporary name even when the destination
+  // link looks usable. Removing it here would create a crash window in which
+  // neither name is guaranteed to survive.
+  const partial = await lstat(temporaryPath, { bigint: true }).catch(() => undefined);
+  if (
+    partial === undefined ||
+    !sameIdentity(partial, written) ||
+    partial.nlink !== 2n ||
+    destination.nlink !== 2n
+  ) {
+    return;
+  }
+  await syncGuardedDirectoryBestEffort(parent);
+}
+
+async function syncGuardedDirectoryBestEffort(parent: PathGuard): Promise<void> {
+  try {
+    await syncGuardedDirectory(parent);
+  } catch {
+    // Preserve the artifact and the original publication error. A sync failure
+    // must never trigger cleanup of signed evidence.
   }
 }
 
@@ -177,6 +372,7 @@ export async function readBundleFile(pathValue: unknown): Promise<Buffer> {
 export async function restoreVerifiedReleaseArchive(
   destinationValue: unknown,
   verified: VerifiedReleaseArchive,
+  hooks: RestoreHooksForTest = {},
 ): Promise<number> {
   const destinationPath = validateAbsolutePath(destinationValue, "Release restore destination");
   const outerParent = await guardExistingDirectory(dirname(destinationPath), "DESTINATION_UNSAFE");
@@ -189,6 +385,16 @@ export async function restoreVerifiedReleaseArchive(
     fail("DESTINATION_UNSAFE", "Restore destination cannot be safely created");
   }
   const root = await guardExistingDirectory(destinationPath, "DESTINATION_UNSAFE", 0o700);
+  try {
+    await assertGuardUnchanged(outerParent);
+    if (hooks.beforeOuterParentSync !== undefined) await hooks.beforeOuterParentSync();
+    await syncGuardedDirectory(outerParent);
+    await assertGuardUnchanged(outerParent);
+    await assertGuardUnchanged(root);
+  } catch (error) {
+    if (error instanceof ReleaseBundleError) throw error;
+    fail("DESTINATION_UNSAFE", "Restore root durability could not be proven");
+  }
   const files = new Map<string, Buffer>(verified.artifactBytes);
   const manifestPath = "release/signed-release-manifest.v1.json";
   const manifestBytes = Buffer.from(canonicalJson(verified.envelope), "utf8");
@@ -212,69 +418,124 @@ export async function restoreVerifiedReleaseArchive(
   const artifactEntries = [...verified.artifactBytes].sort(([left], [right]) =>
     left < right ? -1 : left > right ? 1 : 0,
   );
-  // The signed manifest is written last so its presence is never mistaken for
-  // evidence that an interrupted restore completed.
-  for (const [relative, bytes] of [...artifactEntries, [manifestPath, manifestBytes] as const]) {
-    const parentRelative = dirname(relative) === "." ? "" : dirname(relative);
-    const parent = guards.get(parentRelative);
-    if (parent === undefined) fail("DESTINATION_UNSAFE", "Restore file parent is invalid");
-    await assertGuardUnchanged(root);
-    await assertGuardUnchanged(parent);
-    const path = join(destinationPath, relative);
-    if (!path.startsWith(`${destinationPath}${sep}`)) {
-      fail("DESTINATION_UNSAFE", "Restore output escaped its destination");
-    }
-    let file: FileHandle;
-    try {
-      file = await open(
-        path,
-        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-        0o600,
-      );
-    } catch {
-      fail("DESTINATION_UNSAFE", "Restore output cannot be safely created");
-    }
-    try {
-      await file.chmod(0o600);
-      await writeAll(file, bytes);
-      await file.sync();
-      const stat = await file.stat({ bigint: true });
-      const pathStat = await lstat(path, { bigint: true }).catch(() => undefined);
-      if (
-        !stat.isFile() ||
-        stat.nlink !== 1n ||
-        stat.uid !== currentUserId(stat.uid) ||
-        stat.size !== BigInt(bytes.length) ||
-        (Number(stat.mode) & 0o777) !== 0o600 ||
-        pathStat === undefined ||
-        !sameStableFile(stat, pathStat) ||
-        pathStat.nlink !== 1n
-      ) {
-        fail("DESTINATION_UNSAFE", "Restored release output is unsafe");
-      }
-      restoredFiles.push(
-        Object.freeze({
-          ctimeNanoseconds: stat.ctimeNs,
-          device: stat.dev,
-          inode: stat.ino,
-          mode: Number(stat.mode) & 0o777,
-          modifiedNanoseconds: stat.mtimeNs,
-          path,
-          size: stat.size,
-          uid: stat.uid,
-        }),
-      );
-    } finally {
-      await file.close().catch(() => undefined);
-    }
+  for (const [relative, bytes] of artifactEntries) {
+    restoredFiles.push(await writeRestoredFile(destinationPath, relative, bytes, root, guards));
   }
+
+  // Every artifact file and containing directory becomes durable before the
+  // signed manifest's final name can exist. The manifest then uses the same
+  // synced create-only hard-link publication protocol as a release bundle.
   for (const guard of [...guards.values()].reverse()) {
-    await syncDirectory(guard.path);
+    await syncGuardedDirectory(guard);
     await assertGuardUnchanged(guard);
   }
   for (const guard of restoredFiles) await assertFileGuardUnchanged(guard);
+
+  const manifestAbsolutePath = join(destinationPath, manifestPath);
+  const manifestParent = guards.get(dirname(manifestPath));
+  if (manifestParent === undefined) {
+    fail("DESTINATION_UNSAFE", "Restore manifest parent is invalid");
+  }
+  await assertGuardUnchanged(root);
+  await assertGuardUnchanged(manifestParent);
+  await publishBundleCreateOnly(manifestAbsolutePath, manifestBytes, {
+    ...(hooks.afterManifestLink === undefined ? {} : { afterLink: hooks.afterManifestLink }),
+    ...(hooks.beforeManifestLink === undefined ? {} : { beforeLink: hooks.beforeManifestLink }),
+  });
+  const manifestGuard = await guardRestoredFile(manifestAbsolutePath, manifestBytes.length);
+  restoredFiles.push(manifestGuard);
+  await assertFileGuardUnchanged(manifestGuard);
+  await assertGuardUnchanged(manifestParent);
+  await assertGuardUnchanged(root);
+  await syncGuardedDirectory(outerParent);
   await assertGuardUnchanged(outerParent);
+  for (const guard of guards.values()) await assertGuardUnchanged(guard);
+  for (const guard of restoredFiles) await assertFileGuardUnchanged(guard);
   return files.size;
+}
+
+async function writeRestoredFile(
+  destinationPath: string,
+  relative: string,
+  bytes: Buffer,
+  root: PathGuard,
+  guards: ReadonlyMap<string, PathGuard>,
+): Promise<FileGuard> {
+  const parentRelative = dirname(relative) === "." ? "" : dirname(relative);
+  const parent = guards.get(parentRelative);
+  if (parent === undefined) fail("DESTINATION_UNSAFE", "Restore file parent is invalid");
+  await assertGuardUnchanged(root);
+  await assertGuardUnchanged(parent);
+  const path = join(destinationPath, relative);
+  if (!path.startsWith(`${destinationPath}${sep}`)) {
+    fail("DESTINATION_UNSAFE", "Restore output escaped its destination");
+  }
+  let file: FileHandle;
+  try {
+    file = await open(
+      path,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
+  } catch {
+    fail("DESTINATION_UNSAFE", "Restore output cannot be safely created");
+  }
+  try {
+    await file.chmod(0o600);
+    await writeAll(file, bytes);
+    await file.sync();
+    const stat = await file.stat({ bigint: true });
+    const pathStat = await lstat(path, { bigint: true }).catch(() => undefined);
+    if (
+      !safeRestoredFile(stat, BigInt(bytes.length)) ||
+      pathStat === undefined ||
+      !sameStableFile(stat, pathStat) ||
+      pathStat.nlink !== 1n
+    ) {
+      fail("DESTINATION_UNSAFE", "Restored release output is unsafe");
+    }
+    return fileGuard(path, stat);
+  } finally {
+    await file.close().catch(() => undefined);
+  }
+}
+
+async function guardRestoredFile(path: string, expectedSize: number): Promise<FileGuard> {
+  const stat = await lstat(path, { bigint: true }).catch(() => undefined);
+  if (stat === undefined || !safeRestoredFile(stat, BigInt(expectedSize))) {
+    fail("DESTINATION_UNSAFE", "Restored release output is unsafe");
+  }
+  return fileGuard(path, stat);
+}
+
+function safeRestoredFile(stat: BigIntStats, expectedSize: bigint): boolean {
+  return (
+    stat.isFile() &&
+    stat.nlink === 1n &&
+    stat.uid === currentUserId(stat.uid) &&
+    stat.size === expectedSize &&
+    (Number(stat.mode) & 0o777) === 0o600
+  );
+}
+
+function fileGuard(path: string, stat: BigIntStats): FileGuard {
+  return Object.freeze({
+    ctimeNanoseconds: stat.ctimeNs,
+    device: stat.dev,
+    inode: stat.ino,
+    mode: Number(stat.mode) & 0o777,
+    modifiedNanoseconds: stat.mtimeNs,
+    path,
+    size: stat.size,
+    uid: stat.uid,
+  });
+}
+
+function publicationTemporaryPath(destinationPath: string): string {
+  return join(
+    dirname(destinationPath),
+    `${TEMP_PREFIX}${sha256(`rsi-release-publication-v1\0${destinationPath}`).slice(0, 32)}`,
+  );
 }
 
 function collectDirectories(paths: readonly string[]): readonly string[] {
@@ -405,18 +666,63 @@ function sameStableFile(left: BigIntStats, right: BigIntStats): boolean {
   );
 }
 
-async function syncDirectory(path: string): Promise<void> {
+async function syncGuardedDirectory(guard: PathGuard): Promise<void> {
   let directory: FileHandle | undefined;
   try {
-    directory = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    await directory.sync();
-  } catch (error) {
-    if (!isErrno(error, "EINVAL") && !isErrno(error, "ENOTSUP") && !isErrno(error, "EBADF")) {
-      fail("DESTINATION_UNSAFE", "Directory durability sync failed");
+    const before = await lstat(guard.path, { bigint: true });
+    if (!directoryMatchesGuard(before, guard)) {
+      fail("DESTINATION_UNSAFE", "Directory durability target changed before sync");
     }
+    directory = await open(
+      guard.path,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    const opened = await directory.stat({ bigint: true });
+    if (!directoryMatchesGuard(opened, guard) || !sameDirectorySnapshot(before, opened)) {
+      fail("DESTINATION_UNSAFE", "Directory durability target changed before sync");
+    }
+    await directory.sync();
+    const [after, pathAfter] = await Promise.all([
+      directory.stat({ bigint: true }),
+      lstat(guard.path, { bigint: true }),
+    ]);
+    if (
+      !directoryMatchesGuard(after, guard) ||
+      !directoryMatchesGuard(pathAfter, guard) ||
+      !sameDirectorySnapshot(opened, after) ||
+      !sameDirectorySnapshot(after, pathAfter)
+    ) {
+      fail("DESTINATION_UNSAFE", "Directory durability target changed during sync");
+    }
+  } catch {
+    fail("DESTINATION_UNSAFE", "Directory durability sync failed");
   } finally {
     await directory?.close().catch(() => undefined);
   }
+}
+
+function directoryMatchesGuard(stat: BigIntStats, guard: PathGuard): boolean {
+  return (
+    stat.isDirectory() &&
+    stat.dev === guard.device &&
+    stat.ino === guard.inode &&
+    stat.uid === guard.uid &&
+    (Number(stat.mode) & 0o777) === guard.mode
+  );
+}
+
+function sameDirectorySnapshot(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.isDirectory() &&
+    right.isDirectory() &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.ctimeNs === right.ctimeNs &&
+    left.mtimeNs === right.mtimeNs &&
+    left.uid === right.uid &&
+    left.mode === right.mode &&
+    left.nlink === right.nlink
+  );
 }
 
 function isErrno(error: unknown, code: string): boolean {

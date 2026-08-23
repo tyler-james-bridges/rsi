@@ -10,17 +10,28 @@ import {
 
 import { canonicalJson } from "../src/canonical.js";
 import {
+  FOUNDATION_REVIEW_EVIDENCE_TYPE,
+  FOUNDATION_REVIEW_SCOPE_NAMES,
+  type FoundationIndependentReviewEvidenceV1,
+} from "../src/review-evidence.js";
+import {
   FOUNDATION_CI_EVIDENCE_TYPE,
   FOUNDATION_RELEASE_VERSION,
   type FoundationCeremonyCustody,
+  type FoundationCeremonySignersV1,
   type FoundationCiEvidenceV1,
   type FoundationReleaseInventory,
 } from "../src/types.js";
+import type { FoundationPinnedReleaseIdentityV1 } from "../src/release-identity.js";
 
 export const COMMIT = "a".repeat(40);
+export const PROVISIONING_COMMIT = "9".repeat(40);
+export const HELPER_TESTED_COMMIT = "8".repeat(40);
 export const TREE = "b".repeat(40);
 export const CI_COMPLETED_AT = "2026-08-18T00:00:00.000Z";
 export const CEREMONY_AT = "2026-08-18T01:00:00.000Z";
+export const REVIEWED_AT = "2026-08-18T00:30:00.000Z";
+export const PLATFORM_IDENTITY_SHA256 = "7".repeat(64);
 const encoder = new TextEncoder();
 
 export function makeCiEvidence(
@@ -73,22 +84,168 @@ export function makeInventory(createdAt = CEREMONY_AT): FoundationReleaseInvento
   });
 }
 
-export function makeCustody(counter: { value: number }): FoundationCeremonyCustody {
+export function makeReviewEvidence(
+  overrides: Partial<FoundationIndependentReviewEvidenceV1> = {},
+): FoundationIndependentReviewEvidenceV1 {
+  return {
+    commitSha: COMMIT,
+    evidenceType: FOUNDATION_REVIEW_EVIDENCE_TYPE,
+    findings: [],
+    gitTreeSha: TREE,
+    releaseVersion: FOUNDATION_RELEASE_VERSION,
+    repository: "tyler-james-bridges/rsi",
+    reviewedAt: REVIEWED_AT,
+    reviewerId: "rsi-independent-review-agent",
+    reviewerRole: "independent-non-authoring-agent",
+    scopes: FOUNDATION_REVIEW_SCOPE_NAMES.map((name) => ({ name, outcome: "passed" })),
+    verdict: "approved",
+    version: 1,
+    ...overrides,
+  } as FoundationIndependentReviewEvidenceV1;
+}
+
+export function makeCustodyFixture(counter: { value: number; signatures: number }): {
+  readonly custody: FoundationCeremonyCustody;
+  readonly identity: FoundationPinnedReleaseIdentityV1;
+} {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const publicKeySpkiDer = Uint8Array.from(publicKey.export({ format: "der", type: "spki" }));
-  const signer: ReleaseBundleSignerV1 = Object.freeze({
-    keyId: "rsi-release-test-key",
+  const fingerprint = createHash("sha256").update(publicKeySpkiDer).digest("hex");
+  const keyId = `rsi-release-${fingerprint.slice(0, 16)}`;
+  const helperCompatibilityEvidence = makeHelperCompatibilityEvidence();
+  const identity: FoundationPinnedReleaseIdentityV1 = Object.freeze({
+    account: "release-ed25519-v1",
+    createdAt: "2026-08-17T00:00:00.000Z",
+    helperBinarySha256: "1".repeat(64),
+    helperCompatibilityEvidence,
+    helperCompatibilityEvidenceSha256: createHash("sha256")
+      .update(canonicalJson(helperCompatibilityEvidence))
+      .digest("hex"),
+    helperCompatibilityTestedCommitSha: HELPER_TESTED_COMMIT,
+    helperCompilerIdentitySha256: "2".repeat(64),
+    helperSourceSha256: "3".repeat(64),
+    identitySha256: "4".repeat(64),
+    keyId,
+    platformIdentitySha256: PLATFORM_IDENTITY_SHA256,
+    provisioningIntentSha256: "5".repeat(64),
+    provisioningReceiptSha256: "6".repeat(64),
     publicKeySpkiDer,
-    sign(message: Uint8Array) {
-      return Uint8Array.from(sign(null, Uint8Array.from(message), privateKey));
-    },
+    pinningRepositoryCommitSha: COMMIT,
+    provisioningRepositoryCommitSha: PROVISIONING_COMMIT,
+    service: "dev.rsi.macbook.release-signing",
+    signerFingerprintSha256: fingerprint,
   });
-  return Object.freeze({
-    async withSigner<T>(operation: (value: ReleaseBundleSignerV1) => Promise<T>): Promise<T> {
+  const custody: FoundationCeremonyCustody = Object.freeze({
+    async withSigners<T>(
+      pinned: FoundationPinnedReleaseIdentityV1,
+      operation: (signers: FoundationCeremonySignersV1) => Promise<T>,
+    ): Promise<T> {
       counter.value += 1;
-      return operation(signer);
+      if (pinned.keyId !== identity.keyId) throw new Error("identity mismatch");
+      let phase = 0;
+      const signer = (expected: number): ReleaseBundleSignerV1 =>
+        Object.freeze({
+          keyId,
+          publicKeySpkiDer: Uint8Array.from(publicKeySpkiDer),
+          sign(message: Uint8Array) {
+            if (phase !== expected) throw new Error("signature order");
+            phase += 1;
+            counter.signatures += 1;
+            return Uint8Array.from(sign(null, Uint8Array.from(message), privateKey));
+          },
+        });
+      const result = await operation(
+        Object.freeze({ releaseSigner: signer(0), tagSigner: signer(1) }),
+      );
+      if (phase !== 2) throw new Error("incomplete signatures");
+      return result;
     },
   });
+  return Object.freeze({ custody, identity });
+}
+
+function makeHelperCompatibilityEvidence() {
+  return {
+    cleanup: {
+      evidenceSha256: "a".repeat(64),
+      keychainItem: "deleted-and-absence-verified",
+      outcome: "passed",
+      temporaryArtifacts: "removed-and-absence-verified",
+      testPrivateMaterial: "destroyed-and-absence-verified",
+    },
+    completedAt: "2026-08-17T22:00:00.000Z",
+    drillId: "throwaway-macbook-helper-drill",
+    drillOperatorId: "physical-drill-operator",
+    environment: {
+      architecture: "arm64",
+      hardwareClass: "MacBook",
+      macosBuildVersion: "25A354",
+      macosProductVersion: "26.0",
+      nodeVersion: "v24.19.0",
+      pnpmVersion: "11.20.0",
+    },
+    evidencePath: "config/foundation-release-key-helper-compatibility.v1.json",
+    evidenceType: "rsi.release-key-helper-compatibility-evidence",
+    helper: {
+      binarySha256: "1".repeat(64),
+      compilerIdentitySha256: "2".repeat(64),
+      sourceSha256: "3".repeat(64),
+    },
+    helperPath: "packages/release-key-provisioning/native/keychain-helper.swift",
+    independentApproval: {
+      approvedAt: "2026-08-17T23:00:00.000Z",
+      approvalEvidenceSha256: "b".repeat(64),
+      authorship: "did-not-author-tested-helper-or-evidence",
+      drillParticipation: "did-not-operate-drill",
+      reviewerId: "independent-helper-reviewer",
+      reviewerRole: "independent-non-authoring-reviewer",
+      verdict: "approved",
+    },
+    keychainControls: {
+      accessibility: "when-unlocked-this-device-only",
+      dataProtectionKeychain: "verified",
+      evidenceSha256: "c".repeat(64),
+      persistentApproval: "not-granted",
+      synchronizable: "disabled",
+      unauthorizedAlternateClientAccess: "refused",
+      userPresence: "required",
+    },
+    privateMaterialLeakScan: {
+      evidenceSha256: "d".repeat(64),
+      outcome: "passed",
+      scopes: [
+        { name: "process-arguments", outcome: "passed" },
+        { name: "process-environment", outcome: "passed" },
+        { name: "standard-output", outcome: "passed" },
+        { name: "standard-error", outcome: "passed" },
+        { name: "logs-and-diagnostics", outcome: "passed" },
+        { name: "filesystem-artifacts", outcome: "passed" },
+      ],
+    },
+    prompts: [
+      {
+        attempt: 1,
+        evidenceSha256: "e".repeat(64),
+        freshHelperProcess: "verified",
+        outcome: "user-presence-prompt-observed-and-approved-once",
+        scenario: "first-fresh-helper-invocation",
+        signatureVerification: "passed",
+      },
+      {
+        attempt: 2,
+        evidenceSha256: "f".repeat(64),
+        freshHelperProcess: "verified",
+        outcome: "user-presence-prompt-observed-and-approved-once",
+        scenario: "second-fresh-helper-invocation-after-first-completed",
+        signatureVerification: "passed",
+      },
+    ],
+    repository: "tyler-james-bridges/rsi",
+    repositoryVisibility: "public",
+    testedCommitSha: HELPER_TESTED_COMMIT,
+    verdict: "passed",
+    version: 1,
+  } as const;
 }
 
 function makeArtifacts(completedAt: string): readonly ReleaseArtifactInputV1[] {

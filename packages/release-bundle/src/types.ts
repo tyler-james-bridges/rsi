@@ -13,7 +13,12 @@ export type ReleaseArtifactRole =
   | "test-summary";
 
 export type ReleaseArtifactMediaType =
-  "application/json" | "application/yaml" | "text/markdown" | "text/plain" | "text/typescript";
+  | "application/json"
+  | "application/yaml"
+  | "text/markdown"
+  | "text/plain"
+  | "text/typescript"
+  | "text/x-swift";
 
 export interface ReleaseArtifactInputV1 {
   readonly bytes: Uint8Array;
@@ -107,8 +112,12 @@ export interface ReleaseBundleVerificationReportV1 extends ReleaseArtifactBindin
   readonly bundleId: string;
   readonly commitSha: string;
   readonly companionType: "signed-release-bundle";
+  readonly createdAt: string;
   readonly gitTreeSha: string;
   readonly manifestSha256: string;
+  readonly nodeVersion: string;
+  readonly pnpmVersion: string;
+  readonly predecessorManifestSha256: string | null;
   readonly recoveryCompleteness: "release-component";
   readonly releaseVersion: string;
   readonly reportType: typeof RELEASE_BUNDLE_REPORT_TYPE;

@@ -206,6 +206,11 @@ importers:
       "@rsi/release-bundle":
         specifier: workspace:*
         version: link:../release-bundle
+      "@rsi/release-key-provisioning":
+        specifier: workspace:*
+        version: link:../release-key-provisioning
+
+  packages/release-key-provisioning: {}
 
   packages/research:
     dependencies:

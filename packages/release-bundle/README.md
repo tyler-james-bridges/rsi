@@ -59,6 +59,13 @@ content, or any signature/digest/receipt mismatch. Restore verifies everything
 before creating a new mode-`0700` destination and writes every file with
 `O_EXCL | O_NOFOLLOW` and mode `0600`; it never overwrites a destination.
 
+The owner-only temporary reservation is created and fsynced before the signer is
+called, so an invalid parent, occupied destination, or reservation failure cannot
+consume a signature. Once reserved, any signing or publication failure retains
+that partial as evidence of the attempt. A failure after linking keeps the
+destination whenever it can be made a unique, verifiable file. Never delete or
+reuse either artifact until the failed attempt has been reviewed.
+
 This package reports `verified-restorable-release-component`, not complete recovery.
 OBS-REC-003 additionally requires a verified `sanitized-state-evidence` component
 and a restorable `sanitized-event-archive`, plus independent target verification and

@@ -2,9 +2,16 @@
 
 ## No current readiness label
 
-The repository has implemented the Stage A offline components and is completing its
-release/repository evidence gate. Until that evidence is retained and the readiness
-conclusion is signed, it is **not** `FOUNDATION_BUILT`, `PROVISIONING_READY`,
+The repository has implemented the secret-free Observer components and fail-closed
+Stage A provisioning, ceremony, and verification scaffolding. The required stable
+signed release-key component is not implemented, and the physical
+release/repository evidence gate is incomplete. The throwaway-MacBook helper drill,
+real release-key provisioning with two remounted recovery copies, public identity
+pin, fresh retained CI, exact signed five-scope non-authoring review,
+platform-matched two-signature ceremony, and independent production artifact
+verification have not occurred.
+Until all of that evidence is retained and verified, it is **not**
+`FOUNDATION_BUILT`, `PROVISIONING_READY`,
 `COMMISSIONED`, `QUALIFIED`, or `PRODUCTION_OBSERVER`.
 
 A readiness label is a signed evidence conclusion. It is not inferred from a passing
@@ -43,7 +50,42 @@ or a live call, Stage A MUST complete:
 - failure-drill harness, full test/format/typecheck/audit/demo suite, and independent
   non-authoring-agent review.
 
-There are zero live calls and zero credentials in this stage.
+There are zero live calls and zero provider/runtime credentials in this stage. The
+sole narrow exception is a dedicated governance release key bootstrapped on the
+physically offline designated MacBook so Stage A can sign its own evidence. It is
+not an Observer runtime credential and has no network, provider, wallet, payment,
+trading, deployment, checkpoint, operator-approval, or public-artifact authority.
+It may sign only the fixed release manifest and detached foundation tag domains.
+
+### Foundation Stage A v2 evidence sequence
+
+The exact sequence is normative in
+[Foundation Stage A v2](./foundation-stage-a-v2.md):
+
+1. independently pass the throwaway-MacBook stable-helper and two-prompt
+   user-presence drill;
+2. create the fixed intent and one release identity on the offline designated
+   MacBook, binding its domain-separated platform identity and two separate
+   encrypted physical recovery media each proven by eject, physical reconnect,
+   unlock, reread, and decrypt;
+3. review and commit only the nonsecret public identity and provisioning receipt
+   to protected public `main`;
+4. prove the provisioning commit is an ancestor of the pinning commit and contains
+   the exact attested helper source;
+5. retain and visually verify fresh successful public CI and a canonical fresh
+   non-authoring review for that exact pinning commit/tree; all five fixed scopes
+   pass and every finding is resolved;
+6. on the same platform-pinned MacBook, offline, sign and verify the release bundle,
+   create the readiness conclusion binding CI and independent-review evidence,
+   then request the second signature for detached `foundation-v1` tag bytes; and
+7. independently verify the retained CI/review, bundle, receipt, conclusion,
+   detached tag, ceremony report, commit/tree, platform identity, and signer before
+   applying any readiness label.
+
+All outputs are create-only. A crash or uncertain write preserves partial evidence;
+it is never deleted or overwritten to force progress. The ceremony does not install
+a Git object, create a tag/ref or GitHub release, push, publish, or deploy. Any such
+action remains a separate explicit approval after the readiness review.
 
 ## Provisioning: `PROVISIONING_READY`
 

@@ -10,7 +10,7 @@ RSI also carries two useful secondary meanings:
 RSI researches markets, converts adversarial internet activity into typed evidence, measures its own work, and improves under explicit promotion gates. The first production contract is **Observer v1**: private, supervised, read-only research with no capital authority. The longer-term execution architecture remains a separate, unapproved roadmap.
 
 > [!WARNING]
-> RSI is pre-alpha foundation code. State-changing adapters are disabled; paid collectors are quarantined and have not passed credentialed live canaries. The repository does not connect financial accounts, sign orders, or send transactions. Do not provision credentials until every Observer v1 readiness gate passes.
+> RSI is pre-alpha foundation code. State-changing adapters are disabled; paid collectors are quarantined and have not passed credentialed live canaries. The repository does not connect financial accounts, sign orders, or send transactions. Do not provision provider or runtime credentials until every Observer v1 readiness gate passes. The sole Stage A exception is the separately gated, physically offline governance release key described below; it grants no live authority.
 
 > [!NOTE]
 > RSI is a public project developed in the public
@@ -39,7 +39,18 @@ RSI researches markets, converts adversarial internet activity into typed eviden
 - A strict supervised-session lifecycle with deterministic acknowledgement windows, crash invalidation, cost gating, trusted-head rollback detection, and content-free acceptance evidence.
 - A content-free alert outbox with bounded delivery attempts, trusted-head recovery, and profile separation. No Resend or Healthchecks adapter is configured.
 - Three closed recovery components: signed state evidence, a restorable sanitized event archive, and a restorable signed release/code/runbook bundle. A genuine-store controller verifies their exact cross-bindings and local closure facts before advancing lifecycle state; physical two-copy restore remains pending.
-- A MacBook-only, create-only foundation ceremony wrapper that binds a reviewed public `main` CI record to the exact clean-tree release inventory, uses only one fixed Keychain alias, immediately verifies the signed bundle, and writes a separate retained receipt. No key has been provisioned and no real ceremony has run.
+- A crash-safe, MacBook-only release-key bootstrap with a fixed provisioning intent,
+  designated-platform/repository/helper evidence, and two independently encrypted
+  physical recovery copies that must survive eject/remount restore verification.
+  Real provisioning is mechanically blocked on a public throwaway-MacBook
+  helper/Keychain compatibility record. The current ad-hoc helper cannot truthfully
+  pass it; a provisioned stable signed component must replace it first.
+- A MacBook-only, create-only Foundation Stage A v2 ceremony that binds retained
+  public `main` CI, a five-scope independent review, repository-pinned identity, and
+  the designated MacBook, verifies the signed release bundle, records a readiness
+  conclusion, and requests a second user-presence signature for detached Git tag
+  bytes. It never installs or publishes a tag, ref, release, or deployment. No key
+  has been provisioned and no real ceremony has run.
 - A read-only production preflight that fails closed on runtime, host, credential-presence, clock, wake-session, and environment-isolation requirements without reading secret values or changing the host.
 - A loopback-only operator dashboard/API with fixed same-origin assets, defensive headers, recursive sensitive-field redaction, and a closed set of local lifecycle controls. Without an authenticated control provider it remains read-only.
 - A signed, content-free public receipt/correction/tombstone chain with explicit approval, a 24-hour delay, retained-head rollback detection, and a browser-safe fail-closed verifier. It has no deployment or publication adapter.
@@ -71,6 +82,8 @@ pnpm demo:pipeline
 pnpm demo:ingestion
 pnpm ci:drills
 pnpm ci:release
+pnpm foundation:ci-retain -- --help
+pnpm foundation:key-provision -- --help
 pnpm foundation:ceremony -- --help
 ```
 
@@ -81,10 +94,15 @@ closed release inventory and validates the resulting source/config/runbook/SBOM/
 candidate. It does not sign or publish a release; the retained CI receipts and separate MacBook
 release key are required for that later step.
 
-`pnpm foundation:ceremony -- --help` documents the separately approved MacBook-only signing
-step. The command accepts no key or signer argument, never tags or publishes, and currently
-remains unusable until the dedicated MacBook Keychain identity is provisioned under the
-production-readiness procedure.
+The Foundation commands implement a deliberately split workflow: retain the exact
+public CI result while networked; bootstrap one offline governance-only release
+identity with two physically verified recovery copies; pin its nonsecret identity
+and receipt through public `main`; retain fresh CI and an exact five-scope
+non-authoring review; then perform two separate user-presence signatures on the
+same platform-pinned, physically offline designated MacBook. The signing command
+emits detached tag bytes, a readiness conclusion, and a verification report, but
+never writes a Git object/ref, pushes, creates a GitHub release, or deploys. See the
+[Foundation Stage A v2 workflow](docs/production-readiness/v1/foundation-stage-a-v2.md).
 
 To seed a local database and inspect its read-only API:
 
@@ -126,7 +144,8 @@ packages/source-contracts Offline OpenSea/Stream/finalized-chain request contrac
 packages/backup      Signed sanitized state-evidence component
 packages/event-archive Restorable signed sanitized event history
 packages/release-bundle Restorable signed source/config/runbook release
-packages/release-ceremony MacBook-only foundation signing and retained-receipt wrapper
+packages/release-key-provisioning Offline fixed-identity bootstrap and two-copy recovery proof
+packages/release-ceremony MacBook-only two-signature foundation evidence wrapper
 docs/                Architecture, threat model, standards, charter, roadmap
 ```
 
@@ -144,7 +163,16 @@ Start with the normative [Observer v1 production-readiness contract](docs/produc
 - Policy spend/replay state survives a clean reopen, and SQLite serializes concurrent writers that share one database file. Separate database copies have no distributed coordinator and must never act as parallel execution authorities.
 - The X ingestion path encrypts exact response bytes and metadata before typed parsing, binds retries through the encrypted capture registry, destroys collector-owned raw copies, and reconciles pending or orphaned capture state after restart. A real credentialed canary and session-close orchestration remain prohibited until the broader Observer readiness gates pass.
 - Recovery files can now be created and verified in three closed components, and the local controller consumes their genuine verification reports. RSI does not yet have the production command that assembles them from one accepted session and writes/verifies both approved physical copies.
-- The foundation ceremony wrapper is implemented and adversarially tested, but the MacBook release key, retained final CI evidence, real signature, independently approved tag/release publication, and restore drill do not yet exist.
+- The Foundation Stage A v2 workflow is implemented for offline verification, but
+  the stable signed helper architecture and throwaway-MacBook drill,
+  designated-MacBook release key, two
+  physical recovery-media restores, public identity/receipt pin, retained final CI
+  evidence, exact five-scope independent review, two real signatures, final
+  artifact verification, and any separately approved tag/release publication do
+  not yet exist. No readiness label is claimed.
 - The complete test suite and Stage A drills pass when invoked with the pinned Node 24.19.0 toolchain. Host preflight still correctly reports this Mac as not production-ready: the dedicated standard account, host hardening, independent clock references, bounded wake evidence, and isolated Keychain credentials remain unprovisioned.
 - `node:sqlite` may emit an experimental-feature warning on supported Node releases.
-- There is no wallet, transaction signer, transaction builder, AgentCash payment, x402 request, Robinhood connection, or live-capital path in this build. The only signing code signs offchain event-store checkpoints.
+- There is no wallet, transaction signer, transaction builder, AgentCash payment,
+  x402 request, Robinhood connection, or live-capital path in this build. Existing
+  signing code is limited to offchain event-store checkpoints and the separately
+  gated offline foundation evidence domains.

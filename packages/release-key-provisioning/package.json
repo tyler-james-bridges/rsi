@@ -1,0 +1,20 @@
+{
+  "name": "@rsi/release-key-provisioning",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./native-signing": "./src/native-signing.ts"
+  },
+  "scripts": {
+    "format:check": "prettier --check .",
+    "provision": "tsx src/cli.ts",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "engines": {
+    "node": "24.19.0",
+    "pnpm": "11.20.0"
+  }
+}

@@ -24,6 +24,13 @@ provider responses, hidden evaluation cases, environment state, local databases,
 signing material, and production diagnostics remain outside Git and follow their
 existing custody and retention rules.
 
+The Foundation release public-key identity, domain-separated designated-platform
+hash, and content-free provisioning receipt are nonsecret verification evidence and
+MAY be pinned in the public repository after review. The raw platform UUID, private
+Keychain item, recovery passphrases, create-only local provisioning intent, and
+encrypted recovery envelopes remain outside Git. Publishing a public key or hash
+does not grant access to private material or broaden its fixed signing authority.
+
 Public visibility is not an open-source license grant. No project license is chosen
 by this decision; adding one requires a separate owner decision.
 

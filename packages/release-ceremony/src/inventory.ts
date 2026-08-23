@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
-import { lstat, open, readFile, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
   REQUIRED_CONFIG_SCHEMA_NAMES,
@@ -27,6 +26,13 @@ import {
 const EXPECTED_NODE = "24.19.0";
 const EXPECTED_PNPM = "11.20.0";
 const APPROVED_REMOTE = "https://github.com/tyler-james-bridges/rsi.git";
+const APPROVED_SSH_REMOTE = "git@github.com:tyler-james-bridges/rsi.git";
+const HARDENED_GIT_OPTIONS = Object.freeze([
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.hooksPath=/dev/null",
+] as const);
 const REQUIRED_RUNBOOK = "docs/production-readiness/v1/runbooks/README.md";
 const REQUIRED_RECOVERY = "docs/production-readiness/v1/recovery/observer-restore.md";
 const ROOT_SOURCE_PATHS = new Set([
@@ -49,6 +55,22 @@ const ROOT_PATH_MAPPINGS = new Map<string, readonly [string, ReleaseArtifactRole
   [".nvmrc", ["source/scripts/nvmrc.txt", "source"]],
   [".prettierignore", ["source/scripts/prettierignore.txt", "source"]],
   [".prettierrc.json", ["source/scripts/prettier-config.json", "source"]],
+  [
+    "config/foundation-independent-reviewer-identity.v1.json",
+    ["source/config/foundation-independent-reviewer-identity.v1.json", "source"],
+  ],
+  [
+    "config/foundation-release-identity.v1.json",
+    ["source/config/foundation-release-identity.v1.json", "source"],
+  ],
+  [
+    "config/foundation-release-key-helper-compatibility.v1.json",
+    ["source/config/foundation-release-key-helper-compatibility.v1.json", "source"],
+  ],
+  [
+    "config/foundation-release-key-provisioning-receipt.v1.json",
+    ["source/config/foundation-release-key-provisioning-receipt.v1.json", "source"],
+  ],
   ["SECURITY.md", ["runbooks/security.md", "runbook"]],
 ]);
 const encoder = new TextEncoder();
@@ -60,6 +82,12 @@ export interface CollectFoundationInventoryOptions {
   readonly repositoryRoot: string;
 }
 
+interface FoundationTrackedBlob {
+  readonly mode: "100644" | "100755";
+  readonly objectId: string;
+  readonly path: string;
+}
+
 export async function collectFoundationReleaseInventory(
   options: CollectFoundationInventoryOptions,
 ): Promise<FoundationReleaseInventory> {
@@ -69,12 +97,13 @@ export async function collectFoundationReleaseInventory(
     options.mode === "candidate"
       ? snapshot.commitTimestamp
       : validateCeremonyTime(options.createdAt, options.ciEvidence, snapshot.commitTimestamp);
-  const artifacts = await collectArtifacts(root, snapshot.trackedPaths, {
+  const artifacts = collectArtifacts(root, snapshot.trackedBlobs, {
     ...(options.ciEvidence === undefined ? {} : { ciEvidence: options.ciEvidence }),
     commitSha: snapshot.commitSha,
     completedAt,
     mode: options.mode,
   });
+  assertRepositorySnapshotStable(root, snapshot, options);
   const bindings = deriveReleaseArtifactBindings(artifacts);
   const release = Object.freeze({
     ...bindings,
@@ -96,7 +125,7 @@ export async function collectFoundationReleaseInventory(
       gitTreeSha: snapshot.gitTreeSha,
       releaseVersion: FOUNDATION_RELEASE_VERSION,
       sourceTreeSha256: bindings.sourceTreeSha256,
-      trackedFileCount: snapshot.trackedPaths.length,
+      trackedFileCount: snapshot.trackedBlobs.length,
     }),
   });
 }
@@ -108,14 +137,13 @@ function inspectRepository(
   readonly commitSha: string;
   readonly commitTimestamp: string;
   readonly gitTreeSha: string;
-  readonly trackedPaths: readonly string[];
+  readonly trackedBlobs: readonly FoundationTrackedBlob[];
 } {
   if (process.versions.node !== EXPECTED_NODE || pnpmVersion() !== EXPECTED_PNPM) {
     fail("REPOSITORY_STATE", "Foundation release runtime does not match the exact pins");
   }
-  if (git(root, ["status", "--porcelain=v1"]) !== "") {
-    fail("REPOSITORY_STATE", "Foundation release repository is not clean");
-  }
+  assertUnambiguousGitHistory(root);
+  assertCleanRepository(root);
   const commitSha = validateGitHash(git(root, ["rev-parse", "HEAD"]).trim(), "Release commit");
   const gitTreeSha = validateGitHash(
     git(root, ["rev-parse", "HEAD^{tree}"]).trim(),
@@ -127,38 +155,132 @@ function inspectRepository(
     fail("REPOSITORY_STATE", "Foundation release commit timestamp is invalid");
   }
   const commitTimestamp = parsedCommitTimestamp.toISOString();
-  if (options.mode === "ceremony") {
-    if (options.ciEvidence === undefined || options.ciEvidence.commitSha !== commitSha) {
-      fail("REPOSITORY_STATE", "Foundation CI evidence does not match repository HEAD");
-    }
-    if (
-      git(root, ["branch", "--show-current"]).trim() !== "main" ||
-      git(root, ["rev-parse", "refs/remotes/origin/main"]).trim() !== commitSha ||
-      normalizeRemote(git(root, ["remote", "get-url", "origin"]).trim()) !== APPROVED_REMOTE ||
-      git(root, ["tag", "--list", FOUNDATION_TAG]).trim() !== ""
-    ) {
-      fail("REPOSITORY_STATE", "Foundation ceremony repository identity is not eligible");
-    }
-  }
-  const trackedPaths = git(root, ["ls-files", "-z"])
-    .split("\0")
-    .filter((path) => path.length > 0);
-  if (trackedPaths.length === 0 || new Set(trackedPaths).size !== trackedPaths.length) {
-    fail("REPOSITORY_STATE", "Foundation release tracked inventory is invalid");
-  }
+  if (options.mode === "ceremony")
+    assertCeremonyRepositoryIdentity(root, commitSha, options.ciEvidence);
+  const trackedBlobs = readTrackedTree(root, commitSha);
+  assertIndexFlagsAreOrdinary(root, trackedBlobs);
   return Object.freeze({
     commitSha,
     commitTimestamp,
     gitTreeSha,
-    trackedPaths: Object.freeze(trackedPaths),
+    trackedBlobs,
   });
 }
 
+function assertUnambiguousGitHistory(root: string): void {
+  const graftsPath = resolve(root, git(root, ["rev-parse", "--git-path", "info/grafts"]).trim());
+  if (
+    git(root, ["for-each-ref", "--format=%(refname)", "refs/replace"]).trim() !== "" ||
+    existsSync(graftsPath) ||
+    git(root, ["rev-parse", "--is-shallow-repository"]).trim() !== "false"
+  ) {
+    fail("REPOSITORY_STATE", "Foundation release Git history is replaced, grafted, or shallow");
+  }
+}
+
+function assertCleanRepository(root: string): void {
+  if (git(root, ["status", "--porcelain=v1", "--untracked-files=all"]) !== "") {
+    fail("REPOSITORY_STATE", "Foundation release repository is not clean");
+  }
+}
+
+function assertIndexFlagsAreOrdinary(
+  root: string,
+  trackedBlobs: readonly FoundationTrackedBlob[],
+): void {
+  const records = nulRecords(gitBytes(root, ["ls-files", "-v", "-z"]));
+  if (
+    records.length !== trackedBlobs.length ||
+    records.some((record, index) => record !== `H ${trackedBlobs[index]!.path}`)
+  ) {
+    fail(
+      "REPOSITORY_STATE",
+      "Foundation release index uses hidden-change flags or differs from the release tree",
+    );
+  }
+}
+
+function assertCeremonyRepositoryIdentity(
+  root: string,
+  commitSha: string,
+  ciEvidence: FoundationCiEvidenceV1 | undefined,
+): void {
+  if (ciEvidence === undefined || ciEvidence.commitSha !== commitSha) {
+    fail("REPOSITORY_STATE", "Foundation CI evidence does not match repository HEAD");
+  }
+  if (
+    git(root, ["branch", "--show-current"]).trim() !== "main" ||
+    git(root, ["rev-parse", "refs/remotes/origin/main"]).trim() !== commitSha ||
+    !hasApprovedRawOrigin(root) ||
+    git(root, ["tag", "--list", FOUNDATION_TAG]).trim() !== ""
+  ) {
+    fail("REPOSITORY_STATE", "Foundation ceremony repository identity is not eligible");
+  }
+}
+
+function assertRepositorySnapshotStable(
+  root: string,
+  snapshot: {
+    readonly commitSha: string;
+    readonly gitTreeSha: string;
+    readonly trackedBlobs: readonly FoundationTrackedBlob[];
+  },
+  options: CollectFoundationInventoryOptions,
+): void {
+  assertUnambiguousGitHistory(root);
+  assertCleanRepository(root);
+  assertIndexFlagsAreOrdinary(root, snapshot.trackedBlobs);
+  if (
+    git(root, ["rev-parse", "HEAD"]).trim() !== snapshot.commitSha ||
+    git(root, ["rev-parse", "HEAD^{tree}"]).trim() !== snapshot.gitTreeSha
+  ) {
+    fail("REPOSITORY_STATE", "Foundation release repository changed during inventory collection");
+  }
+  if (options.mode === "ceremony") {
+    assertCeremonyRepositoryIdentity(root, snapshot.commitSha, options.ciEvidence);
+  }
+}
+
+function readTrackedTree(root: string, commitSha: string): readonly FoundationTrackedBlob[] {
+  const records = nulRecords(gitBytes(root, ["ls-tree", "-r", "-z", "--full-tree", commitSha]));
+  const trackedBlobs = records.map((record) => {
+    const match = /^(100644|100755) blob ([0-9a-f]{40})\t(.+)$/u.exec(record);
+    if (match === null) {
+      fail("REPOSITORY_STATE", "Foundation release tree contains an unsupported entry");
+    }
+    return Object.freeze({
+      mode: match[1] as "100644" | "100755",
+      objectId: match[2]!,
+      path: match[3]!,
+    });
+  });
+  if (
+    trackedBlobs.length === 0 ||
+    new Set(trackedBlobs.map(({ path }) => path)).size !== trackedBlobs.length
+  ) {
+    fail("REPOSITORY_STATE", "Foundation release tracked inventory is invalid");
+  }
+  return Object.freeze(trackedBlobs);
+}
+
+function nulRecords(bytes: Uint8Array): readonly string[] {
+  let value: string;
+  try {
+    value = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    fail("REPOSITORY_STATE", "Foundation release Git output is not canonical UTF-8");
+  }
+  if (!value.endsWith("\0")) {
+    fail("REPOSITORY_STATE", "Foundation release Git output is incomplete");
+  }
+  return Object.freeze(value.slice(0, -1).split("\0"));
+}
+
 function git(root: string, args: readonly string[]): string {
-  const result = spawnSync("/usr/bin/git", args, {
+  const result = spawnSync("/usr/bin/git", [...HARDENED_GIT_OPTIONS, ...args], {
     cwd: root,
     encoding: "utf8",
-    env: { LANG: "C", LC_ALL: "C", PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    env: gitEnvironment(),
     maxBuffer: 8 * 1024 * 1024,
     shell: false,
     timeout: 20_000,
@@ -169,13 +291,45 @@ function git(root: string, args: readonly string[]): string {
   return result.stdout;
 }
 
+function gitBytes(root: string, args: readonly string[]): Uint8Array {
+  const result = spawnSync("/usr/bin/git", [...HARDENED_GIT_OPTIONS, ...args], {
+    cwd: root,
+    env: gitEnvironment(),
+    maxBuffer: 8 * 1024 * 1024,
+    shell: false,
+    timeout: 20_000,
+  });
+  if (result.status !== 0 || result.signal !== null) {
+    fail("REPOSITORY_STATE", "Foundation release Git inspection failed");
+  }
+  return Uint8Array.from(result.stdout);
+}
+
+function gitEnvironment(): NodeJS.ProcessEnv {
+  return {
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    LANG: "C",
+    LC_ALL: "C",
+    PATH: process.env.PATH ?? "/usr/bin:/bin",
+  };
+}
+
 function pnpmVersion(): string | null {
   return /(?:^|\s)pnpm\/([^\s]+)/u.exec(process.env.npm_config_user_agent ?? "")?.[1] ?? null;
 }
 
-function normalizeRemote(value: string): string {
-  if (value === "git@github.com:tyler-james-bridges/rsi.git") return APPROVED_REMOTE;
-  return value;
+function hasApprovedRawOrigin(root: string): boolean {
+  const configured = git(root, [
+    "config",
+    "--local",
+    "--no-includes",
+    "--get-all",
+    "remote.origin.url",
+  ]);
+  return configured === `${APPROVED_REMOTE}\n` || configured === `${APPROVED_SSH_REMOTE}\n`;
 }
 
 function validateCeremonyTime(
@@ -198,21 +352,22 @@ function validateCeremonyTime(
   return createdAt;
 }
 
-async function collectArtifacts(
+function collectArtifacts(
   root: string,
-  trackedPaths: readonly string[],
+  trackedBlobs: readonly FoundationTrackedBlob[],
   context: {
     readonly ciEvidence?: FoundationCiEvidenceV1;
     readonly commitSha: string;
     readonly completedAt: string;
     readonly mode: "candidate" | "ceremony";
   },
-): Promise<ReleaseArtifactInputV1[]> {
+): ReleaseArtifactInputV1[] {
   const artifacts: ReleaseArtifactInputV1[] = [];
-  for (const path of trackedPaths) {
-    const [releasePath, role] = mappedTrackedPath(path);
+  for (const trackedBlob of trackedBlobs) {
+    const { path } = trackedBlob;
+    const [releasePath, role] = classifyFoundationTrackedPath(path);
     artifacts.push({
-      bytes: await readTrackedFile(root, path),
+      bytes: readTrackedBlob(root, trackedBlob),
       mediaType: mediaType(releasePath, role),
       path: releasePath,
       role,
@@ -228,7 +383,11 @@ async function collectArtifacts(
       }),
     );
   }
-  const lockfile = await readTrackedFile(root, "pnpm-lock.yaml");
+  const lockfileEntry = trackedBlobs.find(({ path }) => path === "pnpm-lock.yaml");
+  if (lockfileEntry === undefined) {
+    fail("REPOSITORY_STATE", "Foundation release lockfile is not tracked");
+  }
+  const lockfile = readTrackedBlob(root, lockfileEntry);
   artifacts.push(
     generatedArtifact("release/sbom.cdx.json", "sbom", {
       bomFormat: "CycloneDX",
@@ -267,46 +426,19 @@ function requiredEvidence(value: FoundationCiEvidenceV1 | undefined): Foundation
   return value;
 }
 
-async function readTrackedFile(root: string, path: string): Promise<Uint8Array> {
-  if (path.includes("\0") || isAbsolute(path)) {
-    fail("REPOSITORY_STATE", "Foundation tracked path is invalid");
+function readTrackedBlob(root: string, trackedBlob: FoundationTrackedBlob): Uint8Array {
+  const bytes = gitBytes(root, ["cat-file", "blob", trackedBlob.objectId]);
+  const objectId = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+  if (objectId !== trackedBlob.objectId) {
+    bytes.fill(0);
+    fail("REPOSITORY_STATE", "Foundation release Git blob failed object verification");
   }
-  const rootReal = await realpath(root);
-  const absolute = join(root, path);
-  const targetReal = await realpath(absolute);
-  const within = relative(rootReal, targetReal);
-  if (within === "" || within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within)) {
-    fail("REPOSITORY_STATE", "Foundation tracked path escapes the repository");
-  }
-  const before = await lstat(absolute);
-  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) {
-    fail("REPOSITORY_STATE", "Foundation tracked file is not a unique regular file");
-  }
-  const handle = await open(absolute, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-  try {
-    const opened = await handle.stat();
-    if (
-      opened.dev !== before.dev ||
-      opened.ino !== before.ino ||
-      opened.size !== before.size ||
-      !opened.isFile() ||
-      opened.nlink !== 1
-    ) {
-      fail("REPOSITORY_STATE", "Foundation tracked file changed during inspection");
-    }
-    const bytes = await handle.readFile();
-    const after = await handle.stat();
-    if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size) {
-      bytes.fill(0);
-      fail("REPOSITORY_STATE", "Foundation tracked file changed while reading");
-    }
-    return Uint8Array.from(bytes);
-  } finally {
-    await handle.close();
-  }
+  return bytes;
 }
 
-function mappedTrackedPath(path: string): readonly [string, ReleaseArtifactRole] {
+export function classifyFoundationTrackedPath(
+  path: string,
+): readonly [string, ReleaseArtifactRole] {
   if (path === "pnpm-lock.yaml") return ["source/pnpm-lock.yaml", "lockfile"];
   if (path === REQUIRED_RUNBOOK) return ["runbooks/README.md", "runbook"];
   if (path === REQUIRED_RECOVERY) return ["recovery/observer-restore.md", "recovery-procedure"];
@@ -329,6 +461,7 @@ function mediaType(path: string, role: ReleaseArtifactRole): ReleaseArtifactMedi
     return "text/markdown";
   }
   if (/\.tsx?$/u.test(path)) return "text/typescript";
+  if (path.endsWith(".swift")) return "text/x-swift";
   if (path.endsWith(".json")) return "application/json";
   return "text/plain";
 }

@@ -570,6 +570,19 @@ recovery copies. Every long-lived signing key has two separately stored encrypte
 offline recovery copies, annual recovery exercise, and annual or
 compromise-triggered rotation through a signed predecessor-to-successor transition.
 
+The Foundation Stage A release key is the one narrow offline governance-key
+bootstrap exception to Stage A's provider/runtime credential prohibition. Before
+real creation, a throwaway MacBook MUST prove the tracked helper's stable compiled
+identity, exact Data Protection Keychain attributes, synchronization-disabled
+device-only custody, and a fresh user-presence prompt for each of the fixed two
+signing domains. Real provisioning MUST write a fixed create-only intent before key
+generation and bind a domain-separated hash of the designated MacBook platform
+identity plus two distinct encrypted APFS physical disks. The raw platform UUID is
+not retained. Each envelope MUST survive safe eject, physical disconnect/reconnect,
+unlock, reread, and decrypt before the public receipt can report it as restored.
+Ambiguous durable state MUST be preserved and resumed against the exact intent; it
+MUST NOT be deleted, overwritten, or replaced by a newly generated identity.
+
 Provider credentials are replaceable and are not archived. Environment wrapping
 keys, per-capture keys, profile-bound capture-registry keys, and separate
 operations-state keys are never backed up. An
@@ -609,6 +622,14 @@ reviews are acceptable only while the operator is the sole contributor; an
 independent human becomes mandatory before capital. No GitHub workflow deploys to
 the Mac mini.
 
+The Foundation Stage A workflow first commits the reviewed nonsecret release
+identity and provisioning receipt to public `main`, then retains fresh successful
+CI for that exact pinning commit. CI retention uses fixed unauthenticated public
+reads and create-only local evidence; it does not turn the operator-retained record
+into a GitHub-signed attestation. The receipt's provisioning source commit MUST be
+an ancestor of the pinning commit, and its helper-source blob MUST hash to the
+attested helper identity.
+
 ### OBS-REL-002 — Releases and rollback
 
 A signed release records commit, lockfile, Node/runtime, configuration and policy
@@ -627,6 +648,20 @@ integrity, policy, redaction, retention, signing, and runtime dependency failure
 are never waived. Only a verified false positive or dev-only advisory may receive a
 signed, nonrenewable seven-day waiver; a runtime advisory cannot enter
 qualification.
+
+The Foundation Stage A v2 ceremony requires exactly two separate user-presence
+signatures in one fixed order: the domain-separated release manifest, followed by
+the fixed OpenSSH `git` namespace data for a detached annotated
+`foundation-v1` tag object. Before custody it MUST require a canonical independent
+non-authoring review no older than seven days that binds the exact commit/tree,
+passes the five fixed scopes, and records only resolved findings. It MUST run on the
+same domain-separated designated-MacBook platform identity recorded during
+provisioning. It MUST verify the bundle, readiness conclusion, and tag bytes and
+retain a canonical report binding the CI, independent review, commit/tree, complete
+release artifact sets, pinned identity/provisioning receipt, platform/helper
+evidence, and both signatures. Durable partial artifacts are preserved on failure.
+The ceremony MUST NOT install a Git object, create a tag/ref, push, create a GitHub
+release, publish, or deploy; those are later, separately approved actions.
 
 ### OBS-REL-003 — Maintenance and change gates
 
@@ -741,10 +776,17 @@ Stage A covers documentation/traceability, public project/repository and secret-
 CI, Node 24 pinning, host-preflight tooling, Vault v2, content-free events,
 cost/cursor and session state machines, checkpoint/backup interfaces, alerts,
 dashboard, public projection, offline adapters, failure-drill harness, and
-independent adversarial review. It makes zero live calls and uses zero credentials.
+independent adversarial review. It makes zero live calls and uses zero
+provider/runtime credentials. Its sole exception is the physically offline,
+governance-only Foundation release key required to sign Stage A's own evidence; the
+key is prohibited from every live/provider/runtime/payment/wallet/deployment role
+and is subject to the fixed-intent, two-media, public-pin, two-signature workflow in
+[Foundation Stage A v2](./foundation-stage-a-v2.md).
 
-Stage A does not authorize host mutation, DNS, provider resources, credentials,
-deployment, paid requests, or live canaries. Those require explicit local approval.
+Stage A does not authorize observer-host mutation, DNS, provider resources,
+provider/runtime credentials, deployment, paid requests, or live canaries. Those
+require explicit local approval. The physical MacBook release-key exception does
+not broaden that authority.
 
 ### OBS-BLD-002 — Build order and review
 

@@ -90,14 +90,19 @@ const SOURCE_ROOT_PATHS = new Set([
   "source/AGENTS.md",
   "source/LICENSE",
   "source/README.md",
+  "source/config/foundation-independent-reviewer-identity.v1.json",
+  "source/config/foundation-release-identity.v1.json",
+  "source/config/foundation-release-key-helper-compatibility.v1.json",
+  "source/config/foundation-release-key-provisioning-receipt.v1.json",
   "source/package.json",
   "source/pnpm-workspace.yaml",
   "source/tsconfig.json",
   "source/vitest.config.ts",
 ]);
-const SOURCE_EXTENSION_PATTERN = /\.(?:cjs|css|html|js|json|md|mjs|sql|toml|ts|tsx|txt|yaml|yml)$/;
+const SOURCE_EXTENSION_PATTERN =
+  /\.(?:cjs|css|html|js|json|md|mjs|sql|swift|toml|ts|tsx|txt|yaml|yml)$/;
 const RUNTIME_SOURCE_PATTERN =
-  /^source\/(?:apps|packages)\/[a-z0-9][a-z0-9-]{0,62}\/.+\.(?:cjs|js|mjs|ts|tsx)$/;
+  /^source\/(?:apps|packages)\/[a-z0-9][a-z0-9-]{0,62}\/.+\.(?:cjs|js|mjs|swift|ts|tsx)$/;
 const SECRET_PATTERNS = Object.freeze([
   /-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----/u,
   /\bAKIA[0-9A-Z]{16}\b/u,
@@ -277,6 +282,7 @@ function expectedMediaType(role: ReleaseArtifactRole, path: string): ReleaseArti
     return "text/markdown";
   }
   if (/\.tsx?$/.test(path)) return "text/typescript";
+  if (path.endsWith(".swift")) return "text/x-swift";
   if (path.endsWith(".json")) return "application/json";
   return "text/plain";
 }

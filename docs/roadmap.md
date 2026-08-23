@@ -10,7 +10,8 @@ Each phase produces evidence that unlocks the next. “Live” begins with bound
 
 ## Phase 0 — Foundation
 
-Status: **complete as a non-executing local foundation**
+Status: **complete as a non-executing local code foundation; this is not the
+`FOUNDATION_BUILT` readiness label**
 
 - TypeScript monorepo and local CLI.
 - Strict evidence, policy, strategy, and NFT-intent schemas.
@@ -88,4 +89,22 @@ Exit: the optional connector can be disconnected without affecting RSI's onchain
 
 ## Near-term next session
 
-Merge and verify the fail-closed foundation-ceremony wrapper, retain the resulting protected public-repository `main` CI record, then conduct the separately approved MacBook signing ceremony and independent release review. Only after those gates and explicit provisioning approval may RSI configure external checkpoint/alert resources or run the one-call X commissioning canary. Keep every paid and state-changing capability disabled.
+Complete the physical
+[Foundation Stage A v2 workflow](./production-readiness/v1/foundation-stage-a-v2.md):
+first replace the ad-hoc helper with the provisioned stable signed component in the
+[compatibility gate](./production-readiness/v1/helper-compatibility-gate.md), then
+pass its throwaway-MacBook two-prompt/alternate-client drill; only then provision the
+governance-only release key on the designated offline MacBook with a fixed intent
+that binds its platform identity and two distinct eject/remount-verified recovery
+disks. Review and pin only the nonsecret identity/receipt through protected public
+`main`, retain and visually verify fresh CI, and retain the canonical five-scope
+non-authoring review for that exact commit/tree. On the same platform-pinned
+MacBook, run the two-signature offline ceremony. Independently verify the bundle,
+receipt, readiness conclusion, detached tag bytes, report, CI/review, commit/tree,
+platform, and signer before making any readiness determination.
+
+The ceremony does not create a Git object/ref/tag or GitHub release and does not
+publish or deploy. Those are separate explicit decisions. Only after the Stage A
+gate actually passes and later provisioning is separately approved may RSI
+configure external checkpoint/alert resources or run the one-call X commissioning
+canary. Keep every paid and state-changing capability disabled.

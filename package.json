@@ -1,6 +1,6 @@
 {
   "name": "rsi",
-  "version": "0.0.0",
+  "version": "0.1.0-foundation.1",
   "private": true,
   "description": "Public Recursive Self-Improvement project: a gated, read-only market research observer.",
   "repository": {
@@ -31,6 +31,9 @@
     "demo:ingestion": "pnpm --filter @rsi/cli ingestion",
     "demo:pipeline": "pnpm --filter @rsi/cli pipeline",
     "foundation:ceremony": "pnpm --filter @rsi/release-ceremony run ceremony",
+    "foundation:ci-retain": "pnpm --filter @rsi/release-ceremony run ci-retain",
+    "foundation:key-provision": "pnpm --filter @rsi/release-key-provisioning run provision",
+    "foundation:verify": "pnpm --filter @rsi/release-ceremony run verify",
     "operator": "pnpm --filter @rsi/cli run operator --",
     "operator:demo": "pnpm --filter @rsi/cli run operator -- --seed",
     "preflight": "pnpm --filter @rsi/preflight run preflight",
