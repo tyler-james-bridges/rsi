@@ -108,7 +108,7 @@ export function makeFixture(): Fixture {
       publicKeyFingerprintSha256: sha256(publicKeyDer),
     }),
     totalArtifactBytes: artifacts.reduce((total, artifact) => total + artifact.sizeBytes, 0),
-    version: 1,
+    version: 2,
   });
   const stateEvidenceManifestEnvelope = Object.freeze({
     manifest: stateEvidenceManifest,
@@ -151,7 +151,7 @@ export function makeFixture(): Fixture {
       ] as const),
       sessionId: SESSION_ID,
       signerFingerprintSha256: sha256(publicKeyDer),
-      version: 1,
+      version: 2,
     }),
     retention: "session-30d",
     sessionId: SESSION_ID,

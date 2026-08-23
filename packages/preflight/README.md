@@ -4,8 +4,14 @@ Strictly read-only host and runtime observations for RSI profiles. Preflight rep
 policy status; it never remediates the host, changes settings, makes network requests, or reads a
 credential value.
 
+> [!IMPORTANT]
+> This package preserves an optional high-assurance compatibility profile from the earlier design.
+> Its all-provider `production-observer` result does not define or block `READ_CANARY`, paid-read,
+> or human-confirmed execution readiness under the active single-machine production path. The new
+> staged runtime must use capability-specific acceptance instead.
+
 ```bash
-pnpm preflight -- --profile production-observer --json
+pnpm --filter @rsi/preflight preflight -- --profile production-observer --json
 ```
 
 The CLI accepts `observer` as a convenience alias but always emits the canonical

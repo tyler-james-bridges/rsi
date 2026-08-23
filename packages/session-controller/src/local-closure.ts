@@ -46,7 +46,7 @@ export interface VerifiedLocalClosureResultV1 {
 }
 
 /**
- * Derives every local acceptance fact available in Stage A from genuine authenticated stores.
+ * Derives every locally available acceptance fact from genuine authenticated stores.
  * Missing or failed evidence is recorded as a failed lifecycle transition; details are collapsed.
  */
 export async function verifyAndRecordLocalClosure(

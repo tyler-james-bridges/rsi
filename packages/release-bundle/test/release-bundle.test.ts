@@ -84,7 +84,7 @@ describe("signed release bundle", () => {
       releaseVersion: RELEASE_VERSION,
       requiredCompanionArtifacts: ["sanitized-state-evidence", "sanitized-event-archive"],
       status: "verified-restorable-release-component",
-      version: 1,
+      version: 2,
     });
     expect(report.artifactCount).toBe(fixture.artifacts.length);
     expect(receipt.requiredCompanionArtifacts).toEqual([
@@ -610,13 +610,13 @@ function makeArtifacts(
       "runbooks/README.md",
       "runbook",
       "text/markdown",
-      `# Observer runbooks\n\n${Array.from({ length: 19 }, (_, index) => `RB-${String(index + 1).padStart(2, "0")}: sanitized procedure`).join("\n")}\n`,
+      `# Recovery runbooks\n\n${Array.from({ length: 19 }, (_, index) => `RB-${String(index + 1).padStart(2, "0")}: sanitized procedure`).join("\n")}\n`,
     ),
     artifact(
-      "recovery/observer-restore.md",
+      "recovery/README.md",
       "recovery-procedure",
       "text/markdown",
-      "# Observer restore\n\nRSI-RECOVERY-PROCEDURE-V1\nVERIFY-BEFORE-RESTORE\nNO-SECRET-RESTORE\nNEW-LINEAGE-REQUIRED\n",
+      "# Recovery procedure\n\nRSI-RECOVERY-PROCEDURE-V1\nVERIFY-BEFORE-RESTORE\nNO-SECRET-RESTORE\nNEW-LINEAGE-REQUIRED\n",
     ),
     artifact(
       "release/sbom.cdx.json",

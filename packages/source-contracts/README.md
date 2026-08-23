@@ -1,6 +1,6 @@
 # RSI marketplace and chain source contracts
 
-`@rsi/source-contracts` is an offline-only Stage A package. It contains no `fetch`, WebSocket,
+`@rsi/source-contracts` is an offline-only safety package. It contains no `fetch`, WebSocket,
 credential, environment-variable, retry, provider SDK, or filesystem implementation. It prepares
 credential-free request descriptors and validates bounded synthetic response fixtures so later
 commissioning has an exact contract to test before any transport can be enabled.

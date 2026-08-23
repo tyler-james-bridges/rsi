@@ -3,13 +3,19 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const tsxCli = fileURLToPath(new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url));
+const networkGuardSmoke = fileURLToPath(new URL("network-guard-smoke.mjs", import.meta.url));
 const childEnvironment = Object.freeze({
   CI: "1",
   LANG: "C",
   LC_ALL: "C",
   NO_COLOR: "1",
+  ...(process.env.NODE_OPTIONS === undefined ? {} : { NODE_OPTIONS: process.env.NODE_OPTIONS }),
   PATH: process.env.PATH ?? "/usr/bin:/bin",
+  ...(process.env.TZ === undefined ? {} : { TZ: process.env.TZ }),
 });
+
+const arguments_ = process.argv.slice(2);
+const requireNetworkGuard = arguments_.length === 1 && arguments_[0] === "--require-network-guard";
 
 function run(sourcePath) {
   const result = spawnSync(process.execPath, [tsxCli, sourcePath], {
@@ -28,8 +34,29 @@ function run(sourcePath) {
   }
 }
 
-let phase = "policy";
+function verifyNetworkGuard() {
+  const result = spawnSync(process.execPath, [networkGuardSmoke], {
+    cwd: root,
+    encoding: "utf8",
+    env: childEnvironment,
+    maxBuffer: 2 * 1024 * 1024,
+    shell: false,
+    timeout: 20_000,
+  });
+  if (result.status !== 0) throw new Error("demo child network guard failed");
+}
+
+let phase = "arguments";
 try {
+  if (arguments_.length > 0 && !requireNetworkGuard) {
+    throw new Error("unsupported offline demo argument");
+  }
+  if (requireNetworkGuard) {
+    phase = "network guard";
+    verifyNetworkGuard();
+  }
+
+  phase = "policy";
   const policy = run("apps/cli/src/index.ts");
   if (typeof policy.approved !== "boolean" || !Array.isArray(policy.reasons)) {
     throw new Error("demo emitted an invalid policy decision");

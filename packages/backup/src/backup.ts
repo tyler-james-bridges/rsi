@@ -22,7 +22,7 @@ import type {
  * Creates one immutable sanitized state-evidence component. The returned receipt
  * must be retained independently to make later rollback/truncation detectable.
  * This does not create the sanitized event archive or signed release bundle
- * required to satisfy complete OBS-REC-003 recovery.
+ * required to form a complete higher-assurance recovery set.
  */
 export async function createSanitizedStateEvidence(
   optionsValue: CreateSanitizedStateEvidenceOptions,

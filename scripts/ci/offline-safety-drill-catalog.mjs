@@ -1,4 +1,5 @@
-export const STAGE_A_DRILLS = Object.freeze([
+// Closed catalog used by the network-denied offline safety gate.
+export const OFFLINE_SAFETY_DRILLS = Object.freeze([
   Object.freeze({
     id: "D01",
     evidencePath: "packages/x-collector/test/request-and-transport.test.ts",

@@ -122,7 +122,7 @@ export const OPERATOR_DASHBOARD_HTML = `<!doctype html>
     </main>
 
     <footer>
-      <span>RSI Observer v1</span>
+      <span>RSI Local</span>
       <span>Loopback only · no financial authority</span>
     </footer>
     <script src="/operator.js" defer></script>

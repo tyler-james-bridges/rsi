@@ -57,7 +57,7 @@ beforeEach(() => {
     signerFingerprintSha256: SIGNER_FINGERPRINT,
     status: "verified-evidence-component",
     totalArtifactBytes: 100,
-    version: 1,
+    version: 2,
   });
   verifierMocks.eventArchive.mockReset().mockResolvedValue({
     archiveId: "44444444-4444-4444-8444-444444444444",
@@ -93,7 +93,7 @@ beforeEach(() => {
     signerFingerprintSha256: SIGNER_FINGERPRINT,
     status: "verified-restorable-release-component",
     totalArtifactBytes: 1_000,
-    version: 1,
+    version: 2,
   });
 });
 

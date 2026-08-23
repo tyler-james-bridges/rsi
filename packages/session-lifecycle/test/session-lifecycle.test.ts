@@ -124,7 +124,7 @@ function passingExternal(): SessionExternalVerificationEvidenceV1 {
     evidenceHash: EVIDENCE_HASH,
     externalAnchor: "verified",
     retainedSuffix: "verified",
-    macBookVerification: "verified",
+    independentVerification: "verified",
   };
 }
 
@@ -239,7 +239,7 @@ function accept(
 }
 
 describe("SqliteSessionCoordinator", () => {
-  it("executes the complete Observer v1 lifecycle and composes only closed acceptance evidence", () => {
+  it("executes the complete compatibility lifecycle and composes only closed acceptance evidence", () => {
     const target = fixture();
     expect(target.recovery).toEqual({
       cleanupRequired: false,
@@ -654,7 +654,7 @@ describe("SqliteSessionCoordinator", () => {
     });
     expect(
       externalTarget.coordinator.recordExternalVerification({
-        evidence: { ...passingExternal(), macBookVerification: "unknown" },
+        evidence: { ...passingExternal(), independentVerification: "unknown" },
         sessionId: externalId,
         verifiedAt: timeline().external,
       }),

@@ -110,7 +110,7 @@ export interface SessionExternalVerificationEvidenceV1 {
   readonly evidenceHash: string;
   readonly externalAnchor: VerificationStatus;
   readonly retainedSuffix: VerificationStatus;
-  readonly macBookVerification: VerificationStatus;
+  readonly independentVerification: VerificationStatus;
 }
 
 export interface SessionCostEvidenceV1 {
@@ -146,7 +146,7 @@ export interface SessionAcceptanceEvidenceV1 {
   readonly localCheckpoint: "verified";
   readonly externalAnchor: "verified";
   readonly retainedSuffix: "verified";
-  readonly macBookVerification: "verified";
+  readonly independentVerification: "verified";
   readonly recoveryArtifacts: Readonly<{
     sanitizedStateEvidence: Readonly<{
       archiveSha256: string;

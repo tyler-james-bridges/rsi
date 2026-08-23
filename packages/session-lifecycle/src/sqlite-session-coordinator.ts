@@ -317,7 +317,7 @@ function externalEvidencePasses(evidence: SessionExternalVerificationEvidenceV1)
   return (
     evidence.externalAnchor === "verified" &&
     evidence.retainedSuffix === "verified" &&
-    evidence.macBookVerification === "verified"
+    evidence.independentVerification === "verified"
   );
 }
 
@@ -386,7 +386,7 @@ function acceptanceEvidence(record: SessionRecordV1): SessionAcceptanceEvidenceV
     localCheckpoint: "verified",
     externalAnchor: "verified",
     retainedSuffix: "verified",
-    macBookVerification: "verified",
+    independentVerification: "verified",
     recoveryArtifacts: {
       sanitizedStateEvidence: {
         archiveSha256: stateEvidenceArchiveSha256,
