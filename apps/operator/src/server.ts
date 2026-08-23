@@ -1,4 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { BlockList, isIP } from "node:net";
+import { types as utilTypes } from "node:util";
+
+import { ResearchProposalV1Schema, type ResearchProposalV1 } from "@rsi/domain/proposals";
+import { RuntimeConflictError } from "@rsi/runtime";
 
 import {
   OPERATOR_DASHBOARD_CSS,
@@ -34,6 +39,71 @@ export interface OperatorSnapshotProvider {
   getDecision(id: string): Promise<unknown | null> | unknown | null;
 }
 
+export type RuntimeOperatorAction =
+  "runtime-enter-propose-only" | "runtime-enter-research" | "runtime-stop";
+
+export type RuntimeOperatorControlCommand =
+  | Readonly<{ action: "runtime-stop"; requestId: string }>
+  | Readonly<{
+      action: "runtime-enter-research";
+      expectedMode: "PROPOSE_ONLY" | "STOPPED";
+      expectedRevision: number;
+      requestId: string;
+    }>
+  | Readonly<{
+      action: "runtime-enter-propose-only";
+      expectedMode: "RESEARCH";
+      expectedRevision: number;
+      requestId: string;
+    }>;
+
+export interface OperatorRuntimeProvider {
+  readonly supportedActions: readonly RuntimeOperatorAction[];
+  executeRuntimeControl(command: RuntimeOperatorControlCommand): Promise<unknown> | unknown;
+  getRuntimeSnapshot(): Promise<unknown> | unknown;
+}
+
+export interface OperatorResearchProvider {
+  getResearchProjection(): Promise<unknown> | unknown;
+}
+
+export interface OperatorResearchProposalRecordV1 {
+  readonly schemaVersion: 1;
+  readonly eventHash: string;
+  readonly eventSequence: number;
+  readonly persistedAt: string;
+  readonly proposal: Readonly<ResearchProposalV1>;
+}
+
+export interface OperatorResearchProjectionV1 {
+  readonly schemaVersion: 1;
+  readonly candidateCount: number;
+  readonly abstentionCount: number;
+  readonly proposals: readonly Readonly<OperatorResearchProposalRecordV1>[];
+}
+
+export interface OperatorRuntimeSnapshotV1 {
+  readonly schemaVersion: 1;
+  readonly mode: "PROPOSE_ONLY" | "RESEARCH" | "STOPPED";
+  readonly revision: number;
+  readonly modeChangedAt: string;
+  readonly processInstanceId: string;
+  readonly auditHead: Readonly<{
+    sequence: number;
+    hash: string;
+  }>;
+  readonly capabilities: Readonly<{
+    researchCollection: boolean;
+    proposalPersistence: boolean;
+    policyApproval: false;
+    paidRead: false;
+    transactionBroadcast: false;
+    walletSign: false;
+    executionAdapter: false;
+    externalPublish: false;
+  }>;
+}
+
 export type OperatorControlCommand =
   | Readonly<{ action: "plan"; sessionId: string }>
   | Readonly<{
@@ -67,6 +137,10 @@ export interface OperatorServerOptions {
   readonly port?: number;
   /** Omit to serve the dashboard in read-only mode. */
   readonly controls?: OperatorControlProvider;
+  /** Omit when the persisted Stage 0 runtime is not configured. */
+  readonly runtime?: OperatorRuntimeProvider;
+  /** Omit when no content-free research ledger is configured. */
+  readonly research?: OperatorResearchProvider;
 }
 
 export interface RunningOperatorServer {
@@ -149,6 +223,13 @@ const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SAFE_EVENT_TYPE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 const UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const LOWER_HEX_64 = /^[0-9a-f]{64}$/;
+const RUNTIME_MODES = new Set(["STOPPED", "RESEARCH", "PROPOSE_ONLY"]);
+const RUNTIME_ACTIONS = new Set<RuntimeOperatorAction>([
+  "runtime-enter-propose-only",
+  "runtime-enter-research",
+  "runtime-stop",
+]);
 
 class HttpError extends Error {
   constructor(
@@ -158,6 +239,288 @@ class HttpError extends Error {
   ) {
     super(message);
   }
+}
+
+function strictDataRecord(
+  value: unknown,
+  expectedKeys: readonly string[],
+  label: string,
+): Record<string, unknown> {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    utilTypes.isProxy(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    throw new TypeError(`${label} is invalid`);
+  }
+  const keys = Reflect.ownKeys(value);
+  if (
+    keys.length !== expectedKeys.length ||
+    keys.some((key) => typeof key !== "string" || !expectedKeys.includes(key))
+  ) {
+    throw new TypeError(`${label} is invalid`);
+  }
+  const record: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of keys) {
+    if (typeof key !== "string") throw new TypeError(`${label} is invalid`);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError(`${label} is invalid`);
+    }
+    record[key] = descriptor.value;
+  }
+  return record;
+}
+
+function canonicalTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || !UTC_TIMESTAMP.test(value)) return false;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
+}
+
+/**
+ * Accepts only the closed, content-free projection produced by the persisted
+ * runtime controller. This deliberately rejects provider additions rather than
+ * trying to redact arbitrary external text after the fact.
+ */
+export function parseOperatorRuntimeSnapshot(value: unknown): OperatorRuntimeSnapshotV1 {
+  const record = strictDataRecord(
+    value,
+    [
+      "schemaVersion",
+      "mode",
+      "revision",
+      "modeChangedAt",
+      "processInstanceId",
+      "auditHead",
+      "capabilities",
+    ],
+    "Runtime snapshot",
+  );
+  if (
+    record.schemaVersion !== 1 ||
+    typeof record.mode !== "string" ||
+    !RUNTIME_MODES.has(record.mode) ||
+    !Number.isSafeInteger(record.revision) ||
+    Number(record.revision) < 1 ||
+    !canonicalTimestamp(record.modeChangedAt) ||
+    typeof record.processInstanceId !== "string" ||
+    !UUID_V4.test(record.processInstanceId)
+  ) {
+    throw new TypeError("Runtime snapshot is invalid");
+  }
+
+  const auditHead = strictDataRecord(record.auditHead, ["sequence", "hash"], "Runtime audit head");
+  if (
+    !Number.isSafeInteger(auditHead.sequence) ||
+    Number(auditHead.sequence) < 1 ||
+    typeof auditHead.hash !== "string" ||
+    !LOWER_HEX_64.test(auditHead.hash)
+  ) {
+    throw new TypeError("Runtime audit head is invalid");
+  }
+
+  const capabilities = strictDataRecord(
+    record.capabilities,
+    [
+      "researchCollection",
+      "proposalPersistence",
+      "policyApproval",
+      "paidRead",
+      "transactionBroadcast",
+      "walletSign",
+      "executionAdapter",
+      "externalPublish",
+    ],
+    "Runtime capabilities",
+  );
+  if (
+    typeof capabilities.researchCollection !== "boolean" ||
+    typeof capabilities.proposalPersistence !== "boolean" ||
+    capabilities.policyApproval !== false ||
+    capabilities.paidRead !== false ||
+    capabilities.transactionBroadcast !== false ||
+    capabilities.walletSign !== false ||
+    capabilities.executionAdapter !== false ||
+    capabilities.externalPublish !== false
+  ) {
+    throw new TypeError("Runtime capabilities are invalid");
+  }
+  const expectedResearch = record.mode !== "STOPPED";
+  const expectedProposal = record.mode === "PROPOSE_ONLY";
+  if (
+    capabilities.researchCollection !== expectedResearch ||
+    capabilities.proposalPersistence !== expectedProposal
+  ) {
+    throw new TypeError("Runtime mode and capabilities disagree");
+  }
+
+  return Object.freeze({
+    schemaVersion: 1,
+    mode: record.mode as OperatorRuntimeSnapshotV1["mode"],
+    revision: Number(record.revision),
+    modeChangedAt: record.modeChangedAt,
+    processInstanceId: record.processInstanceId,
+    auditHead: Object.freeze({
+      sequence: Number(auditHead.sequence),
+      hash: auditHead.hash,
+    }),
+    capabilities: Object.freeze({
+      researchCollection: capabilities.researchCollection,
+      proposalPersistence: capabilities.proposalPersistence,
+      policyApproval: false,
+      paidRead: false,
+      transactionBroadcast: false,
+      walletSign: false,
+      executionAdapter: false,
+      externalPublish: false,
+    }),
+  });
+}
+
+function assertPlainDataTree(value: unknown, ancestors: WeakSet<object>): void {
+  if (value === null) return;
+  if (typeof value !== "object") {
+    if (
+      typeof value !== "string" &&
+      typeof value !== "number" &&
+      typeof value !== "boolean" &&
+      value !== undefined
+    ) {
+      throw new TypeError("Research projection is invalid");
+    }
+    return;
+  }
+  if (utilTypes.isProxy(value) || ancestors.has(value)) {
+    throw new TypeError("Research projection is invalid");
+  }
+  if (Array.isArray(value)) {
+    const keys = Reflect.ownKeys(value);
+    if (
+      keys.length !== value.length + 1 ||
+      keys.at(-1) !== "length" ||
+      keys.slice(0, -1).some((key, index) => key !== String(index))
+    ) {
+      throw new TypeError("Research projection is invalid");
+    }
+    ancestors.add(value);
+    try {
+      for (const item of value) assertPlainDataTree(item, ancestors);
+    } finally {
+      ancestors.delete(value);
+    }
+    return;
+  }
+  if (Object.getPrototypeOf(value) !== Object.prototype) {
+    throw new TypeError("Research projection is invalid");
+  }
+  ancestors.add(value);
+  try {
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") throw new TypeError("Research projection is invalid");
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new TypeError("Research projection is invalid");
+      }
+      assertPlainDataTree(descriptor.value, ancestors);
+    }
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function deepFreezePlainData<T>(value: T): Readonly<T> {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const item of Object.values(value)) deepFreezePlainData(item);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/** Validates the complete content-free research projection at the HTTP boundary. */
+export function parseOperatorResearchProjection(value: unknown): OperatorResearchProjectionV1 {
+  const record = strictDataRecord(
+    value,
+    ["schemaVersion", "candidateCount", "abstentionCount", "proposals"],
+    "Research projection",
+  );
+  if (
+    record.schemaVersion !== 1 ||
+    !Number.isSafeInteger(record.candidateCount) ||
+    Number(record.candidateCount) < 0 ||
+    !Number.isSafeInteger(record.abstentionCount) ||
+    Number(record.abstentionCount) < 0 ||
+    !Array.isArray(record.proposals) ||
+    record.proposals.length > 100
+  ) {
+    throw new TypeError("Research projection is invalid");
+  }
+
+  const proposals: OperatorResearchProposalRecordV1[] = [];
+  const proposalIds = new Set<string>();
+  const eventHashes = new Set<string>();
+  let previousSequence = Number.POSITIVE_INFINITY;
+  let projectedCandidates = 0;
+  let projectedAbstentions = 0;
+
+  for (const value of record.proposals) {
+    const proposalRecord = strictDataRecord(
+      value,
+      ["schemaVersion", "eventHash", "eventSequence", "persistedAt", "proposal"],
+      "Research proposal record",
+    );
+    if (
+      proposalRecord.schemaVersion !== 1 ||
+      typeof proposalRecord.eventHash !== "string" ||
+      !LOWER_HEX_64.test(proposalRecord.eventHash) ||
+      eventHashes.has(proposalRecord.eventHash) ||
+      !Number.isSafeInteger(proposalRecord.eventSequence) ||
+      Number(proposalRecord.eventSequence) < 1 ||
+      Number(proposalRecord.eventSequence) >= previousSequence ||
+      !canonicalTimestamp(proposalRecord.persistedAt)
+    ) {
+      throw new TypeError("Research proposal record is invalid");
+    }
+    assertPlainDataTree(proposalRecord.proposal, new WeakSet<object>());
+    const parsed = ResearchProposalV1Schema.safeParse(proposalRecord.proposal);
+    if (!parsed.success) throw new TypeError("Research proposal is invalid");
+    if (
+      proposalIds.has(parsed.data.proposalId) ||
+      Date.parse(proposalRecord.persistedAt) < Date.parse(parsed.data.createdAt) ||
+      Date.parse(proposalRecord.persistedAt) > Date.parse(parsed.data.expiresAt)
+    ) {
+      throw new TypeError("Research proposal record is invalid");
+    }
+
+    previousSequence = Number(proposalRecord.eventSequence);
+    eventHashes.add(proposalRecord.eventHash);
+    proposalIds.add(parsed.data.proposalId);
+    if (parsed.data.disposition.kind === "candidate") projectedCandidates += 1;
+    else projectedAbstentions += 1;
+    proposals.push(
+      Object.freeze({
+        schemaVersion: 1,
+        eventHash: proposalRecord.eventHash,
+        eventSequence: Number(proposalRecord.eventSequence),
+        persistedAt: proposalRecord.persistedAt,
+        proposal: deepFreezePlainData(parsed.data),
+      }),
+    );
+  }
+
+  const candidateCount = Number(record.candidateCount);
+  const abstentionCount = Number(record.abstentionCount);
+  if (candidateCount < projectedCandidates || abstentionCount < projectedAbstentions) {
+    throw new TypeError("Research projection counts are invalid");
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    candidateCount,
+    abstentionCount,
+    proposals: Object.freeze(proposals),
+  });
 }
 
 function normalizedFieldName(name: string): string {
@@ -214,6 +577,7 @@ function projectValue(
       break;
   }
 
+  if (utilTypes.isProxy(value)) return undefined;
   if (depth >= MAX_PROJECTION_DEPTH) return undefined;
   if (value instanceof Date) {
     const timestamp = value.getTime();
@@ -371,6 +735,29 @@ function outputCursor(value: unknown): string | null {
   return typeof value === "string" && isSafeCursor(value) ? value : null;
 }
 
+const LOOPBACK_ADDRESSES = new BlockList();
+LOOPBACK_ADDRESSES.addSubnet("127.0.0.0", 8, "ipv4");
+LOOPBACK_ADDRESSES.addAddress("::1", "ipv6");
+
+function assertLoopbackLocalSocket(request: IncomingMessage): void {
+  const localAddress = request.socket.localAddress ?? "";
+  const family = isIP(localAddress);
+  const isLoopback =
+    family === 4
+      ? LOOPBACK_ADDRESSES.check(localAddress, "ipv4")
+      : family === 6
+        ? LOOPBACK_ADDRESSES.check(localAddress, "ipv6")
+        : false;
+
+  if (!isLoopback) {
+    throw new HttpError(
+      403,
+      "loopback_socket_required",
+      "Operator requests require a loopback socket.",
+    );
+  }
+}
+
 function assertLoopbackHost(request: IncomingMessage): string {
   const hostHeaders: string[] = [];
   for (let index = 0; index < request.rawHeaders.length; index += 2) {
@@ -430,8 +817,53 @@ function assertExactKeys(record: Record<string, unknown>, keys: readonly string[
   }
 }
 
-function parseControlCommand(value: unknown): OperatorControlCommand {
+function parseControlCommand(
+  value: unknown,
+): OperatorControlCommand | RuntimeOperatorControlCommand {
   const record = exactJsonRecord(value);
+  if (record.action === "runtime-stop") {
+    assertExactKeys(record, ["action", "requestId"]);
+    if (typeof record.requestId !== "string" || !UUID_V4.test(record.requestId)) {
+      badRequest("Runtime stop request id is invalid.");
+    }
+    return Object.freeze({ action: "runtime-stop", requestId: record.requestId });
+  }
+  if (record.action === "runtime-enter-research") {
+    assertExactKeys(record, ["action", "expectedMode", "expectedRevision", "requestId"]);
+    if (
+      (record.expectedMode !== "STOPPED" && record.expectedMode !== "PROPOSE_ONLY") ||
+      !Number.isSafeInteger(record.expectedRevision) ||
+      Number(record.expectedRevision) < 1 ||
+      typeof record.requestId !== "string" ||
+      !UUID_V4.test(record.requestId)
+    ) {
+      badRequest("Runtime research transition is invalid.");
+    }
+    return Object.freeze({
+      action: "runtime-enter-research",
+      expectedMode: record.expectedMode,
+      expectedRevision: Number(record.expectedRevision),
+      requestId: record.requestId,
+    });
+  }
+  if (record.action === "runtime-enter-propose-only") {
+    assertExactKeys(record, ["action", "expectedMode", "expectedRevision", "requestId"]);
+    if (
+      record.expectedMode !== "RESEARCH" ||
+      !Number.isSafeInteger(record.expectedRevision) ||
+      Number(record.expectedRevision) < 1 ||
+      typeof record.requestId !== "string" ||
+      !UUID_V4.test(record.requestId)
+    ) {
+      badRequest("Runtime proposal transition is invalid.");
+    }
+    return Object.freeze({
+      action: "runtime-enter-propose-only",
+      expectedMode: "RESEARCH",
+      expectedRevision: Number(record.expectedRevision),
+      requestId: record.requestId,
+    });
+  }
   if (record.action === "plan") {
     assertExactKeys(record, ["action", "sessionId"]);
     if (typeof record.sessionId !== "string" || !UUID_V4.test(record.sessionId)) {
@@ -511,6 +943,31 @@ function parseControlCommand(value: unknown): OperatorControlCommand {
   badRequest("Control action is unsupported.");
 }
 
+function isRuntimeControlCommand(
+  command: OperatorControlCommand | RuntimeOperatorControlCommand,
+): command is RuntimeOperatorControlCommand {
+  return RUNTIME_ACTIONS.has(command.action as RuntimeOperatorAction);
+}
+
+function validatedRuntimeActions(
+  runtime: OperatorRuntimeProvider,
+): readonly RuntimeOperatorAction[] {
+  const actions = runtime.supportedActions;
+  if (
+    !Array.isArray(actions) ||
+    utilTypes.isProxy(actions) ||
+    actions.length > RUNTIME_ACTIONS.size ||
+    new Set(actions).size !== actions.length ||
+    actions.some(
+      (action) =>
+        typeof action !== "string" || !RUNTIME_ACTIONS.has(action as RuntimeOperatorAction),
+    )
+  ) {
+    throw new TypeError("Runtime control capabilities are invalid");
+  }
+  return Object.freeze([...actions]) as readonly RuntimeOperatorAction[];
+}
+
 async function readControlBody(request: IncomingMessage): Promise<unknown> {
   const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType !== "application/json") {
@@ -556,7 +1013,10 @@ async function route(
   response: ServerResponse,
   provider: OperatorSnapshotProvider,
   controls: OperatorControlProvider | undefined,
+  runtime: OperatorRuntimeProvider | undefined,
+  research: OperatorResearchProvider | undefined,
 ): Promise<void> {
+  assertLoopbackLocalSocket(request);
   const origin = assertLoopbackHost(request);
   const target = request.url ?? "/";
   if (target.length > MAX_REQUEST_TARGET_LENGTH) {
@@ -566,11 +1026,22 @@ async function route(
 
   if (request.method === "POST" && url.pathname === "/api/control") {
     if (url.search !== "") badRequest("The control route does not accept query parameters.");
+    assertSameOriginControl(request, origin);
+    const command = parseControlCommand(await readControlBody(request));
+    if (isRuntimeControlCommand(command)) {
+      if (runtime === undefined) {
+        throw new HttpError(501, "runtime_unavailable", "Runtime controls are not configured.");
+      }
+      if (!validatedRuntimeActions(runtime).includes(command.action)) {
+        throw new HttpError(501, "control_unavailable", "This local control is not configured.");
+      }
+      const result = parseOperatorRuntimeSnapshot(await runtime.executeRuntimeControl(command));
+      sendJson(response, 200, { result });
+      return;
+    }
     if (controls === undefined) {
       throw new HttpError(501, "controls_unavailable", "Session controls are not configured.");
     }
-    assertSameOriginControl(request, origin);
-    const command = parseControlCommand(await readControlBody(request));
     if (!controls.supportedActions.includes(command.action)) {
       throw new HttpError(501, "control_unavailable", "This local control is not configured.");
     }
@@ -620,12 +1091,46 @@ async function route(
     return;
   }
 
+  if (url.pathname === "/api/runtime") {
+    if (url.search !== "") badRequest("The runtime route does not accept query parameters.");
+    if (runtime === undefined) {
+      throw new HttpError(501, "runtime_unavailable", "The persisted runtime is not configured.");
+    }
+    const snapshot = parseOperatorRuntimeSnapshot(await runtime.getRuntimeSnapshot());
+    sendJson(response, 200, { financialAuthority: false, runtime: snapshot });
+    return;
+  }
+
+  if (url.pathname === "/api/research") {
+    if (url.search !== "") badRequest("The research route does not accept query parameters.");
+    if (research === undefined) {
+      throw new HttpError(
+        501,
+        "research_unavailable",
+        "The content-free research projection is not configured.",
+      );
+    }
+    const projection = parseOperatorResearchProjection(await research.getResearchProjection());
+    sendJson(response, 200, { research: projection });
+    return;
+  }
+
   if (url.pathname === "/api/control/capabilities") {
     if (url.search !== "") badRequest("The capabilities route does not accept query parameters.");
+    const legacyActions = controls?.supportedActions ?? [];
+    const runtimeActions = runtime === undefined ? [] : validatedRuntimeActions(runtime);
     sendJson(response, 200, {
       controls: {
-        actions: controls?.supportedActions ?? [],
-        enabled: controls !== undefined,
+        actions: [...legacyActions, ...runtimeActions],
+        enabled: controls !== undefined || runtime !== undefined,
+        legacy: {
+          actions: legacyActions,
+          enabled: controls !== undefined,
+        },
+        runtime: {
+          actions: runtimeActions,
+          enabled: runtime !== undefined,
+        },
       },
     });
     return;
@@ -664,9 +1169,11 @@ async function route(
 export function createOperatorServer(
   provider: OperatorSnapshotProvider,
   controls?: OperatorControlProvider,
+  runtime?: OperatorRuntimeProvider,
+  research?: OperatorResearchProvider,
 ): Server {
   const server = createServer((request, response) => {
-    void route(request, response, provider, controls).catch((error: unknown) => {
+    void route(request, response, provider, controls, runtime, research).catch((error: unknown) => {
       if (response.headersSent) {
         response.destroy();
         return;
@@ -674,6 +1181,15 @@ export function createOperatorServer(
       if (error instanceof HttpError) {
         sendJson(response, error.status, {
           error: { code: error.code, message: error.message },
+        });
+        return;
+      }
+      if (error instanceof RuntimeConflictError) {
+        sendJson(response, 409, {
+          error: {
+            code: "runtime_conflict",
+            message: "Runtime mode changed; refresh and try again.",
+          },
         });
         return;
       }
@@ -712,7 +1228,12 @@ export async function startOperatorServer(
     throw new RangeError("Operator server port must be an integer from 0 through 65535.");
   }
 
-  const server = createOperatorServer(provider, options.controls);
+  const server = createOperatorServer(
+    provider,
+    options.controls,
+    options.runtime,
+    options.research,
+  );
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => {
       server.off("listening", onListening);

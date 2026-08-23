@@ -41,7 +41,7 @@ function run(label, command, args, timeout) {
 async function verifyCatalog() {
   const ids = new Set();
   for (const drill of OFFLINE_SAFETY_DRILLS) {
-    if (!/^D(?:0[1-9]|1[0-9]|20)$/u.test(drill.id) || ids.has(drill.id)) {
+    if (!/^D(?:0[1-9]|1[0-9]|2[0-4])$/u.test(drill.id) || ids.has(drill.id)) {
       throw new Error("Offline safety drill catalog identity is invalid");
     }
     ids.add(drill.id);
@@ -50,7 +50,7 @@ async function verifyCatalog() {
       throw new Error("Offline safety drill evidence declaration is stale");
     }
   }
-  if (ids.size !== 20) throw new Error("Offline safety drill catalog is incomplete");
+  if (ids.size !== 24) throw new Error("Offline safety drill catalog is incomplete");
 }
 
 try {

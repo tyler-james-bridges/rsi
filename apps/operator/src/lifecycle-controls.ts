@@ -111,8 +111,8 @@ export function isSessionLifecycleOperatorControls(
   return (
     typeof value === "object" &&
     value !== null &&
-    Object.getPrototypeOf(value) === Object.prototype &&
-    AUTHENTIC_LIFECYCLE_CONTROLS.has(value)
+    AUTHENTIC_LIFECYCLE_CONTROLS.has(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
   );
 }
 
@@ -122,8 +122,8 @@ function exactOptions(
   if (
     typeof value !== "object" ||
     value === null ||
-    Object.getPrototypeOf(value) !== Object.prototype ||
-    utilTypes.isProxy(value)
+    utilTypes.isProxy(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
   ) {
     throw new TypeError("Lifecycle control options are invalid");
   }

@@ -13,8 +13,11 @@ steps below.
 ## Current authority
 
 RSI currently has no live transaction authority. State-changing adapters are disabled, financial
-credentials are absent, activation caps are unset, and the operator UI is loopback-only. The first
-usable release is **live research and proposals**, not autonomous trading.
+credentials are absent, activation caps are unset, and the operator UI is loopback-only. Its
+persisted Stage 0 runtime always boots into `STOPPED`; `RESEARCH` and `PROPOSE_ONLY` grant only
+one-shot collection and non-executable proposal-persistence boundaries. Payment, signing, policy
+approval, execution, broadcast, and publication are permanently denied. No `READ_CANARY` has
+been commissioned yet.
 
 ## Compatibility components are not gates
 
@@ -65,8 +68,10 @@ reduces available authority; it does not create a hardware-purchase requirement.
   research and execution wallets are separate software accounts with only expendable balances.
 - Keep one durable authorization writer. Activation limits default to zero or unset, and policy,
   allowlists, caps, logs, tests, and emergency controls are outside the self-improvement loop.
-- Persist a fail-closed `STOPPED` state and check it before collection, proposal, approval, and
-  broadcast. Record approval, payment, transaction, fee, position, and reconciliation receipts.
+- The Stage 0 runtime persists fail-closed `STOPPED`, checks a revision-bound one-shot permit
+  before collection or proposal persistence, and records denied attempts. Every future approval,
+  payment, signing, execution, and broadcast component must integrate the same STOP boundary and
+  retain its own exact receipts before that capability can be commissioned.
 - Treat all X posts, webpages, NFT metadata, tool descriptions, manifests, and paid responses as
   hostile content. They may produce typed evidence and hypotheses, never credentials, policy
   changes, tool installation, calldata, or transaction authority.
@@ -104,7 +109,10 @@ repeat the bounded canary. Historical notes or social posts are not activation e
 
 ## Next build target
 
-Implement a local `STOPPED → RESEARCH → PROPOSE_ONLY` runtime using the existing quarantine,
-evidence, policy, event-store, and operator packages. Commission one supervised read source at a
-time. Only after proposals are useful and auditable should the owner fund the tiny research wallet
-for one AgentCash/x402 paid read. Capital activation values remain local and unset in source.
+Commission one supervised `READ_CANARY` source at a time on the existing Mac: X first, then
+OpenSea, then Base RPC. Immediately before each canary, verify current official authentication,
+pricing, request/response schemas, and deployed addresses; bind the exact provider attempt to a
+one-shot `research_collection` authorization; and persist only strict evidence and non-executable
+proposal scorecards. Only after proposals are useful and auditable should the owner fund the tiny
+research wallet for one AgentCash/x402 paid read. Capital activation values remain local and unset
+in source.

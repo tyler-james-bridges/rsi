@@ -41,7 +41,10 @@ RSI researches markets, converts adversarial internet activity into typed eviden
 - Three recovery components: signed state evidence, a restorable sanitized event archive, and a restorable signed release/code/runbook bundle. A genuine-store controller verifies their exact cross-bindings and local closure facts before advancing lifecycle state. Off-host encrypted backup and remote retention remain optional operator deployments.
 - A deterministic clean-tree source inventory for ordinary reviewed GitHub releases. It does not sign, tag, publish, or require a separate release device or custom release key.
 - An optional read-only compatibility preflight that reports runtime and host facts without reading secret values or changing the host. Its earlier all-provider profile is not a staged-readiness verdict.
-- A loopback-only operator dashboard/API with fixed same-origin assets, defensive headers, recursive sensitive-field redaction, and a closed set of local lifecycle controls. Without an authenticated control provider it remains read-only.
+- A signer-blind, SQLite-backed Stage 0 runtime with exact `STOPPED`, `RESEARCH`, and `PROPOSE_ONLY` modes. Every process boot persists a new STOP, transitions use compare-and-swap revisions, STOP is universal, and one-shot boundary authorizations are invalidated by any transition or restart.
+- A separate typed research ledger for non-executable proposal scorecards. It accepts only a genuine `proposal_persist` authorization in `PROPOSE_ONLY`, rejects raw or executable fields, and exposes exact assets, provenance, scam flags, bounded scores, candidates, and abstentions.
+- A loopback-only operator dashboard/API with fixed same-origin assets, defensive headers, strict runtime/research projections, and closed Stage 0 controls. STOP remains independently available when another dashboard read fails.
+- An executable module-graph gate proving the active runtime/operator path cannot reach policy approval, adapters, wallets, signers, AgentCash/x402, transaction, deployment, or arbitrary-call code. Payment, signing, execution, broadcast, policy approval, and publication are explicit permanent denials in Stage 0.
 - A signed, content-free public receipt/correction/tombstone chain with explicit approval, a 24-hour delay, retained-head rollback detection, and a browser-safe fail-closed verifier. It has no deployment or publication adapter.
 - Offline OpenSea REST/Stream and finalized Base/Robinhood Chain request contracts with strict normalized fixtures, exact asset/order correlation, block-pinned ownership/code checks, and explicit runtime/proxy code bindings. They have no transport or credentials.
 - An executable offline drill gate that runs the full suite and demos while denying external destinations at the Node process boundary. This is an application test control, not an operating-system network sandbox or provider canary.
@@ -80,24 +83,28 @@ tracked source and verifies every recorded Git object and content hash. Running 
 must produce the same result. It does not sign, tag, or publish; normal reviewed GitHub CI and
 GitHub tags/releases provide the release path.
 
-To seed a local database and inspect its read-only API:
+To start the local Stage 0 operator:
 
 ```bash
-pnpm operator:demo
+pnpm operator
 
 # In another terminal:
+curl http://127.0.0.1:8787/api/runtime
+curl http://127.0.0.1:8787/api/research
 curl http://127.0.0.1:8787/api/summary
 curl 'http://127.0.0.1:8787/api/events?limit=20'
 ```
 
-The operator service binds to IPv4 loopback and has no network authentication. Do not expose it to a network. The root page serves its fixed local dashboard; a server without a genuine lifecycle-control provider exposes no control actions. Its default database is `.local/rsi.sqlite`, which is gitignored. Stop it with `Ctrl-C`.
+The operator service binds to IPv4 loopback and has no network authentication. Do not expose it to a network. Every launch begins in persisted `STOPPED`; the dashboard can enter research, enter proposal-only mode, de-escalate, or STOP, but it has no financial authority. Runtime authority and typed research use separate gitignored databases at `.local/rsi-runtime.sqlite` and `.local/rsi-research.sqlite`. Stop it with `Ctrl-C`, which persists STOP before closing.
 
 ## Repository map
 
 ```text
-apps/cli             Safe local policy-decision demo
+apps/cli             Stage 0 operator plus isolated offline demos
 apps/operator        Loopback dashboard/API and closed local lifecycle controls
 packages/domain      Runtime schemas and EIP-712 intent format
+packages/runtime     Persisted signer-blind Stage 0 mode and boundary authority
+packages/research-ledger Typed non-executable proposal scorecards
 packages/policy      Non-self-modifying authorization kernel
 packages/engine      Recursive strategy proposal/promotion loop
 packages/adapters    Capability catalog and disabled execution interfaces
@@ -139,6 +146,6 @@ Any future paid-read and execution stages use two separate, deliberately low-bal
 - Policy spend/replay state survives a clean reopen, and SQLite serializes concurrent writers that share one database file. Separate database copies have no distributed coordinator and must never act as parallel execution authorities.
 - The X ingestion path encrypts exact response bytes and metadata before typed parsing, binds retries through the encrypted capture registry, destroys collector-owned raw copies, and reconciles pending or orphaned capture state after restart. A supervised credentialed canary remains required before the adapter can leave quarantine.
 - Recovery files can be created and verified in three closed components, and the local controller consumes their genuine verification reports. Encrypted off-host backup, remote immutable retention, and a same-Mac restore drill are not yet commissioned.
-- The complete test suite and offline drills pass when invoked with the pinned Node 24.19.0 toolchain. Host preflight remains diagnostic: it does not provision or prove provider credentials, live schemas, wallet confirmation, persisted emergency stop, or operational recovery.
+- The complete test suite and offline drills pass when invoked with the pinned Node 24.19.0 toolchain. Host preflight remains diagnostic: it does not provision or prove provider credentials, live schemas, wallet confirmation, or operational recovery. The Stage 0 runtime now provides the persisted local STOP control; later authority stages must integrate and re-test that boundary independently.
 - `node:sqlite` may emit an experimental-feature warning on supported Node releases.
 - There is no wallet, transaction signer, transaction builder, AgentCash payment, x402 request, Robinhood connection, or live-capital path in this build. All current signing code is limited to optional offchain integrity evidence; none can authorize a payment or transaction.

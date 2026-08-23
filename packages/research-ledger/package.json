@@ -1,0 +1,22 @@
+{
+  "name": "@rsi/research-ledger",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@rsi/domain": "workspace:*",
+    "@rsi/runtime": "workspace:*",
+    "@rsi/store": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}

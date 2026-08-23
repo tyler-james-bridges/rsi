@@ -13,6 +13,20 @@ RSI is one public character composed of separate capability domains. It can impr
 
 The first product is an AI agent service, not a new protocol. Agent reasoning, research, indexing, evaluation, and memory remain offchain. Existing standards and marketplaces handle identity, payments, wallets, assets, and settlement.
 
+## Active Stage 0 authority
+
+The active local process is narrower than the longer-term diagram below. A dedicated
+`@rsi/runtime` event store boots into `STOPPED` on every process start and permits only
+`research_collection` in `RESEARCH`, plus `proposal_persist` in `PROPOSE_ONLY`. Authorizations
+are genuine one-shot objects bound to the current process, mode, revision, action, and audit event.
+Payment, wallet signing, policy approval, execution-adapter use, transaction broadcast, and
+external publication are permanent denials.
+
+Non-executable proposal scorecards live in a separate research ledger. Its isolated schema has no
+action, target, selector, calldata, recipient, payment asset, spend, order, nonce, wallet, or
+signature field. The active operator module graph is mechanically checked so it cannot reach the
+future policy, adapter, wallet, x402, transaction, or deployment paths.
+
 ## Trust boundaries
 
 ```text
@@ -106,4 +120,10 @@ Recovery is split deliberately. The state-evidence component signs checkpoint, e
 
 The X collector pins one endpoint-specific recent-search contract and exposes only live and replay modes. Live mode accepts a bearer credential only through construction, consumes one exact reserved attempt, issues `GET` only to the exact X origin/path, requests identity encoding, refuses compression and redirects, bounds time and decoded response size, and quarantines bytes before parsing. No live recording/cassette sink exists; synthetic cassettes are constructed offline for replay tests. The encrypt-first ingestion boundary accepts live or replay collectors and routes every live body through Vault v2. Because the current official X pages disagree on `post.fields` versus older `tweet.fields` terminology, a real credentialed canary is required before moving the adapter from `quarantined` to `approved`.
 
-The operator service binds to IPv4 loopback, serves fixed same-origin dashboard assets, rejects foreign Host/Origin values, and recursively removes known sensitive field names. Its optional controls accept only a closed local lifecycle vocabulary from a genuine provider; without that provider the surface is read-only. That projection is defense in depth, not a secret-management system: providers must never place credentials or hostile raw content anywhere in response objects.
+The operator service binds to IPv4 loopback, serves fixed same-origin dashboard assets, and rejects
+foreign Host/Origin values. Stage 0 status and research routes validate exact content-free schemas
+instead of trying to sanitize arbitrary provider objects. Runtime controls accept only closed
+compare-and-swap transitions from a genuine controller; STOP has no revision precondition and
+remains usable even when another dashboard request fails. Legacy lifecycle controls remain a
+separate compatibility surface. Providers must never place credentials or hostile raw content in
+operator response objects.

@@ -1,13 +1,19 @@
 import { request as httpRequest } from "node:http";
 
+import { RuntimeConflictError } from "@rsi/runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createOperatorServer,
+  parseOperatorResearchProjection,
+  parseOperatorRuntimeSnapshot,
   projectPublicJson,
   startOperatorServer,
   type OperatorControlCommand,
   type OperatorControlProvider,
   type OperatorEventQuery,
+  type OperatorResearchProvider,
+  type OperatorRuntimeProvider,
   type OperatorSnapshotProvider,
   type RunningOperatorServer,
 } from "../src/index.js";
@@ -31,6 +37,77 @@ const SECRETS = [
   SEED_FIXTURE,
   "cookie-secret",
 ];
+
+function runtimeSnapshot(mode: "PROPOSE_ONLY" | "RESEARCH" | "STOPPED" = "STOPPED", revision = 1) {
+  return {
+    schemaVersion: 1 as const,
+    mode,
+    revision,
+    modeChangedAt: "2026-08-23T12:00:00.000Z",
+    processInstanceId: "018f102a-8f54-4a93-8cce-2461c4f28a12",
+    auditHead: { sequence: revision, hash: "a".repeat(64) },
+    capabilities: {
+      researchCollection: mode !== "STOPPED",
+      proposalPersistence: mode === "PROPOSE_ONLY",
+      policyApproval: false as const,
+      paidRead: false as const,
+      transactionBroadcast: false as const,
+      walletSign: false as const,
+      executionAdapter: false as const,
+      externalPublish: false as const,
+    },
+  };
+}
+
+function researchProposal(disposition: "abstain" | "candidate" = "candidate") {
+  return {
+    schemaVersion: 1 as const,
+    proposalId: `rsi-proposal:${disposition}-001`,
+    strategyVersion: "rsi-v0",
+    createdAt: "2026-08-23T12:00:00.000Z",
+    expiresAt: "2026-08-23T12:10:00.000Z",
+    asset: { chainId: 8453, address: `0x${"1".repeat(40)}`, tokenId: "7" },
+    evidenceIds: [`sha256:${"b".repeat(64)}`],
+    provenance: {
+      providerIds: ["fixture-x"],
+      sourceKinds: ["x"],
+      independentClusterCount: 1,
+    },
+    flags: {
+      scam: ["identity-risk"],
+      injection: ["prompt:financial-action"],
+      homograph: [],
+    },
+    scorecard: {
+      confidence: 0.72,
+      marketSupport: 0.68,
+      opportunity: 0.61,
+      provenanceQuality: 0.8,
+      risk: 0.35,
+    },
+    disposition:
+      disposition === "candidate"
+        ? ({ kind: "candidate" } as const)
+        : ({ kind: "abstain", reason: "integrity_risk" } as const),
+  };
+}
+
+function researchProjection() {
+  return {
+    schemaVersion: 1 as const,
+    candidateCount: 1,
+    abstentionCount: 0,
+    proposals: [
+      {
+        schemaVersion: 1 as const,
+        eventHash: "c".repeat(64),
+        eventSequence: 7,
+        persistedAt: "2026-08-23T12:01:00.000Z",
+        proposal: researchProposal(),
+      },
+    ],
+  };
+}
 
 function assertNoSensitiveFields(body: unknown): void {
   const serialized = JSON.stringify(body);
@@ -127,6 +204,16 @@ describe("operator HTTP API", () => {
     running = await startOperatorServer(provider, { controls, port: 0 });
   }
 
+  async function restartWithRuntime(runtime: OperatorRuntimeProvider): Promise<void> {
+    await running.close();
+    running = await startOperatorServer(provider, { port: 0, runtime });
+  }
+
+  async function restartWithResearch(research: OperatorResearchProvider): Promise<void> {
+    await running.close();
+    running = await startOperatorServer(provider, { port: 0, research });
+  }
+
   it("binds to loopback by default and serves JSON health with defensive headers", async () => {
     expect(running.host).toBe("127.0.0.1");
     expect(running.port).toBeGreaterThan(0);
@@ -156,13 +243,338 @@ describe("operator HTTP API", () => {
     expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
     expect(page.headers.get("content-security-policy")).toContain("script-src 'self'");
     expect(page.headers.get("content-security-policy")).not.toContain("unsafe-inline");
-    expect(html).toContain("Observer console");
+    expect(html).toContain("Runtime console");
     expect(html).toContain("no financial authority");
+    expect(html).toContain('data-runtime-action="runtime-stop"');
     expect(html).not.toContain("raw-secret");
     expect(css).toContain("prefers-reduced-motion");
     expect(javascript).toContain("textContent = JSON.stringify(summary, null, 2)");
+    expect(javascript).toContain("Promise.allSettled");
+    expect(javascript).toContain('byId("runtime-stop").disabled = false');
+    expect(javascript).toContain('" · contract " + proposal.asset.address');
     expect(javascript).not.toContain("innerHTML");
-    expect(await capabilities.json()).toEqual({ controls: { actions: [], enabled: false } });
+    expect(javascript).not.toContain("window.open");
+    expect(await capabilities.json()).toEqual({
+      controls: {
+        actions: [],
+        enabled: false,
+        legacy: { actions: [], enabled: false },
+        runtime: { actions: [], enabled: false },
+      },
+    });
+  });
+
+  it("serves only a strict content-free runtime snapshot", async () => {
+    const runtime: OperatorRuntimeProvider = {
+      supportedActions: ["runtime-enter-research", "runtime-enter-propose-only", "runtime-stop"],
+      executeRuntimeControl: vi.fn(() => runtimeSnapshot()),
+      getRuntimeSnapshot: vi.fn(() => runtimeSnapshot()),
+    };
+    await restartWithRuntime(runtime);
+
+    const response = await get("/api/runtime");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      financialAuthority: false,
+      runtime: runtimeSnapshot(),
+    });
+    expect(await (await get("/api/control/capabilities")).json()).toEqual({
+      controls: {
+        actions: ["runtime-enter-research", "runtime-enter-propose-only", "runtime-stop"],
+        enabled: true,
+        legacy: { actions: [], enabled: false },
+        runtime: {
+          actions: ["runtime-enter-research", "runtime-enter-propose-only", "runtime-stop"],
+          enabled: true,
+        },
+      },
+    });
+  });
+
+  it("accepts exact runtime commands and keeps emergency stop revision-free", async () => {
+    const commands: unknown[] = [];
+    let snapshot = runtimeSnapshot();
+    const runtime: OperatorRuntimeProvider = {
+      supportedActions: ["runtime-enter-research", "runtime-enter-propose-only", "runtime-stop"],
+      executeRuntimeControl(command) {
+        commands.push(command);
+        const nextMode =
+          command.action === "runtime-stop"
+            ? "STOPPED"
+            : command.action === "runtime-enter-research"
+              ? "RESEARCH"
+              : "PROPOSE_ONLY";
+        snapshot = runtimeSnapshot(nextMode, snapshot.revision + 1);
+        return snapshot;
+      },
+      getRuntimeSnapshot: () => snapshot,
+    };
+    await restartWithRuntime(runtime);
+    const headers = {
+      "content-type": "application/json",
+      origin: running.origin,
+      "sec-fetch-site": "same-origin",
+      "x-rsi-operator-request": "1",
+    };
+    const requests = [
+      {
+        action: "runtime-enter-research",
+        expectedMode: "STOPPED",
+        expectedRevision: 1,
+        requestId: "11111111-1111-4111-8111-111111111111",
+      },
+      {
+        action: "runtime-enter-propose-only",
+        expectedMode: "RESEARCH",
+        expectedRevision: 2,
+        requestId: "22222222-2222-4222-8222-222222222222",
+      },
+      {
+        action: "runtime-enter-research",
+        expectedMode: "PROPOSE_ONLY",
+        expectedRevision: 3,
+        requestId: "33333333-3333-4333-8333-333333333333",
+      },
+      {
+        action: "runtime-stop",
+        requestId: "44444444-4444-4444-8444-444444444444",
+      },
+    ] as const;
+
+    for (const payload of requests) {
+      const response = await fetch(`${running.origin}/api/control`, {
+        body: JSON.stringify(payload),
+        headers,
+        method: "POST",
+      });
+      expect(response.status).toBe(200);
+      expect((await response.json()) as unknown).toHaveProperty(
+        "result.capabilities.walletSign",
+        false,
+      );
+    }
+    expect(commands).toEqual(requests);
+    expect(commands.every(Object.isFrozen)).toBe(true);
+    expect(commands.at(-1)).toEqual({
+      action: "runtime-stop",
+      requestId: "44444444-4444-4444-8444-444444444444",
+    });
+  });
+
+  it("rejects malformed runtime commands before the provider is called", async () => {
+    const runtime: OperatorRuntimeProvider = {
+      supportedActions: ["runtime-enter-research", "runtime-enter-propose-only", "runtime-stop"],
+      executeRuntimeControl: vi.fn(() => runtimeSnapshot()),
+      getRuntimeSnapshot: () => runtimeSnapshot(),
+    };
+    await restartWithRuntime(runtime);
+    const headers = {
+      "content-type": "application/json",
+      origin: running.origin,
+      "x-rsi-operator-request": "1",
+    };
+    const cases = [
+      { action: "runtime-stop" },
+      {
+        action: "runtime-stop",
+        expectedRevision: 1,
+        requestId: "11111111-1111-4111-8111-111111111111",
+      },
+      {
+        action: "runtime-enter-research",
+        expectedMode: "RESEARCH",
+        expectedRevision: 1,
+        requestId: "11111111-1111-4111-8111-111111111111",
+      },
+      {
+        action: "runtime-enter-propose-only",
+        expectedMode: "STOPPED",
+        expectedRevision: 1,
+        requestId: "11111111-1111-4111-8111-111111111111",
+      },
+      {
+        action: "runtime-enter-research",
+        expectedMode: "STOPPED",
+        expectedRevision: 1.5,
+        requestId: "11111111-1111-4111-8111-111111111111",
+      },
+      {
+        action: "runtime-enter-research",
+        expectedMode: "STOPPED",
+        expectedRevision: Number.MAX_SAFE_INTEGER + 1,
+        requestId: "11111111-1111-4111-8111-111111111111",
+      },
+      {
+        action: "runtime-enter-research",
+        expectedMode: "STOPPED",
+        expectedRevision: 1,
+        requestId: "not-a-uuid",
+      },
+    ];
+
+    for (const payload of cases) {
+      const response = await fetch(`${running.origin}/api/control`, {
+        body: JSON.stringify(payload),
+        headers,
+        method: "POST",
+      });
+      expect(response.status).toBe(400);
+    }
+    expect(runtime.executeRuntimeControl).not.toHaveBeenCalled();
+  });
+
+  it("keeps runtime stop usable when every read endpoint fails", async () => {
+    const failingProvider: OperatorSnapshotProvider = {
+      getSummary: vi.fn(() => Promise.reject(new Error("summary failed"))),
+      listEvents: vi.fn(() => Promise.reject(new Error("events failed"))),
+      getDecision: vi.fn(() => null),
+    };
+    const runtime: OperatorRuntimeProvider = {
+      supportedActions: ["runtime-stop"],
+      executeRuntimeControl: vi.fn(() => runtimeSnapshot()),
+      getRuntimeSnapshot: vi.fn(() => Promise.reject(new Error("runtime read failed"))),
+    };
+    const research: OperatorResearchProvider = {
+      getResearchProjection: vi.fn(() => Promise.reject(new Error("research read failed"))),
+    };
+    await running.close();
+    running = await startOperatorServer(failingProvider, { port: 0, research, runtime });
+
+    expect((await get("/api/runtime")).status).toBe(500);
+    expect((await get("/api/research")).status).toBe(500);
+    expect((await get("/api/summary")).status).toBe(500);
+    expect((await get("/api/events")).status).toBe(500);
+    const response = await fetch(`${running.origin}/api/control`, {
+      body: JSON.stringify({
+        action: "runtime-stop",
+        requestId: "11111111-1111-4111-8111-111111111111",
+      }),
+      headers: {
+        "content-type": "application/json",
+        origin: running.origin,
+        "x-rsi-operator-request": "1",
+      },
+      method: "POST",
+    });
+    expect(response.status).toBe(200);
+    expect(runtime.executeRuntimeControl).toHaveBeenCalledOnce();
+  });
+
+  it("maps runtime transition conflicts to an opaque 409", async () => {
+    const runtime: OperatorRuntimeProvider = {
+      supportedActions: ["runtime-enter-research"],
+      executeRuntimeControl: vi.fn(() => {
+        throw new RuntimeConflictError("STALE_STATE", "secret internal state");
+      }),
+      getRuntimeSnapshot: () => runtimeSnapshot(),
+    };
+    await restartWithRuntime(runtime);
+    const response = await fetch(`${running.origin}/api/control`, {
+      body: JSON.stringify({
+        action: "runtime-enter-research",
+        expectedMode: "STOPPED",
+        expectedRevision: 1,
+        requestId: "11111111-1111-4111-8111-111111111111",
+      }),
+      headers: {
+        "content-type": "application/json",
+        origin: running.origin,
+        "x-rsi-operator-request": "1",
+      },
+      method: "POST",
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "runtime_conflict",
+        message: "Runtime mode changed; refresh and try again.",
+      },
+    });
+  });
+
+  it("rejects runtime projections with extra content or authority", async () => {
+    const invalidSnapshots = [
+      { ...runtimeSnapshot(), title: "raw-secret" },
+      {
+        ...runtimeSnapshot(),
+        capabilities: { ...runtimeSnapshot().capabilities, walletSign: true },
+      },
+    ];
+    for (const invalid of invalidSnapshots) {
+      const runtime: OperatorRuntimeProvider = {
+        supportedActions: [],
+        executeRuntimeControl: vi.fn(),
+        getRuntimeSnapshot: () => invalid,
+      };
+      await restartWithRuntime(runtime);
+      const response = await get("/api/runtime");
+      const body = await response.json();
+      expect(response.status).toBe(500);
+      expect(body).toEqual({
+        error: { code: "internal_error", message: "The operator snapshot could not be read." },
+      });
+      expect(JSON.stringify(body)).not.toContain("raw-secret");
+    }
+  });
+
+  it("serves the exact bounded content-free research projection", async () => {
+    const research: OperatorResearchProvider = {
+      getResearchProjection: vi.fn(() => researchProjection()),
+    };
+    await restartWithResearch(research);
+
+    const response = await get("/api/research");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ research: researchProjection() });
+    expect((await get("/api/research?limit=100")).status).toBe(400);
+  });
+
+  it("rejects research projections containing raw, executable, malformed, or inconsistent data", async () => {
+    const valid = researchProjection();
+    const invalidProjections = [
+      { ...valid, raw: "raw-secret" },
+      {
+        ...valid,
+        proposals: [
+          {
+            ...valid.proposals[0],
+            proposal: { ...valid.proposals[0]!.proposal, calldata: "0xdeadbeef" },
+          },
+        ],
+      },
+      { ...valid, candidateCount: 0 },
+      {
+        ...valid,
+        proposals: [
+          valid.proposals[0],
+          { ...valid.proposals[0], eventHash: "d".repeat(64), eventSequence: 8 },
+        ],
+      },
+      {
+        ...valid,
+        proposals: [
+          {
+            ...valid.proposals[0],
+            proposal: {
+              ...valid.proposals[0]!.proposal,
+              scorecard: { ...valid.proposals[0]!.proposal.scorecard, risk: 1.1 },
+            },
+          },
+        ],
+      },
+    ];
+
+    for (const invalid of invalidProjections) {
+      await restartWithResearch({ getResearchProjection: () => invalid });
+      const response = await get("/api/research");
+      const body = await response.json();
+      expect(response.status).toBe(500);
+      expect(body).toEqual({
+        error: { code: "internal_error", message: "The operator snapshot could not be read." },
+      });
+      expect(JSON.stringify(body)).not.toContain("raw-secret");
+      expect(JSON.stringify(body)).not.toContain("deadbeef");
+    }
   });
 
   it("accepts only the closed same-origin control vocabulary when controls are configured", async () => {
@@ -227,6 +639,11 @@ describe("operator HTTP API", () => {
       controls: {
         actions: ["plan", "start", "acknowledge", "abort", "close", "label", "prepare-candidate"],
         enabled: true,
+        legacy: {
+          actions: ["plan", "start", "acknowledge", "abort", "close", "label", "prepare-candidate"],
+          enabled: true,
+        },
+        runtime: { actions: [], enabled: false },
       },
     });
   });
@@ -457,6 +874,88 @@ describe("operator HTTP API", () => {
     );
   });
 
+  it("rejects raw-server control requests received on a non-loopback socket", async () => {
+    const runtime: OperatorRuntimeProvider = {
+      supportedActions: ["runtime-stop"],
+      executeRuntimeControl: vi.fn(() => runtimeSnapshot()),
+      getRuntimeSnapshot: () => runtimeSnapshot(),
+    };
+    const server = createOperatorServer(provider, undefined, runtime);
+    let socketLocalAddress = "0.0.0.0";
+    server.prependListener("request", (request) => {
+      Object.defineProperty(request.socket, "localAddress", {
+        configurable: true,
+        value: socketLocalAddress,
+      });
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen({ host: "0.0.0.0", port: 0 }, resolve);
+    });
+    const address = server.address();
+    expect(address).not.toBeNull();
+    expect(typeof address).not.toBe("string");
+    if (address === null || typeof address === "string") {
+      throw new Error("Raw operator server did not bind to an IP socket.");
+    }
+    const origin = `http://127.0.0.1:${address.port}`;
+    const payload = JSON.stringify({
+      action: "runtime-stop",
+      requestId: "44444444-4444-4444-8444-444444444444",
+    });
+
+    try {
+      const response = await new Promise<{ body: unknown; status: number | undefined }>(
+        (resolve, reject) => {
+          const request = httpRequest(
+            {
+              host: "127.0.0.1",
+              port: address.port,
+              path: "/api/control",
+              method: "POST",
+              headers: {
+                "content-length": Buffer.byteLength(payload),
+                "content-type": "application/json",
+                host: `127.0.0.1:${address.port}`,
+                origin,
+                "sec-fetch-site": "same-origin",
+                "x-rsi-operator-request": "1",
+              },
+            },
+            (incoming) => {
+              const chunks: Buffer[] = [];
+              incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
+              incoming.on("end", () =>
+                resolve({
+                  status: incoming.statusCode,
+                  body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown,
+                }),
+              );
+            },
+          );
+          request.on("error", reject);
+          request.end(payload);
+        },
+      );
+
+      expect(response.status).toBe(403);
+      expect(response.body).toMatchObject({
+        error: { code: "loopback_socket_required" },
+      });
+      expect(runtime.executeRuntimeControl).not.toHaveBeenCalled();
+
+      socketLocalAddress = "::ffff:127.0.0.1";
+      const health = await fetch(`${origin}/health`);
+      expect(health.status).toBe(200);
+      expect(await health.json()).toEqual({ status: "ok" });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error === undefined ? resolve() : reject(error)));
+      });
+    }
+  });
+
   it("returns an opaque JSON error when the provider throws", async () => {
     vi.mocked(provider.getSummary).mockRejectedValueOnce(
       new Error("credentials=credential-secret privateKey=key-secret"),
@@ -492,5 +991,99 @@ describe("public JSON projection", () => {
         valid: 7n,
       }),
     ).toEqual({ cyclic: { safe: true }, valid: "7" });
+  });
+
+  it("drops proxy values without invoking reflective traps", () => {
+    const getPrototypeOf = vi.fn(() => {
+      throw new Error("must not run");
+    });
+    const ownKeys = vi.fn(() => {
+      throw new Error("must not run");
+    });
+    const proxy = new Proxy({ safe: true }, { getPrototypeOf, ownKeys });
+
+    expect(projectPublicJson(proxy)).toBeNull();
+    expect(projectPublicJson({ nested: proxy, safe: true })).toEqual({ safe: true });
+    expect(getPrototypeOf).not.toHaveBeenCalled();
+    expect(ownKeys).not.toHaveBeenCalled();
+  });
+});
+
+describe("runtime snapshot projection", () => {
+  it("returns a deeply frozen closed snapshot", () => {
+    const parsed = parseOperatorRuntimeSnapshot(runtimeSnapshot("PROPOSE_ONLY", 7));
+
+    expect(parsed).toEqual(runtimeSnapshot("PROPOSE_ONLY", 7));
+    expect(Object.isFrozen(parsed)).toBe(true);
+    expect(Object.isFrozen(parsed.auditHead)).toBe(true);
+    expect(Object.isFrozen(parsed.capabilities)).toBe(true);
+  });
+
+  it("rejects proxies, accessors, inconsistent modes, and noncanonical fields", () => {
+    const accessor = { ...runtimeSnapshot() } as Record<string, unknown>;
+    Object.defineProperty(accessor, "processInstanceId", {
+      enumerable: true,
+      get: () => "018f102a-8f54-4a93-8cce-2461c4f28a12",
+    });
+    const prototypeTrap = vi.fn(() => {
+      throw new Error("must not run");
+    });
+    const trappedProxy = new Proxy(runtimeSnapshot(), { getPrototypeOf: prototypeTrap });
+    const cases = [
+      trappedProxy,
+      accessor,
+      { ...runtimeSnapshot(), revision: 0 },
+      { ...runtimeSnapshot(), modeChangedAt: "2026-08-23T12:00:00Z" },
+      { ...runtimeSnapshot(), processInstanceId: "../../runtime" },
+      { ...runtimeSnapshot(), auditHead: { sequence: 1, hash: "A".repeat(64) } },
+      {
+        ...runtimeSnapshot(),
+        capabilities: { ...runtimeSnapshot().capabilities, proposalPersistence: true },
+      },
+      {
+        ...runtimeSnapshot(),
+        capabilities: { ...runtimeSnapshot().capabilities, externalPublish: true },
+      },
+    ];
+
+    for (const value of cases) {
+      expect(() => parseOperatorRuntimeSnapshot(value)).toThrow(/invalid|disagree/i);
+    }
+    expect(prototypeTrap).not.toHaveBeenCalled();
+  });
+});
+
+describe("research projection", () => {
+  it("returns a deeply frozen closed proposal projection", () => {
+    const parsed = parseOperatorResearchProjection(researchProjection());
+
+    expect(parsed).toEqual(researchProjection());
+    expect(Object.isFrozen(parsed)).toBe(true);
+    expect(Object.isFrozen(parsed.proposals)).toBe(true);
+    expect(Object.isFrozen(parsed.proposals[0])).toBe(true);
+    expect(Object.isFrozen(parsed.proposals[0]?.proposal)).toBe(true);
+    expect(Object.isFrozen(parsed.proposals[0]?.proposal.scorecard)).toBe(true);
+  });
+
+  it("rejects proxy and accessor-bearing proposal trees without invoking accessors", () => {
+    const accessor = { ...researchProposal() } as Record<string, unknown>;
+    const getter = vi.fn(() => "rsi-proposal:accessor");
+    Object.defineProperty(accessor, "proposalId", { enumerable: true, get: getter });
+    const base = researchProjection();
+
+    const prototypeTrap = vi.fn(() => {
+      throw new Error("must not run");
+    });
+    expect(() =>
+      parseOperatorResearchProjection(new Proxy(base, { getPrototypeOf: prototypeTrap })),
+    ).toThrow(/invalid/i);
+    expect(() =>
+      parseOperatorResearchProjection({
+        ...base,
+        proposals: [{ ...base.proposals[0], proposal: accessor }],
+      }),
+    ).toThrow(/invalid/i);
+    expect(getter).not.toHaveBeenCalled();
+    expect(prototypeTrap).not.toHaveBeenCalled();
   });
 });
