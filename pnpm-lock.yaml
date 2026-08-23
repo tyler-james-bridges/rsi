@@ -43,6 +43,12 @@ importers:
       "@rsi/policy":
         specifier: workspace:*
         version: link:../../packages/policy
+      "@rsi/research-ledger":
+        specifier: workspace:*
+        version: link:../../packages/research-ledger
+      "@rsi/runtime":
+        specifier: workspace:*
+        version: link:../../packages/runtime
       "@rsi/store":
         specifier: workspace:*
         version: link:../../packages/store
@@ -58,6 +64,12 @@ importers:
 
   apps/operator:
     dependencies:
+      "@rsi/domain":
+        specifier: workspace:*
+        version: link:../../packages/domain
+      "@rsi/runtime":
+        specifier: workspace:*
+        version: link:../../packages/runtime
       "@rsi/session-lifecycle":
         specifier: workspace:*
         version: link:../../packages/session-lifecycle
@@ -206,6 +218,30 @@ importers:
       "@rsi/domain":
         specifier: workspace:*
         version: link:../domain
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/research-ledger:
+    dependencies:
+      "@rsi/domain":
+        specifier: workspace:*
+        version: link:../domain
+      "@rsi/runtime":
+        specifier: workspace:*
+        version: link:../runtime
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/runtime:
+    dependencies:
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
       zod:
         specifier: ^4.4.3
         version: 4.4.3

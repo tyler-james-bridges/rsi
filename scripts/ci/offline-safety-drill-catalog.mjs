@@ -100,4 +100,25 @@ export const OFFLINE_SAFETY_DRILLS = Object.freeze([
     evidencePath: "packages/operations/test/sqlite-operations-store.test.ts",
     evidenceText: "serializes independent writers against the same hard cap",
   }),
+  Object.freeze({
+    id: "D21",
+    evidencePath: "packages/runtime/test/sqlite-runtime-controller.test.ts",
+    evidenceText: "never resumes an active mode after another process opens",
+  }),
+  Object.freeze({
+    id: "D22",
+    evidencePath: "packages/runtime/test/sqlite-runtime-controller.test.ts",
+    evidenceText:
+      "permanently denies payment, signing, execution, broadcast, approval, and publication",
+  }),
+  Object.freeze({
+    id: "D23",
+    evidencePath: "packages/research-ledger/test/sqlite-research-ledger.test.ts",
+    evidenceText: "invalidates an issued proposal authorization when STOP wins before persistence",
+  }),
+  Object.freeze({
+    id: "D24",
+    evidencePath: "packages/research-ledger/test/sqlite-research-ledger.test.ts",
+    evidenceText: "rejects forged, copied, raw-bearing, and executable proposal inputs",
+  }),
 ]);

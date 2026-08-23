@@ -16,6 +16,8 @@
     "@rsi/operator": "workspace:*",
     "@rsi/pipeline": "workspace:*",
     "@rsi/policy": "workspace:*",
+    "@rsi/research-ledger": "workspace:*",
+    "@rsi/runtime": "workspace:*",
     "@rsi/store": "workspace:*",
     "@rsi/vault": "workspace:*",
     "@rsi/x-collector": "workspace:*",

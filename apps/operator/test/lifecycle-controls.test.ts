@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { SqliteSessionCoordinator } from "@rsi/session-lifecycle";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createSessionLifecycleOperatorControls,
@@ -134,6 +134,17 @@ describe("session lifecycle operator controls", () => {
 
     expect(isSessionLifecycleOperatorControls({ ...controls })).toBe(false);
     expect(isSessionLifecycleOperatorControls(Object.create(controls))).toBe(false);
+    const prototypeTrap = vi.fn(() => {
+      throw new Error("must not run");
+    });
+    const proxy = new Proxy({ coordinator }, { getPrototypeOf: prototypeTrap });
+    expect(isSessionLifecycleOperatorControls(proxy)).toBe(false);
+    expect(() =>
+      createSessionLifecycleOperatorControls(
+        proxy as unknown as { coordinator: SqliteSessionCoordinator },
+      ),
+    ).toThrow(/options/i);
+    expect(prototypeTrap).not.toHaveBeenCalled();
     expect(() =>
       createSessionLifecycleOperatorControls({
         coordinator: Object.create(SqliteSessionCoordinator.prototype) as SqliteSessionCoordinator,

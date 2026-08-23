@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./proposals": "./src/proposals.ts"
   },
   "dependencies": {
     "viem": "^2.55.13",

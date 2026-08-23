@@ -6,7 +6,7 @@ stage silently enables the next one, and all activation limits default to zero o
 
 ## Stage 0 — Reset and local verification
 
-Status: **in progress**
+Status: **complete**
 
 - [x] Public TypeScript monorepo with exact runtime and lockfile pins.
 - [x] Strict evidence, policy, strategy, and NFT-intent schemas.
@@ -16,9 +16,9 @@ Status: **in progress**
 - [x] Loopback operator UI and disabled state-changing adapters.
 - [x] Retire the hardware-dependent readiness ceremony and replace it with the single-machine
       contract.
-- [ ] Add a persisted runtime mode: `STOPPED → RESEARCH → PROPOSE_ONLY`. Startup defaults to
+- [x] Add a persisted runtime mode: `STOPPED → RESEARCH → PROPOSE_ONLY`. Startup defaults to
       `STOPPED`, and STOP is checked at every authority boundary.
-- [ ] Show findings, exact assets, provenance, scam flags, abstentions, and candidate-strategy
+- [x] Show findings, exact assets, provenance, scam flags, abstentions, and candidate-strategy
       scorecards in the local dashboard.
 
 Exit: normal CI passes and RSI can run locally without credentials, funds, or additional hardware.
@@ -90,6 +90,8 @@ agents.
 
 ## Immediate next work
 
-Finish the reset gates, implement the persisted STOP/research/proposal runtime, and commission one
-supervised read canary on the existing Mac. Only after proposals are useful should the owner choose
-an expendable research-wallet balance for one AgentCash/x402 call.
+Commission one supervised read canary on the existing Mac, beginning with X and then adding
+OpenSea and Base reads one provider at a time. Re-check current official provider contracts before
+each canary, route every attempt through the runtime's one-shot `research_collection` boundary,
+and keep proposal persistence behind `PROPOSE_ONLY`. Only after proposals are useful should the
+owner choose an expendable research-wallet balance for one AgentCash/x402 call.

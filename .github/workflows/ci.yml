@@ -48,6 +48,9 @@ jobs:
       - name: Verify the active single-machine production contract
         run: pnpm ci:contract
 
+      - name: Prove the Stage 0 runtime has no financial authority
+        run: pnpm ci:stage0
+
       - name: Verify format, types, and tests
         run: pnpm check
 

@@ -15,6 +15,11 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 ## Hard invariants
 
 - No raw external content reaches a signer or transaction builder.
+- Every Stage 0 process boot persists a fresh `STOPPED` revision. A prior `RESEARCH` or
+  `PROPOSE_ONLY` mode is audit history and never resumes authority.
+- Stage 0 exposes only one-shot research-collection and non-executable proposal-persistence
+  authorizations. Payment, signing, policy approval, execution, broadcast, and publication are
+  permanently denied and absent from the active operator dependency graph.
 - A transaction identifies assets by exact chain, contract, and token ID.
 - Destination, recipient, payment asset, maximum outflow, order hash, nonce, and expiry are committed before approval.
 - Unknown fields fail schema validation.
@@ -48,6 +53,10 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 - Capture identifiers are opaque random values rather than content hashes. The encrypted registry keeps source identifiers and request bindings outside permanent events, and verified cleanup destroys its per-attempt key material.
 - Vault compromise is contained with a dedicated directory, strict permissions, authenticated encryption, per-capture keys, bounded objects, and filesystem identity checks. A same-user process holding a live wrapping key can still decrypt active data, so production deployment requires process and Keychain isolation.
 - SQLite's internal hash chain cannot detect replacement with another internally consistent database. Signed checkpoints plus an independently retained hash or immutable remote receipt can prove a pinned suffix. Remote retention is an optional software control with scoped credentials; same-Mac restore drills and one durable authorization writer remain required before authority grows.
+- The Stage 0 runtime and research ledger deliberately use separate SQLite files. Each detects
+  invalid rows, edits, reordering, tail deletion, foreign aggregates, and semantically invalid
+  hash-valid events, but neither claims rollback protection against replacement by a complete older
+  internally consistent file without an independently retained head.
 - Recovery archives are intentionally split into state evidence, sanitized event history, and a signed release bundle. No single component may claim complete restoration, and lifecycle acceptance records all three exact archive hashes.
 
 ## Tool activation
