@@ -5,15 +5,23 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { canonicalJson } from "../src/canonical.js";
 import { runFoundationCeremony } from "../src/ceremony.js";
 import { foundationCiEvidenceSha256 } from "../src/ci-evidence.js";
 import { reserveFoundationOutput } from "../src/host.js";
+import { collectFoundationReleaseInventory } from "../src/inventory.js";
 import { foundationIndependentReviewEvidenceSha256 } from "../src/review-evidence.js";
 import {
   FOUNDATION_RELEASE_VERSION,
   type FoundationCeremonyDependencies,
   type FoundationCeremonyOptions,
 } from "../src/types.js";
+import {
+  readFoundationVerificationRepositoryTree,
+  verifyFoundationCeremonyOutputs,
+  type FoundationCeremonyVerificationDependencies,
+  type FoundationCeremonyVerificationOptions,
+} from "../src/verification.js";
 import {
   CEREMONY_AT,
   COMMIT,
@@ -97,15 +105,214 @@ describe("foundation ceremony publication boundary", () => {
       gitStatus(repository, ["show-ref", "--verify", "--quiet", "refs/tags/foundation-v1"]),
     ).toBe(1);
   });
+
+  it("runs real inventory ceremony and verification paths from a committed clone without mutating Git", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "rsi-committed-ceremony-")));
+    cleanup.push(root);
+    await chmod(root, 0o700);
+    const sourceRepository = await realpath(
+      git(process.cwd(), ["rev-parse", "--show-toplevel"]).trim(),
+    );
+    const repositoryPath = join(root, "repository");
+    const retained = join(root, "retained");
+    git(root, ["clone", "--quiet", "--no-hardlinks", sourceRepository, repositoryPath]);
+    const repository = await realpath(repositoryPath);
+    await chmod(repository, 0o700);
+    await mkdir(retained, { mode: 0o700 });
+    expect(Number((await stat(repository)).mode) & 0o077).toBe(0);
+
+    git(repository, ["checkout", "--quiet", "-B", "main", "HEAD"]);
+    const configRoot = join(repository, "config");
+    await mkdir(configRoot, { mode: 0o700 });
+    const publicConfigPins = [
+      "foundation-independent-reviewer-identity.v1.json",
+      "foundation-release-identity.v1.json",
+      "foundation-release-key-helper-compatibility.v1.json",
+      "foundation-release-key-provisioning-receipt.v1.json",
+    ] as const;
+    for (const name of publicConfigPins) {
+      await writeFile(join(configRoot, name), "{}", { flag: "wx", mode: 0o600 });
+    }
+    git(repository, ["add", "--", ...publicConfigPins.map((name) => `config/${name}`)]);
+    git(
+      repository,
+      [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "user.name=RSI Committed Clone Test",
+        "-c",
+        "user.email=rsi-committed-clone@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "--message",
+        "add harmless public Foundation pin fixtures",
+      ],
+      {
+        GIT_AUTHOR_DATE: "2026-08-17T23:00:00Z",
+        GIT_COMMITTER_DATE: "2026-08-17T23:00:00Z",
+      },
+    );
+    const commitSha = git(repository, ["rev-parse", "HEAD"]).trim();
+    const gitTreeSha = git(repository, ["rev-parse", "HEAD^{tree}"]).trim();
+    git(repository, [
+      "remote",
+      "set-url",
+      "origin",
+      "https://github.com/tyler-james-bridges/rsi.git",
+    ]);
+    git(repository, ["update-ref", "refs/remotes/origin/main", commitSha]);
+
+    const evidence = makeCiEvidence({ commitSha });
+    const reviewEvidence = makeReviewEvidence({ commitSha, gitTreeSha });
+    const counter = { signatures: 0, value: 0 };
+    const custodyFixture = makeCustodyFixture(counter);
+    const identity = Object.freeze({
+      ...custodyFixture.identity,
+      pinningRepositoryCommitSha: commitSha,
+    });
+    const paths = Object.freeze({
+      archivePath: join(retained, "foundation.rsi-release"),
+      ciEvidencePath: join(retained, "foundation-ci.json"),
+      conclusionPath: join(retained, "foundation.readiness-conclusion.json"),
+      receiptPath: join(retained, "foundation.receipt.json"),
+      reportPath: join(retained, "foundation.ceremony-report.json"),
+      reviewEvidencePath: join(retained, "foundation.review-evidence.json"),
+      tagObjectPath: join(retained, "foundation.foundation-tag"),
+    });
+    await writeFile(paths.ciEvidencePath, canonicalJson(evidence), { mode: 0o600 });
+    await writeFile(paths.reviewEvidencePath, canonicalJson(reviewEvidence), { mode: 0o600 });
+
+    const ceremonyOptions: FoundationCeremonyOptions = Object.freeze({
+      ciEvidencePath: paths.ciEvidencePath,
+      conclusionPath: paths.conclusionPath,
+      confirmCommit: commitSha,
+      confirmReleaseVersion: FOUNDATION_RELEASE_VERSION,
+      destinationPath: paths.archivePath,
+      receiptPath: paths.receiptPath,
+      reportPath: paths.reportPath,
+      reviewEvidencePath: paths.reviewEvidencePath,
+      tagObjectPath: paths.tagObjectPath,
+    });
+    let offlineChecks = 0;
+    const ceremonyDependencies: FoundationCeremonyDependencies = {
+      assertHostOffline: async () => {
+        offlineChecks += 1;
+      },
+      collectInventory: async (retainedEvidence, createdAt) =>
+        collectFoundationReleaseInventory({
+          ciEvidence: retainedEvidence,
+          createdAt,
+          mode: "ceremony",
+          repositoryRoot: repository,
+        }),
+      custody: custodyFixture.custody,
+      now: () => new Date(CEREMONY_AT),
+      platformIdentitySha256: async () => PLATFORM_IDENTITY_SHA256,
+      platformModel: async () => "MacBook",
+      readCiEvidence: async () => ({
+        evidence,
+        sha256: foundationCiEvidenceSha256(evidence),
+      }),
+      readPinnedIdentity: async () => identity,
+      readReviewEvidence: async () => ({
+        evidence: reviewEvidence,
+        sha256: foundationIndependentReviewEvidenceSha256(reviewEvidence),
+      }),
+      reserveOutput: (path, suffix) => reserveFoundationOutput(path, repository, suffix),
+    };
+    const gitBefore = snapshotGitState(repository);
+    expect(gitBefore.status).toBe("");
+    expect(gitBefore.foundationTagStatus).toBe(1);
+
+    const report = await runFoundationCeremony(ceremonyOptions, ceremonyDependencies);
+
+    expect(report).toMatchObject({
+      commitSha,
+      gitTreeSha,
+      signatureCount: 2,
+      status: "verified-foundation-release-and-detached-tag",
+    });
+    expect(counter).toEqual({ signatures: 2, value: 1 });
+    expect(offlineChecks).toBe(2);
+    expect(snapshotGitState(repository)).toEqual(gitBefore);
+
+    const verificationOptions: FoundationCeremonyVerificationOptions = Object.freeze({
+      ...paths,
+      confirmCommit: commitSha,
+      confirmReleaseVersion: FOUNDATION_RELEASE_VERSION,
+    });
+    const verificationDependencies: FoundationCeremonyVerificationDependencies = {
+      collectInventory: async (repositoryRoot, retainedEvidence, createdAt) =>
+        collectFoundationReleaseInventory({
+          ciEvidence: retainedEvidence,
+          createdAt,
+          mode: "ceremony",
+          repositoryRoot,
+        }),
+      readCiEvidence: async () => ({
+        evidence,
+        sha256: foundationCiEvidenceSha256(evidence),
+      }),
+      readPinnedIdentity: async () => identity,
+      readRepositoryTree: readFoundationVerificationRepositoryTree,
+      readReviewEvidence: async () => ({
+        evidence: reviewEvidence,
+        sha256: foundationIndependentReviewEvidenceSha256(reviewEvidence),
+      }),
+    };
+
+    await expect(
+      verifyFoundationCeremonyOutputs(verificationOptions, repository, verificationDependencies),
+    ).resolves.toEqual(report);
+    expect(counter).toEqual({ signatures: 2, value: 1 });
+    expect(snapshotGitState(repository)).toEqual(gitBefore);
+  }, 120_000);
 });
 
-function git(repository: string, args: readonly string[]): string {
+interface GitStateSnapshot {
+  readonly foundationTagStatus: number | null;
+  readonly objectIds: string;
+  readonly refs: string;
+  readonly status: string;
+}
+
+function snapshotGitState(repository: string): GitStateSnapshot {
+  return Object.freeze({
+    foundationTagStatus: gitStatus(repository, [
+      "show-ref",
+      "--verify",
+      "--quiet",
+      "refs/tags/foundation-v1",
+    ]),
+    objectIds: git(repository, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname)"]),
+    refs: git(repository, ["for-each-ref", "--format=%(refname):%(objectname)"]),
+    status: git(repository, ["status", "--porcelain=v1", "--untracked-files=all"]),
+  });
+}
+
+function git(
+  repository: string,
+  args: readonly string[],
+  environment: NodeJS.ProcessEnv = {},
+): string {
   const result = spawnSync("/usr/bin/git", args, {
     cwd: repository,
     encoding: "utf8",
-    env: { LANG: "C", LC_ALL: "C", PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    env: {
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_OPTIONAL_LOCKS: "0",
+      LANG: "C",
+      LC_ALL: "C",
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      ...environment,
+    },
+    maxBuffer: 8 * 1024 * 1024,
     shell: false,
-    timeout: 10_000,
+    timeout: 20_000,
   });
   if (result.status !== 0 || result.signal !== null) {
     throw new Error(`fixture Git command failed: ${args[0] ?? "unknown"}`);
