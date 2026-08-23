@@ -1,4 +1,8 @@
-# Observer session controller
+# Optional high-assurance session controller
+
+This package preserves the earlier all-source closure workflow as an optional software component.
+It does not define or block the active staged single-machine path; a one-provider `READ_CANARY`
+requires a separate capability-specific acceptance record.
 
 `@rsi/session-controller` is the local composition boundary between verified recovery files and
 the authenticated session lifecycle. It performs no network, provider, credential, or financial
@@ -20,6 +24,7 @@ from the three-component verifier above.
 composer and focused tests. It derives the evidence hash itself; callers cannot submit replacement
 recovery status strings or archive hashes through either path.
 
-The remaining controller work is preflight composition, independent external/MacBook verification,
-provider billing reconciliation, the fixed 15-ticket source-plan ledger, and the physical two-copy
-restore drill. None of those conditions is inferred by this package.
+The remaining controller work is preflight composition, independently retained software evidence,
+provider billing reconciliation, and the fixed 15-ticket source-plan ledger. Backup restore drills
+may run into a fresh temporary directory on the existing computer. None of those conditions is
+inferred by this package.

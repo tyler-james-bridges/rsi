@@ -1,7 +1,12 @@
 # `@rsi/session-lifecycle`
 
-Keyed, local-only SQLite coordination for an Observer v1 supervised session. This package exposes no
-cursor, provider, network, credential, payment, signer, or execution capability.
+> **Optional software component:** This package supports higher-assurance session evidence, but it
+> does not gate RSI's active staged, single-machine production path. The `production-observer` value
+> remains only as a versioned profile identifier for compatibility; it does not imply a hardware
+> requirement.
+
+Keyed, local-only SQLite coordination for a supervised RSI session. This package exposes no cursor,
+provider, network, credential, payment, signer, or execution capability.
 
 ## State machine
 
@@ -54,8 +59,9 @@ Every reopen of an initialized namespace requires an independently retained `tru
 older head is accepted only when it is still an authenticated prefix of the current audit chain. This
 detects a whole-file rollback only when the operator retains the latest accepted head independently;
 a self-consistent rolled-back SQLite file cannot prove its own freshness. The accepted external
-anchor/MacBook record is the intended independent pin. A new empty namespace may omit the head or use
-the genesis head.
+anchor or separately retained operator record is the intended independent pin. Both can be stored
+through scoped software credentials from the existing computer. A new empty namespace may omit the
+head or use the genesis head.
 
 Before returning from reopen, the coordinator atomically invalidates every nonterminal session and
 returns only:
@@ -72,7 +78,7 @@ zero mutation.
 
 Starting requires a successful closed preflight record, the operator-typed lowercase UUIDv4 session
 ID, and an explicit Observer-only acknowledgement. A qualifying run is no longer than 120 minutes.
-The deterministic Observer v1 interpretation of “approximately minute 45 and 90” is:
+The deterministic acknowledgement windows for this component version are:
 
 - minute-45 acknowledgement: inclusive `[startedAt + 45m, startedAt + 50m]`;
 - minute-90 acknowledgement: inclusive `[startedAt + 90m, startedAt + 95m]`.
@@ -91,7 +97,7 @@ provider content. Acceptance is composed only after all of these closed facts su
 - event and digest integrity;
 - raw/index/key purge and clean orphan scan;
 - local checkpoint;
-- external anchor, retained suffix, and MacBook verification;
+- external anchor, retained suffix, and independent verification;
 - the exact sanitized-state-evidence, sanitized-event-archive, and signed-release-bundle archive
   hashes, each carrying its component's closed successful verification status;
 - healthy alert/dead-man check and explicit close;

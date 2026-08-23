@@ -40,10 +40,10 @@ export const REQUIRED_CONFIG_SCHEMA_NAMES = Object.freeze([
   "checkpoint-journal",
   "event-state",
   "external-anchor-outbox",
-  "observer-config",
   "operations-state",
   "preflight-report",
   "public-projection",
+  "runtime-config",
   "sanitized-event-archive",
   "sanitized-state-evidence",
   "session-controller",
@@ -54,7 +54,7 @@ export const REQUIRED_CONFIG_SCHEMA_NAMES = Object.freeze([
 
 export const REQUIRED_TEST_CHECKS = Object.freeze([
   "actions-pinned",
-  "contract-traceability",
+  "production-contract",
   "dependency-audit",
   "format",
   "full-history-secret-scan",
@@ -73,7 +73,7 @@ const REQUIRED_SOURCE_PATHS = Object.freeze([
   "source/tsconfig.json",
 ] as const);
 const REQUIRED_RUNBOOK_PATH = "runbooks/README.md";
-const REQUIRED_RECOVERY_PATH = "recovery/observer-restore.md";
+const REQUIRED_RECOVERY_PATH = "recovery/README.md";
 const LOCKFILE_PATH = "source/pnpm-lock.yaml";
 const SBOM_PATH = "release/sbom.cdx.json";
 const TEST_SUMMARY_PATH = "release/test-summary.v1.json";

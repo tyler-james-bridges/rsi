@@ -56,7 +56,6 @@ export function makeFixture(): Fixture {
       schemaSha256: digest("schema-anchor"),
       version: 1,
     }),
-    Object.freeze({ name: "observer-config", schemaSha256: digest("schema-config"), version: 1 }),
     Object.freeze({
       name: "operations-state",
       schemaSha256: digest("schema-operations"),
@@ -72,6 +71,7 @@ export function makeFixture(): Fixture {
       schemaSha256: digest("schema-public-projection"),
       version: 1,
     }),
+    Object.freeze({ name: "runtime-config", schemaSha256: digest("schema-config"), version: 1 }),
     Object.freeze({
       name: "sanitized-event-archive",
       schemaSha256: digest("schema-event-archive"),

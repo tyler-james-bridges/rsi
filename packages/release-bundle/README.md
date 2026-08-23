@@ -1,10 +1,10 @@
 # Signed release bundle
 
-`@rsi/release-bundle` creates the restorable, signed release companion required by
-the Observer v1 recovery contract. It packages a closed, sanitized inventory of
-source, the frozen lockfile, versioned configuration schemas, runbooks, the
-host-replacement recovery procedure, CycloneDX SBOM, and complete offline test
-summary.
+`@rsi/release-bundle` creates an optional restorable, signed release companion. The active
+single-machine production path uses ordinary reviewed GitHub releases and does not require this
+package. When selected as extra software hardening, it packages a closed, sanitized inventory of
+source, the frozen lockfile, versioned configuration schemas, runbooks, the recovery procedure,
+CycloneDX SBOM, and complete offline test summary.
 
 It never crawls a checkout or accepts a source directory. The release pipeline must
 provide each file as an explicit byte artifact, the exact Git commit/tree identity,
@@ -18,8 +18,12 @@ crawls Git, that pipeline must prove its explicit inventory is the intended tree
 The config-set hash intentionally uses the same canonical
 `rsi.backup.config-schema-hashes` projection as `@rsi/backup`, with each
 `schemaSha256` hashing the corresponding packaged versioned-schema artifact bytes.
-Observer v1 requires the closed schema list in `artifacts.ts`, including the
+The bundle format pins the closed schema list in `artifacts.ts`, including the
 `sanitized-event-archive` schema.
+
+The signed bundle format is version 2. The generic production-contract and recovery artifact names
+replace the retired design's vocabulary as an explicit breaking pre-alpha format change; no
+production version-1 bundle was commissioned.
 
 ```ts
 const bindings = deriveReleaseArtifactBindings(artifacts);
@@ -40,11 +44,16 @@ const receipt = await createSignedReleaseBundle({
   signer: {
     keyId,
     publicKeySpkiDer,
-    // The private key remains inside a MacBook-backed callback/custody adapter.
+    // Key custody stays behind the caller-supplied signing adapter.
     sign: async (domainSeparatedManifest) => signElsewhere(domainSeparatedManifest),
   },
 });
 ```
+
+The signer is dependency-injected. It may use an application-managed key, a
+cloud signing service, or another software implementation appropriate to the
+deployment. This package receives only the public key metadata and signing
+callback, so it does not require a particular computer or physical device.
 
 The returned receipt is not stored inside the archive. Retain it independently on
 the verifier plane and require it for every verification or restore. It pins the
@@ -60,8 +69,8 @@ before creating a new mode-`0700` destination and writes every file with
 `O_EXCL | O_NOFOLLOW` and mode `0600`; it never overwrites a destination.
 
 This package reports `verified-restorable-release-component`, not complete recovery.
-OBS-REC-003 additionally requires a verified `sanitized-state-evidence` component
-and a restorable `sanitized-event-archive`, plus independent target verification and
-the acceptance controller. The bundle intentionally excludes raw Vault/index data,
+A complete recovery workflow may also select a verified `sanitized-state-evidence` component and
+a restorable `sanitized-event-archive`, plus independent target verification and an acceptance
+controller. Those optional components do not gate the active staged path. The bundle intentionally excludes raw Vault/index data,
 cursors, credentials, state/wrapping/capture keys, `.env` files, and arbitrary
 filesystem content.

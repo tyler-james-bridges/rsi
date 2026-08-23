@@ -45,7 +45,7 @@ jobs:
       - name: Scan working tree and Git history for secrets
         run: pnpm ci:secrets
 
-      - name: Verify production contract and traceability
+      - name: Verify the active single-machine production contract
         run: pnpm ci:contract
 
       - name: Verify format, types, and tests
@@ -54,7 +54,7 @@ jobs:
       - name: Verify offline demos
         run: pnpm ci:demos
 
-      - name: Run Stage A drills with external destinations denied
+      - name: Run offline safety drills with external destinations denied
         run: pnpm ci:drills
 
       # pnpm audit necessarily contacts the package registry. It is the only
@@ -65,7 +65,7 @@ jobs:
       - name: Reject generated or dirty state
         run: pnpm ci:clean
 
-      - name: Verify the closed foundation inventory candidate
+      - name: Verify the reproducible committed source inventory
         run: pnpm ci:release
 
   gitleaks:

@@ -177,7 +177,7 @@ describe("sanitized state-evidence component", () => {
     await expectCreateFailure(root, fixture, wrongTrusted, "INPUT_INVALID");
   });
 
-  it("binds every closed Stage A schema and rejects duplicate or unsorted schemas", async () => {
+  it("binds every closed component schema and rejects duplicate or unsorted schemas", async () => {
     const root = await temporaryRoot();
     const fixture = makeFixture();
     expect(fixture.snapshot.configSchemas.map(({ name }) => name)).toEqual([
@@ -187,10 +187,10 @@ describe("sanitized state-evidence component", () => {
       "checkpoint-journal",
       "event-state",
       "external-anchor-outbox",
-      "observer-config",
       "operations-state",
       "preflight-report",
       "public-projection",
+      "runtime-config",
       "sanitized-event-archive",
       "sanitized-state-evidence",
       "session-controller",

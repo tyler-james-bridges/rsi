@@ -133,7 +133,7 @@ export const SessionExternalVerificationEvidenceSchema = z.strictObject({
   evidenceHash: EvidenceHashSchema,
   externalAnchor: VerificationStatusSchema,
   retainedSuffix: VerificationStatusSchema,
-  macBookVerification: VerificationStatusSchema,
+  independentVerification: VerificationStatusSchema,
 });
 
 export const SessionCostEvidenceSchema = z.strictObject({
@@ -169,7 +169,7 @@ export const SessionAcceptanceEvidenceSchema = z.strictObject({
   localCheckpoint: z.literal("verified"),
   externalAnchor: z.literal("verified"),
   retainedSuffix: z.literal("verified"),
-  macBookVerification: z.literal("verified"),
+  independentVerification: z.literal("verified"),
   recoveryArtifacts: z.strictObject({
     sanitizedStateEvidence: z.strictObject({
       archiveSha256: EvidenceHashSchema,

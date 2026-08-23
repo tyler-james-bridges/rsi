@@ -1,4 +1,4 @@
-export const RELEASE_BUNDLE_VERSION = 1 as const;
+export const RELEASE_BUNDLE_VERSION = 2 as const;
 export const RELEASE_BUNDLE_TYPE = "rsi.signed-release-bundle" as const;
 export const RELEASE_BUNDLE_RECEIPT_TYPE = "rsi.release-bundle.retained-receipt" as const;
 export const RELEASE_BUNDLE_REPORT_TYPE = "rsi.release-bundle.verification-report" as const;

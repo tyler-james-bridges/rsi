@@ -112,7 +112,7 @@ export interface StateEvidenceReceiptV1 {
   ];
   readonly sessionId: string;
   readonly signerFingerprintSha256: string;
-  readonly version: 1;
+  readonly version: 2;
 }
 
 export type StateEvidenceArtifactRole =
@@ -181,7 +181,7 @@ export interface StateEvidenceBackupManifestV1 {
     readonly publicKeyFingerprintSha256: string;
   };
   readonly totalArtifactBytes: number;
-  readonly version: 1;
+  readonly version: 2;
 }
 
 export interface StateEvidenceManifestEnvelopeV1 {

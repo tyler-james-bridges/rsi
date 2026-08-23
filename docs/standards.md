@@ -2,24 +2,23 @@
 
 > [!IMPORTANT]
 > These standards describe future integration options. Under the active
-> [Observer v1 production-readiness contract](./production-readiness/v1/README.md),
-> AgentCash, x402, ERC-8004, ERC-8257, ERC-4337, EIP-712 execution, Robinhood, and
-> marketplace-write components remain disabled placeholders.
+> [single-machine production path](./production-readiness/README.md), the current code
+> has no commissioned live adapter, wallet integration, transaction builder, or wallet
+> signer. Standards do not activate capabilities.
 
 RSI deliberately keeps the standards surface small. Draft standards are version-pinned behind adapters so their future changes do not leak through the system.
 
-## Adopt
+## Integration order
 
-| Standard                                            | RSI usage                                                                                                                                            |
-| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) | Public agent identity and reputation/validation references. Registration and feedback are evidence, not authorization.                               |
-| [ERC-8257](https://eips.ethereum.org/EIPS/eip-8257) | Publish individual HTTPS tools with origin/manifest commitments, access predicates, and x402 compatibility. Registry discovery does not imply trust. |
-| [EIP-712](https://eips.ethereum.org/EIPS/eip-712)   | Domain-separated policy, strategy, and execution-intent signatures with RSI-supplied nonce, expiry, and duplicate protection.                        |
-| [ERC-4337](https://eips.ethereum.org/EIPS/eip-4337) | Existing audited smart account with revocable, expiring, target/function-scoped agent permissions and hard spending limits.                          |
+1. **AgentCash/x402 paid research first.** Use deployed payment infrastructure with the dedicated low-balance research wallet, wallet-native human confirmation for the initial canary, and hard origin, payee, asset, network, price, attempt, and daily caps. RSI deploys no payment contract.
+2. **EIP-712 exact intents.** Domain-separated policy, strategy, and future execution-intent signatures bind RSI-supplied nonces, expiry, and duplicate protection. Any future transaction still requires confirmation in the separate execution wallet's UI.
+3. **ERC-4337 only as an optional later control.** Consider an existing audited account implementation only after supervised results justify bounded automation and its revocable, expiring, target/function-scoped permissions and spending limits are independently verified.
+4. **ERC-8004 only after a stable public endpoint exists.** Registration and reputation may support discovery, but identity, feedback, and usage are evidence—not authorization.
+5. **ERC-8257 remains optional.** Adopt it only if publishing individual HTTPS tools with pinned origin and manifest commitments creates concrete value. Registry discovery never implies trust.
 
 ## Inherit rather than implement
 
-- [ERC-1271](https://eips.ethereum.org/EIPS/eip-1271) through the selected smart account.
+- [ERC-1271](https://eips.ethereum.org/EIPS/eip-1271) through a selected smart account only if the optional ERC-4337 stage is reached.
 - [EIP-3009](https://eips.ethereum.org/EIPS/eip-3009) and ERC-2612/Permit2 behavior through the selected x402 SDK, token, and facilitator.
 - ERC-20, ERC-721, ERC-1155, and ERC-165 through assets and protocols RSI consumes.
 
@@ -35,7 +34,7 @@ RSI deliberately keeps the standards surface small. Draft standards are version-
 - ERC-8126 until RSI consumes external agent-verification providers.
 - ERC-8183 until asynchronous escrowed jobs are more useful than immediate x402 calls.
 - ERC-8273 until target applications actually enforce the attestations.
-- EIP-7702 because RSI starts with a dedicated smart account rather than delegating a human EOA.
+- EIP-7702 because persistent EOA delegation adds authority before RSI has evidence that bounded automation is useful.
 - ERC-6551 for treasury custody because transfer or theft of the controlling NFT can transfer control.
 - Subscription NFTs, a protocol token, governance, custom vaults, and custom marketplace contracts.
 

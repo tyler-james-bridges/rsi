@@ -2,10 +2,9 @@
 
 > [!IMPORTANT]
 > This document includes the future execution threat surface. The active
-> [Observer v1 threat model](./production-readiness/v1/observer-threat-model.md) and
-> [data-retention contract](./production-readiness/v1/data-classification-retention.md)
-> govern the current read-only release. Observer has no raw-data forensics-retention
-> exception and no capital authority.
+> [single-machine production path](./production-readiness/README.md) governs current
+> authority and retention. The current code has no commissioned live adapter, wallet
+> integration, transaction builder, wallet signer, or capital authority.
 
 ## Prime assumption
 
@@ -23,6 +22,8 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 - One exclusive executor owns each state-changing capability.
 - No arbitrary calls, arbitrary approvals, bridging, withdrawals, leverage, lending, self-trading, or EIP-7702 delegation.
 - A strategy cannot edit policy, tests, logs, evaluator, credentials, emergency stop, or incident history.
+- Paid research and execution use two separate, deliberately low-balance software wallet accounts on the existing Mac; neither may be a primary personal wallet.
+- The owner confirms every future transaction in the wallet's own UI until an optional bounded-automation stage is separately qualified.
 - Raw snapshot encryption keys and checkpoint signing keys are separate from each other and from every future wallet key.
 - A checkpoint is trusted only when its public key, store ID, key ID, and newest independently retained journal head are pinned.
 
@@ -46,7 +47,7 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 - Exact external bytes and their metadata are encrypted before parsing. Malformed data has no retention exception: it follows the same bounded expiry, verified deletion, and content-free error path as every other capture.
 - Capture identifiers are opaque random values rather than content hashes. The encrypted registry keeps source identifiers and request bindings outside permanent events, and verified cleanup destroys its per-attempt key material.
 - Vault compromise is contained with a dedicated directory, strict permissions, authenticated encryption, per-capture keys, bounded objects, and filesystem identity checks. A same-user process holding a live wrapping key can still decrypt active data, so production deployment requires process and Keychain isolation.
-- SQLite's internal hash chain cannot detect replacement with another internally consistent database. Signed checkpoints and the external-anchor verifier can prove an independently pinned suffix, but production still requires real B2 Object Lock publication, separate Mini/MacBook permissions, and recovery drills.
+- SQLite's internal hash chain cannot detect replacement with another internally consistent database. Signed checkpoints plus an independently retained hash or immutable remote receipt can prove a pinned suffix. Remote retention is an optional software control with scoped credentials; same-Mac restore drills and one durable authorization writer remain required before authority grows.
 - Recovery archives are intentionally split into state evidence, sanitized event history, and a signed release bundle. No single component may claim complete restoration, and lifecycle acceptance records all three exact archive hashes.
 
 ## Tool activation

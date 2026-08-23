@@ -1,6 +1,10 @@
 # `@rsi/alerts`
 
-Offline, content-free incident alert domain and durable delivery outbox for Observer v1.
+> **Optional software component:** This package supports higher-assurance alerting, but it does not
+> gate RSI's active staged, single-machine production path. The `production-observer` value remains
+> only as a versioned profile identifier for compatibility; it does not imply a hardware requirement.
+
+Offline, content-free incident alert domain and durable delivery outbox for supervised RSI sessions.
 
 The package intentionally contains no Resend or Healthchecks client, no credential reader,
 and no network code. A later qualified adapter may claim one strict alert at a time and use
@@ -14,7 +18,7 @@ the opaque `deliveryId` as its provider idempotency key.
 - one allowlisted incident code;
 - literal `critical` severity;
 - a canonical UTC timestamp;
-- the closed Observer profile;
+- the closed versioned profile;
 - template revision `1`; and
 - literal instruction `OPEN_LOCAL_RSI_CONSOLE`.
 

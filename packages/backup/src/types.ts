@@ -1,4 +1,4 @@
-export const BACKUP_VERSION = 1 as const;
+export const BACKUP_VERSION = 2 as const;
 export const BACKUP_TYPE = "rsi.sanitized-state-evidence-component" as const;
 export const BACKUP_RECEIPT_TYPE = "rsi.backup.state-evidence-receipt" as const;
 export const BACKUP_REPORT_TYPE = "rsi.backup.state-evidence-verification-report" as const;
@@ -65,10 +65,10 @@ export type ConfigSchemaName =
   | "checkpoint-journal"
   | "event-state"
   | "external-anchor-outbox"
-  | "observer-config"
   | "operations-state"
   | "preflight-report"
   | "public-projection"
+  | "runtime-config"
   | "sanitized-event-archive"
   | "sanitized-state-evidence"
   | "session-controller"
@@ -202,7 +202,7 @@ export interface StateEvidenceVerificationReportV1 {
   readonly componentScope: "observer-sanitized-state-evidence";
   readonly manifestSha256: string;
   readonly profile: BackupProfile;
-  /** A verified component is never a claim of complete OBS-REC-003 recovery. */
+  /** A verified component is never a claim of complete higher-assurance recovery. */
   readonly recoveryCompleteness: "evidence-only";
   readonly reportType: typeof BACKUP_REPORT_TYPE;
   readonly releaseManifestSha256: string;

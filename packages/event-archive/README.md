@@ -1,11 +1,14 @@
 # `@rsi/event-archive`
 
-`@rsi/event-archive` is the restorable event-history component required by the
-Observer v1 sanitized recovery bundle. Its signed role is exactly
-`sanitized-event-archive`, the companion named by `@rsi/backup` state evidence.
-It is not a complete OBS-REC-003 backup by itself: verified recovery also
-requires the matching `sanitized-state-evidence` component and a
-`signed-release-bundle` containing the sanitized code and runbook bytes.
+> **Optional software component:** This package supports higher-assurance recovery, but it does not
+> gate RSI's active staged, single-machine production path. The `production-observer` value remains
+> only as a versioned profile identifier for compatibility; it does not imply a hardware requirement.
+
+`@rsi/event-archive` is a restorable event-history component for an optional sanitized recovery set.
+Its signed role is exactly `sanitized-event-archive`, the companion named by `@rsi/backup` state
+evidence. It is not a complete recovery set by itself: verified component recovery also requires the
+matching `sanitized-state-evidence` component and a `signed-release-bundle` containing the sanitized
+code and runbook bytes.
 
 The package accepts typed event objects only. It never accepts SQLite bytes,
 WAL/SHM files, arbitrary directories, raw Vault content, capture indexes,

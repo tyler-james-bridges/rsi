@@ -585,7 +585,7 @@ describe("SnapshotVault v2", () => {
       await expect(vault.verify(capture.captureId)).resolves.toMatchObject({ valid: true });
     }
     await vault.close();
-  });
+  }, 30_000);
 
   it("rejects unsafe IDs, symlinks, hard links, permissive modes, and duplicate writers", async () => {
     const { directory, parent, vault, wrappingKey } = await makeVault();

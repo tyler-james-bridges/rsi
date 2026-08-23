@@ -310,7 +310,7 @@ export function parseStateEvidenceReceipt(value: unknown): StateEvidenceReceiptV
   validateLiteral(record.receiptType, "rsi.backup.state-evidence-receipt", "Receipt type");
   validateLiteral(record.componentScope, "observer-sanitized-state-evidence", "Component scope");
   validateLiteral(record.recoveryCompleteness, "evidence-only", "Recovery completeness");
-  validateLiteral(record.version, 1, "State-evidence receipt version");
+  validateLiteral(record.version, 2, "State-evidence receipt version");
   const companions = exactArray(record.requiredCompanionArtifacts, "Required companion artifacts");
   if (
     companions.length !== 2 ||
@@ -349,7 +349,7 @@ export function parseStateEvidenceReceipt(value: unknown): StateEvidenceReceiptV
       record.signerFingerprintSha256,
       "State-evidence signer fingerprint",
     ),
-    version: 1 as const,
+    version: 2 as const,
   }) as StateEvidenceReceiptV1;
 }
 
@@ -410,7 +410,7 @@ function parseStateEvidenceBackupManifest(value: unknown): StateEvidenceBackupMa
     "State-evidence component scope",
   );
   validateLiteral(record.recoveryCompleteness, "evidence-only", "Recovery completeness");
-  validateLiteral(record.version, 1, "State-evidence manifest version");
+  validateLiteral(record.version, 2, "State-evidence manifest version");
   const artifactValues = exactArray(record.artifacts, "State-evidence artifact descriptors");
   if (artifactValues.length !== STATE_EVIDENCE_ARTIFACTS.length) {
     fail("INPUT_INVALID", "State-evidence artifact descriptor count is invalid");
@@ -623,7 +623,7 @@ function parseStateEvidenceBackupManifest(value: unknown): StateEvidenceBackupMa
       publicKeyFingerprintSha256: signerFingerprint,
     }),
     totalArtifactBytes,
-    version: 1 as const,
+    version: 2 as const,
   }) as StateEvidenceBackupManifestV1;
 }
 

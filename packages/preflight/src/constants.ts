@@ -1,7 +1,7 @@
 import type { CredentialAlias, PreflightProfile, SharingService } from "./types.js";
 
 // Volatile pins are reviewed before every release. Node 24.19.0 was the current
-// Node 24 LTS release when this Stage A block was prepared on 2026-08-14.
+// Node 24 LTS release pinned when this offline safety block was prepared on 2026-08-14.
 export const EXPECTED_NODE_VERSION = "24.19.0" as const;
 export const EXPECTED_PNPM_VERSION = "11.20.0" as const;
 export const MINIMUM_MACOS_VERSION = "26.6.1" as const;

@@ -6,7 +6,7 @@ import net from "node:net";
 import tls from "node:tls";
 import { syncBuiltinESMExports } from "node:module";
 
-const BLOCKED_MESSAGE = "Stage A drill blocked an external network destination.";
+const BLOCKED_MESSAGE = "Offline safety drill blocked an external network destination.";
 const LOOPBACK_NAMES = new Set(["localhost", "localhost."]);
 
 function blocked() {
