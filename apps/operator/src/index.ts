@@ -31,3 +31,13 @@ export {
   type RuntimeOperatorControls,
   type RuntimeOperatorControlsOptions,
 } from "./runtime-controls.js";
+export {
+  OPERATOR_X_READ_CANARY_MAXIMUM_CHARGE_USD_MICROS,
+  OPERATOR_X_READ_CANARY_MAXIMUM_REQUESTS,
+  OPERATOR_X_READ_CANARY_MAXIMUM_RESULTS,
+  OPERATOR_X_READ_CANARY_PLAN_ID,
+  parseOperatorReadCanaryCommand,
+  parseOperatorReadCanaryProjection,
+  parseOperatorReadCanaryReceipt,
+  type OperatorReadCanaryProvider,
+} from "./read-canary.js";

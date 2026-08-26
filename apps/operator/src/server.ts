@@ -10,6 +10,14 @@ import {
   OPERATOR_DASHBOARD_HTML,
   OPERATOR_DASHBOARD_JS,
 } from "./dashboard-assets.js";
+import {
+  parseOperatorReadCanaryCommand,
+  parseOperatorReadCanaryProjection,
+  parseOperatorReadCanaryReceipt,
+} from "./read-canary.js";
+import type { OperatorReadCanaryProvider } from "./read-canary.js";
+
+export type { OperatorReadCanaryProvider } from "./read-canary.js";
 
 export type PublicJsonValue =
   null | boolean | number | string | PublicJsonValue[] | { [key: string]: PublicJsonValue };
@@ -141,6 +149,8 @@ export interface OperatorServerOptions {
   readonly runtime?: OperatorRuntimeProvider;
   /** Omit when no content-free research ledger is configured. */
   readonly research?: OperatorResearchProvider;
+  /** Omit when the bounded Stage 1 X read canary is not configured. */
+  readonly readCanary?: OperatorReadCanaryProvider;
 }
 
 export interface RunningOperatorServer {
@@ -1008,6 +1018,16 @@ function assertSameOriginControl(request: IncomingMessage, origin: string): void
   }
 }
 
+function isReadCanaryConflictError(error: unknown): boolean {
+  if (!(error instanceof Error) || utilTypes.isProxy(error)) return false;
+  const descriptor = Object.getOwnPropertyDescriptor(error, "name");
+  return (
+    descriptor !== undefined &&
+    "value" in descriptor &&
+    descriptor.value === "XReadCanaryConflictError"
+  );
+}
+
 async function route(
   request: IncomingMessage,
   response: ServerResponse,
@@ -1015,6 +1035,8 @@ async function route(
   controls: OperatorControlProvider | undefined,
   runtime: OperatorRuntimeProvider | undefined,
   research: OperatorResearchProvider | undefined,
+  readCanary: OperatorReadCanaryProvider | undefined,
+  readCanaryRouteState: { running: boolean },
 ): Promise<void> {
   assertLoopbackLocalSocket(request);
   const origin = assertLoopbackHost(request);
@@ -1035,6 +1057,15 @@ async function route(
       if (!validatedRuntimeActions(runtime).includes(command.action)) {
         throw new HttpError(501, "control_unavailable", "This local control is not configured.");
       }
+      if (command.action === "runtime-stop" && readCanary !== undefined) {
+        // Interruption is intentionally synchronous, local, and attempted before
+        // the durable runtime transition. A provider failure must never block STOP.
+        try {
+          readCanary.abortActive();
+        } catch {
+          // Durable STOP remains the controlling safety boundary.
+        }
+      }
       const result = parseOperatorRuntimeSnapshot(await runtime.executeRuntimeControl(command));
       sendJson(response, 200, { result });
       return;
@@ -1047,6 +1078,32 @@ async function route(
     }
     const result = await controls.executeControl(command);
     sendJson(response, 200, { result });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/read-canary/run") {
+    if (url.search !== "") badRequest("The read canary route does not accept query parameters.");
+    assertSameOriginControl(request, origin);
+    if (readCanary === undefined) {
+      throw new HttpError(501, "read_canary_unavailable", "The X read canary is not configured.");
+    }
+    let command;
+    try {
+      command = parseOperatorReadCanaryCommand(await readControlBody(request));
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      badRequest("Read canary command is invalid.");
+    }
+    if (readCanaryRouteState.running) {
+      throw new HttpError(409, "read_canary_conflict", "The X read canary is already running.");
+    }
+    readCanaryRouteState.running = true;
+    try {
+      const result = parseOperatorReadCanaryReceipt(await readCanary.executeReadCanary(command));
+      sendJson(response, 200, { result });
+    } finally {
+      readCanaryRouteState.running = false;
+    }
     return;
   }
 
@@ -1115,6 +1172,18 @@ async function route(
     return;
   }
 
+  if (url.pathname === "/api/read-canary") {
+    if (url.search !== "") badRequest("The read canary route does not accept query parameters.");
+    if (readCanary === undefined) {
+      throw new HttpError(501, "read_canary_unavailable", "The X read canary is not configured.");
+    }
+    const projection = parseOperatorReadCanaryProjection(
+      await readCanary.getReadCanaryProjection(),
+    );
+    sendJson(response, 200, { readCanary: projection });
+    return;
+  }
+
   if (url.pathname === "/api/control/capabilities") {
     if (url.search !== "") badRequest("The capabilities route does not accept query parameters.");
     const legacyActions = controls?.supportedActions ?? [];
@@ -1171,9 +1240,20 @@ export function createOperatorServer(
   controls?: OperatorControlProvider,
   runtime?: OperatorRuntimeProvider,
   research?: OperatorResearchProvider,
+  readCanary?: OperatorReadCanaryProvider,
 ): Server {
+  const readCanaryRouteState = { running: false };
   const server = createServer((request, response) => {
-    void route(request, response, provider, controls, runtime, research).catch((error: unknown) => {
+    void route(
+      request,
+      response,
+      provider,
+      controls,
+      runtime,
+      research,
+      readCanary,
+      readCanaryRouteState,
+    ).catch((error: unknown) => {
       if (response.headersSent) {
         response.destroy();
         return;
@@ -1189,6 +1269,15 @@ export function createOperatorServer(
           error: {
             code: "runtime_conflict",
             message: "Runtime mode changed; refresh and try again.",
+          },
+        });
+        return;
+      }
+      if (isReadCanaryConflictError(error)) {
+        sendJson(response, 409, {
+          error: {
+            code: "read_canary_conflict",
+            message: "The X read canary state changed; refresh and try again.",
           },
         });
         return;
@@ -1233,6 +1322,7 @@ export async function startOperatorServer(
     options.controls,
     options.runtime,
     options.research,
+    options.readCanary,
   );
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => {
@@ -1263,6 +1353,11 @@ export async function startOperatorServer(
     close: async () => {
       if (closed || !server.listening) return;
       closed = true;
+      try {
+        options.readCanary?.abortActive();
+      } catch {
+        // An optional canary provider must not prevent local server shutdown.
+      }
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error === undefined ? resolve() : reject(error)));
       });

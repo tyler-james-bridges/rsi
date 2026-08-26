@@ -31,7 +31,7 @@ RSI researches markets, converts adversarial internet activity into typed eviden
 - A transactional SQLite event store with idempotent appends and a SHA-256 hash chain that detects edits, reordering, and tail deletion.
 - Portable Ed25519-signed event-store checkpoints in a separate hash-linked journal. An independently retained journal head can detect journal rollback or suffix deletion.
 - An ephemeral AES-256-GCM capture vault with opaque random IDs, per-capture data keys, encrypted metadata, authenticated deletion tombstones, expiry sweeps, and crash recovery. Raw captures—including malformed responses—have no forensic-retention exception.
-- A read-only X recent-search collector with an exact ten-result contract, strict query/response schemas, bounded transport, durable one-shot cost authorization, clock-regression checks, and offline replay. It remains quarantined pending a real credentialed canary.
+- A read-only X recent-search collector with an exact ten-result contract, strict query/response schemas, bounded transport, two independent one-shot authorizations (runtime plus durable attempt), clock-regression checks, and offline replay. It remains quarantined pending a real credentialed canary.
 - An encrypt-first X ingestion boundary that keeps hostile bytes ephemeral while persisting only closed, content-free projections.
 - A durable operations ledger for hard paid-request budgets, exact operation/amount bindings, and encrypted cursor advancement gated by safe events, checkpoints, external anchors, and independent verification.
 - A profile-bound encrypted capture registry with exact-attempt retry binding, per-attempt keys, content-free deletion records, and restart reconciliation.
@@ -44,6 +44,7 @@ RSI researches markets, converts adversarial internet activity into typed eviden
 - A signer-blind, SQLite-backed Stage 0 runtime with exact `STOPPED`, `RESEARCH`, and `PROPOSE_ONLY` modes. Every process boot persists a new STOP, transitions use compare-and-swap revisions, STOP is universal, and one-shot boundary authorizations are invalidated by any transition or restart.
 - A separate typed research ledger for non-executable proposal scorecards. It accepts only a genuine `proposal_persist` authorization in `PROPOSE_ONLY`, rejects raw or executable fields, and exposes exact assets, provenance, scam flags, bounded scores, candidates, and abstentions.
 - A loopback-only operator dashboard/API with fixed same-origin assets, defensive headers, strict runtime/research projections, and closed Stage 0 controls. STOP remains independently available when another dashboard read fails.
+- An optional Stage 1 X read-canary operator with a code-owned query, durable singleton claim, fixed one-request/ten-result/$0.05 ceiling, macOS Keychain boundary, STOP-linearized dispatch/completion, encrypted raw capture, verified crypto-shredding before receipt, and credential-free/no-egress restart recovery. No authenticated X request has been made yet.
 - An executable module-graph gate proving the active runtime/operator path cannot reach policy approval, adapters, wallets, signers, AgentCash/x402, transaction, deployment, or arbitrary-call code. Payment, signing, execution, broadcast, policy approval, and publication are explicit permanent denials in Stage 0.
 - A signed, content-free public receipt/correction/tombstone chain with explicit approval, a 24-hour delay, retained-head rollback detection, and a browser-safe fail-closed verifier. It has no deployment or publication adapter.
 - Offline OpenSea REST/Stream and finalized Base/Robinhood Chain request contracts with strict normalized fixtures, exact asset/order correlation, block-pinned ownership/code checks, and explicit runtime/proxy code bindings. They have no transport or credentials.
@@ -73,6 +74,7 @@ pnpm demo
 pnpm demo:pipeline
 pnpm demo:ingestion
 pnpm ci:drills
+pnpm ci:stage1
 pnpm ci:release
 ```
 
@@ -97,6 +99,13 @@ curl 'http://127.0.0.1:8787/api/events?limit=20'
 
 The operator service binds to IPv4 loopback and has no network authentication. Do not expose it to a network. Every launch begins in persisted `STOPPED`; the dashboard can enter research, enter proposal-only mode, de-escalate, or STOP, but it has no financial authority. Runtime authority and typed research use separate gitignored databases at `.local/rsi-runtime.sqlite` and `.local/rsi-research.sqlite`. Stop it with `Ctrl-C`, which persists STOP before closing.
 
+The production-shaped Stage 1 host is `pnpm operator:x-canary`. It also boots `STOPPED` and cannot
+sign, pay, trade, publish, or paginate. Its dashboard will not enable the single canary button until
+the operator enters `RESEARCH`, types the fixed plan ID, and acknowledges one request and the
+$0.05 maximum. Starting the host alone makes no X request. See the
+[production path](docs/production-readiness/README.md#x-read-canary-commissioning) before adding a
+credential or pressing Run.
+
 ## Repository map
 
 ```text
@@ -115,6 +124,8 @@ packages/checkpoints Portable signed store-head journal and verifier
 packages/vault       Ephemeral encrypted capture storage and crypto-shredding
 packages/x-collector Quarantined X recent-search live/replay client
 packages/ingestion   Encrypt-first X snapshot and safe event boundary
+packages/read-canary Durable one-shot X canary coordinator and receipt
+packages/credential-host Fixed macOS Keychain boundary for the X canary
 packages/capture-registry Profile-bound encrypted ephemeral capture index
 packages/operations  Paid-attempt budgets and verified encrypted cursors
 packages/preflight   Optional compatibility host and credential-presence checks
@@ -140,7 +151,7 @@ Any future paid-read and execution stages use two separate, deliberately low-bal
 
 ## Current limits
 
-- X recent-search has a credential-injected live implementation and an offline synthetic replay path, but no real credential was used and upstream X documentation is currently inconsistent about response-field terminology. There is no live recording/cassette mode. Until a credentialed canary validates the pinned contract, the adapter remains quarantined.
+- X recent-search has a credential-injected live implementation, a production-shaped one-shot operator path, and an offline synthetic replay path, but no real credential was used. The canary deliberately requests only the minimum `id`/`text` response and no optional field dialect. There is no live recording/cassette mode. Until a credentialed canary validates the pinned contract, the adapter remains quarantined.
 - Marketplace and chain packages now define exact offline request and normalized-response contracts for OpenSea, Base, and Robinhood Chain. They deliberately contain no HTTP/WebSocket/RPC transport, provider credential, retry policy, or live-schema claim; separately approved canaries must validate current provider behavior before adapters can be commissioned.
 - Signed checkpoints and the external-anchor protocol can authenticate an event-store head, retention policy, and independently pinned suffix. This build still has no real remote immutable-storage adapter or scoped publication credential, so the offline simulations are not independent storage evidence.
 - Policy spend/replay state survives a clean reopen, and SQLite serializes concurrent writers that share one database file. Separate database copies have no distributed coordinator and must never act as parallel execution authorities.

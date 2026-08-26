@@ -17,7 +17,8 @@ credentials are absent, activation caps are unset, and the operator UI is loopba
 persisted Stage 0 runtime always boots into `STOPPED`; `RESEARCH` and `PROPOSE_ONLY` grant only
 one-shot collection and non-executable proposal-persistence boundaries. Payment, signing, policy
 approval, execution, broadcast, and publication are permanently denied. No `READ_CANARY` has
-been commissioned yet.
+been commissioned yet. The X `READ_CANARY` implementation is present and offline-verified; that is
+not evidence that X authentication or the live response currently works.
 
 ## Compatibility components are not gates
 
@@ -29,9 +30,9 @@ block the staged activation states below. In particular, a `production-observer`
 not a readiness verdict for `READ_CANARY`, and no new staged runtime may silently substitute the
 legacy all-source closure equation for stage-specific acceptance.
 
-The next runtime must record exactly which single provider and capability were approved for a
-canary. Optional recovery or publication components may be added later without expanding that
-authority.
+The Stage 1 coordinator records exactly one X plan, request fingerprint, runtime authorization,
+durable attempt, encrypted capture receipt, and terminal sanitized outcome. Optional recovery or
+publication components may be added later without expanding that authority.
 
 ## Staged activation
 
@@ -40,8 +41,9 @@ Each stage requires the previous stage to pass. A stage grants only the authorit
 1. **`LOCAL_VERIFIED`** — exact runtime and lockfile, normal public GitHub CI, offline fixtures,
    adversarial tests, demos, and recovery drills pass on the existing computer.
 2. **`READ_CANARY`** — one supervised live read against one explicitly approved provider succeeds.
-   No wallet or spend authority is present. Current official provider documentation is checked
-   immediately before the canary.
+   No wallet or programmable payment authority is present, but the approved provider credential
+   may consume prepaid provider credits for this one bounded read. Current official provider
+   documentation and account pricing are checked immediately before the canary.
 3. **`PAID_READ_CANARY`** — one user-approved AgentCash/x402 request uses a dedicated, deliberately
    low-balance research wallet. Approved origin, endpoint, network, asset, payee, per-call price,
    daily spend, attempts, timeout, and response size are all bounded locally and default to zero or
@@ -107,12 +109,49 @@ pricing, authentication, schemas, and contract addresses can change. Before any 
 the current official documentation and deployed addresses, pin the exact accepted contract, and
 repeat the bounded canary. Historical notes or social posts are not activation evidence.
 
+## X read-canary commissioning
+
+The code is ready for one supervised request; the live result remains unproven. Immediately before
+commissioning, verify X's official recent-search endpoint, app-only bearer authentication, current
+per-Post price, rate limits, and account credit. The reviewed plan is exactly one `GET` to
+`https://api.x.com/2/tweets/search/recent`, `max_results=10`, `sort_order=recency`, no pagination,
+no retries, and a maximum reserved cost of 50,000 USD micro-units ($0.05). Actual provider charge
+is reported as unknown unless X supplies an independently verifiable billing receipt.
+
+Create four generic-password items in the login Keychain under the fixed account
+`rsi-stage1-x-read-canary` and these services:
+
+- `dev.rsi.canary.x-read` — the app-only bearer token;
+- `dev.rsi.canary.operations-state` — a fresh canonical 32-byte base64url key;
+- `dev.rsi.canary.capture-registry` — a different fresh canonical 32-byte base64url key;
+- `dev.rsi.canary.vault-wrapping` — a third different fresh canonical 32-byte base64url key.
+
+Use the Keychain UI, or run the following once per service and paste the value only at the hidden
+prompt. Keeping `-w` last prompts instead of placing the secret in the process arguments:
+
+```bash
+/usr/bin/security add-generic-password -U \
+  -a rsi-stage1-x-read-canary \
+  -s dev.rsi.canary.x-read \
+  -w
+```
+
+Never put those values in shell history, environment variables, `.env`, chat, Git, screenshots, or
+livestream output. Then run `pnpm operator:x-canary`, confirm it starts `STOPPED`, use the loopback
+dashboard to enter `RESEARCH`, type `x-nft-market-pulse-v1`, acknowledge one request and $0.05, and
+press Run once. STOP remains available during the request. A different request ID, controller, or
+process cannot claim a second request from the same durable canary state.
+
+If the process exits after dispatch, restart the same command on the same files. Startup reads only
+the three storage keys, repairs Vault/registry crash seams, and either finishes the already-recorded
+content-free result or records `INTERRUPTED`; it never reads the X bearer and never retries the
+provider request. A successful or rejected captured receipt is published only after the raw-capture
+key has been destroyed and the keyed registry records the deletion.
+
 ## Next build target
 
-Commission one supervised `READ_CANARY` source at a time on the existing Mac: X first, then
-OpenSea, then Base RPC. Immediately before each canary, verify current official authentication,
-pricing, request/response schemas, and deployed addresses; bind the exact provider attempt to a
-one-shot `research_collection` authorization; and persist only strict evidence and non-executable
-proposal scorecards. Only after proposals are useful and auditable should the owner fund the tiny
-research wallet for one AgentCash/x402 paid read. Capital activation values remain local and unset
-in source.
+Commission the already-built X `READ_CANARY`, inspect its sanitized receipt, and keep the adapter in
+quarantine if authentication, schema, rate metadata, or capture verification fails. Then implement
+OpenSea and Base RPC canaries one at a time. Only after live proposals are useful and auditable
+should the owner fund the tiny research wallet for one AgentCash/x402 paid read. Capital activation
+values remain local and unset in source.

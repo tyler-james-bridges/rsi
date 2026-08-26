@@ -20,7 +20,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@rsi/checkpoints": "workspace:*"
+    "@rsi/checkpoints": "workspace:*",
+    "@rsi/runtime": "workspace:*"
   },
   "engines": {
     "node": "24.x"

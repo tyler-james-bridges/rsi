@@ -59,6 +59,48 @@ export const OPERATOR_DASHBOARD_HTML = `<!doctype html>
           <p class="help">Always disabled: policy approval, paid reads, wallet signing, execution adapters, transaction broadcast, and external publication.</p>
         </article>
 
+        <article id="canary-panel" class="panel span-two canary-panel" hidden>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Stage 1 · one-shot read</p>
+              <h2>X market pulse canary</h2>
+            </div>
+            <span id="canary-status" class="badge neutral" aria-live="polite">Checking</span>
+          </div>
+          <p class="help">
+            This bounded canary performs at most one read request and captures any returned
+            material behind the encrypted ingestion boundary. The dashboard never receives
+            source text or credentials.
+          </p>
+          <dl class="metric-grid canary-metrics">
+            <div class="metric"><dt>Plan ID</dt><dd id="canary-plan-id">—</dd></div>
+            <div class="metric"><dt>Credential</dt><dd id="canary-credential">—</dd></div>
+            <div class="metric"><dt>Request / results cap</dt><dd id="canary-bounds">1 / 10</dd></div>
+            <div class="metric"><dt>Maximum charge</dt><dd id="canary-maximum-charge">$0.05</dd></div>
+            <div class="metric"><dt>Actual charge</dt><dd id="canary-actual-charge">UNKNOWN</dd></div>
+            <div class="metric"><dt>Last outcome</dt><dd id="canary-last-outcome">—</dd></div>
+            <div class="metric"><dt>Posts captured</dt><dd id="canary-last-count">—</dd></div>
+            <div class="metric"><dt>Completed at</dt><dd id="canary-last-completed">—</dd></div>
+          </dl>
+          <div class="stack canary-controls">
+            <label>
+              Type the plan ID to acknowledge this exact canary
+              <input id="canary-plan-ack" autocomplete="off" inputmode="text" spellcheck="false"
+                placeholder="x-nft-market-pulse-v1">
+            </label>
+            <label class="check-row">
+              <input id="canary-one-request-ack" type="checkbox">
+              <span>I authorize exactly one request with no automatic retries.</span>
+            </label>
+            <label class="check-row">
+              <input id="canary-charge-ack" type="checkbox">
+              <span>I acknowledge a maximum estimated charge of $0.05; the actual charge is not reported by this API.</span>
+            </label>
+            <button id="canary-run" type="button" disabled>Run one-shot canary</button>
+          </div>
+          <p id="canary-message" class="message" aria-live="polite"></p>
+        </article>
+
         <article class="panel span-two">
           <div class="panel-heading">
             <div>
@@ -189,6 +231,7 @@ export const OPERATOR_DASHBOARD_CSS = `:root {
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 80% 0, #17201c 0, transparent 35%), var(--bg); color: var(--ink); }
 button, input, select { font: inherit; }
 button { border: 1px solid var(--acid); border-radius: 999px; background: var(--acid); color: #0b0e0b; font-weight: 720; padding: .72rem 1rem; cursor: pointer; }
@@ -228,10 +271,12 @@ main { max-width: 1180px; margin: 0 auto; padding: 1rem 1.4rem 3rem; }
 .metric dd { overflow: hidden; margin: .35rem 0 0; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
 .stack { display: grid; gap: .75rem; }
 .runtime-panel { border-color: #3b4d22; }
+.canary-panel { border-color: #3a4b52; }
 .runtime-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; }
 .button-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
 .check-row { grid-template-columns: auto 1fr; align-items: start; }
 .check-row input { width: auto; margin-top: .18rem; }
+.canary-controls { max-width: 760px; }
 .help, .message { color: var(--muted); font-size: .82rem; line-height: 1.5; }
 .message { min-height: 1.3rem; margin: .8rem 0 0; }
 .message.error { color: var(--danger); }
@@ -275,6 +320,8 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
   let supportedRuntimeActions = new Set();
   let runtimeSnapshot = null;
   let pendingRuntimeControls = 0;
+  let readCanaryProjection = null;
+  let pendingReadCanary = false;
 
   const text = (value) => typeof value === "string" ? value : JSON.stringify(value);
   const safeSessionId = () => byId("session-id").value.trim();
@@ -330,6 +377,7 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
     byId("runtime-process").textContent = snapshot.processInstanceId;
     byId("runtime-authority").textContent = "NONE";
     updateRuntimeButtons();
+    updateReadCanaryButton();
   }
 
   function clearRuntime(message) {
@@ -344,6 +392,69 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
     byId("runtime-message").textContent = message;
     byId("runtime-message").className = "message error";
     updateRuntimeButtons();
+    updateReadCanaryButton();
+  }
+
+  function usdFromMicros(value) {
+    if (typeof value !== "string" || !/^\\d+$/.test(value)) return "UNKNOWN";
+    const micros = Number(value);
+    return Number.isSafeInteger(micros) ? "$" + (micros / 1000000).toFixed(2) : "UNKNOWN";
+  }
+
+  function updateReadCanaryButton() {
+    const plan = readCanaryProjection && readCanaryProjection.plan;
+    const acknowledgedPlan = byId("canary-plan-ack").value.trim();
+    byId("canary-run").disabled = pendingReadCanary ||
+      !runtimeSnapshot || runtimeSnapshot.mode === "STOPPED" ||
+      !readCanaryProjection || readCanaryProjection.status !== "ready" ||
+      readCanaryProjection.credentialStatus !== "configured" ||
+      !plan || acknowledgedPlan !== plan.planId ||
+      !byId("canary-one-request-ack").checked ||
+      !byId("canary-charge-ack").checked;
+  }
+
+  function renderReadCanary(projection) {
+    byId("canary-panel").hidden = false;
+    readCanaryProjection = projection;
+    const plan = projection.plan;
+    const receipt = projection.lastReceipt;
+    const status = byId("canary-status");
+    status.textContent = projection.status;
+    status.className = projection.status === "ready" || projection.status === "completed"
+      ? "badge good"
+      : projection.status === "failed" || projection.status === "interrupted"
+        ? "badge bad"
+        : "badge neutral";
+    byId("canary-plan-id").textContent = plan.planId;
+    byId("canary-credential").textContent = projection.credentialStatus;
+    byId("canary-bounds").textContent = String(plan.maximumRequests) + " / " + String(plan.maximumResults);
+    byId("canary-maximum-charge").textContent = usdFromMicros(plan.maximumChargeUsdMicros);
+    byId("canary-actual-charge").textContent = receipt
+      ? usdFromMicros(receipt.actualChargeUsdMicros)
+      : "UNKNOWN";
+    byId("canary-last-outcome").textContent = receipt ? receipt.outcome : "—";
+    byId("canary-last-count").textContent = receipt && typeof receipt.postCount === "number"
+      ? String(receipt.postCount)
+      : "—";
+    byId("canary-last-completed").textContent = receipt ? receipt.completedAt : "—";
+    updateReadCanaryButton();
+  }
+
+  function clearReadCanary(hidePanel) {
+    byId("canary-panel").hidden = hidePanel === true;
+    readCanaryProjection = null;
+    const status = byId("canary-status");
+    status.textContent = "Unavailable";
+    status.className = "badge neutral";
+    byId("canary-plan-id").textContent = "x-nft-market-pulse-v1";
+    byId("canary-credential").textContent = "unknown";
+    byId("canary-bounds").textContent = "1 / 10";
+    byId("canary-maximum-charge").textContent = "$0.05";
+    byId("canary-actual-charge").textContent = "UNKNOWN";
+    byId("canary-last-outcome").textContent = "—";
+    byId("canary-last-count").textContent = "—";
+    byId("canary-last-completed").textContent = "—";
+    updateReadCanaryButton();
   }
 
   function renderSummary(summary) {
@@ -478,15 +589,29 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
       const message = body && body.error && typeof body.error.message === "string"
         ? body.error.message
         : "The local request did not complete.";
-      throw new Error(message);
+      const error = new Error(message);
+      error.code = body && body.error && typeof body.error.code === "string"
+        ? body.error.code
+        : "request_failed";
+      throw error;
     }
     return body;
   }
 
+  async function requestOptionalReadCanary() {
+    try {
+      return await requestJson("/api/read-canary");
+    } catch (error) {
+      if (error && error.code === "read_canary_unavailable") return null;
+      throw error;
+    }
+  }
+
   async function refresh() {
-    const [runtime, research, summary, events, capabilities] = await Promise.allSettled([
+    const [runtime, research, readCanary, summary, events, capabilities] = await Promise.allSettled([
       requestJson("/api/runtime"),
       requestJson("/api/research"),
+      requestOptionalReadCanary(),
       requestJson("/api/summary"),
       requestJson("/api/events?limit=12"),
       requestJson("/api/control/capabilities"),
@@ -497,6 +622,12 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
 
     if (research.status === "fulfilled") renderResearch(research.value.research);
     else clearResearch();
+
+    if (readCanary.status === "fulfilled" && readCanary.value !== null) {
+      renderReadCanary(readCanary.value.readCanary);
+    } else {
+      clearReadCanary(readCanary.status === "fulfilled");
+    }
 
     if (summary.status === "fulfilled") renderSummary(summary.value.summary);
     else {
@@ -610,6 +741,43 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
     }
   }
 
+  async function runReadCanary() {
+    if (byId("canary-run").disabled || !readCanaryProjection || !runtimeSnapshot) return;
+    const plan = readCanaryProjection.plan;
+    const message = byId("canary-message");
+    const command = {
+      schemaVersion: 1,
+      planId: plan.planId,
+      expectedRuntimeRevision: runtimeSnapshot.revision,
+      requestId: crypto.randomUUID(),
+      typedPlanIdAcknowledgement: byId("canary-plan-ack").value.trim(),
+      oneRequestAcknowledgement: byId("canary-one-request-ack").checked,
+      maximumChargeUsdMicrosAcknowledgement: plan.maximumChargeUsdMicros,
+    };
+    pendingReadCanary = true;
+    message.className = "message";
+    message.textContent = "Running the bounded read canary…";
+    updateReadCanaryButton();
+    try {
+      const body = await requestJson("/api/read-canary/run", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-rsi-operator-request": "1" },
+        body: JSON.stringify(command),
+      });
+      message.textContent = "Canary completed: " + body.result.outcome + ".";
+      message.className = body.result.outcome === "accepted" || body.result.outcome === "empty"
+        ? "message"
+        : "message error";
+      void refresh();
+    } catch (error) {
+      message.textContent = error instanceof Error ? error.message : "Read canary failed.";
+      message.className = "message error";
+    } finally {
+      pendingReadCanary = false;
+      updateReadCanaryButton();
+    }
+  }
+
   byId("refresh").addEventListener("click", refresh);
   for (const button of legacyButtons) {
     button.addEventListener("click", () => runLegacyControl(button.dataset.action));
@@ -617,7 +785,12 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
   for (const button of runtimeButtons) {
     button.addEventListener("click", () => runRuntimeControl(button.dataset.runtimeAction));
   }
+  byId("canary-plan-ack").addEventListener("input", updateReadCanaryButton);
+  byId("canary-one-request-ack").addEventListener("change", updateReadCanaryButton);
+  byId("canary-charge-ack").addEventListener("change", updateReadCanaryButton);
+  byId("canary-run").addEventListener("click", runReadCanary);
   updateRuntimeButtons();
+  updateReadCanaryButton();
   void refresh();
 })();
 `;

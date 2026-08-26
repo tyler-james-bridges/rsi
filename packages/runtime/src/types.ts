@@ -93,7 +93,25 @@ export interface RuntimeBoundaryReceipt {
   readonly reason: RuntimeBoundaryDecisionReason;
 }
 
-export interface RuntimeBoundaryAuthorization<TBoundary extends RuntimeBoundary = RuntimeBoundary> {
+/**
+ * Current authority facts sampled while the runtime write lock is held for a
+ * network completion checkpoint. This intentionally carries no external
+ * content and is not itself a new authority grant.
+ */
+export interface RuntimeBoundaryCompletionFacts {
+  readonly schemaVersion: 1;
+  readonly actionId: string;
+  readonly authorizationId: string;
+  readonly boundary: "research_collection";
+  readonly checkedAt: string;
+  readonly decision: "allowed" | "denied";
+  readonly mode: RuntimeMode;
+  readonly modeRevision: number;
+  readonly processInstanceId: string;
+  readonly reason: RuntimeBoundaryDecisionReason;
+}
+
+interface RuntimeBoundaryAuthorizationBase<TBoundary extends RuntimeBoundary> {
   readonly kind: "rsi.runtime-boundary.v1";
   readonly actionId: string;
   readonly authorizationId: string;
@@ -103,8 +121,32 @@ export interface RuntimeBoundaryAuthorization<TBoundary extends RuntimeBoundary 
   readonly requestedAt: string;
   readonly requestedMode: RuntimeMode;
   readonly requestedRevision: number;
-  consume(): Readonly<RuntimeBoundaryReceipt>;
 }
+
+export type RuntimeBoundaryDispatch = (receipt: Readonly<RuntimeBoundaryReceipt>) => void;
+export type RuntimeBoundaryCompletion = (facts: Readonly<RuntimeBoundaryCompletionFacts>) => void;
+
+type RuntimeBoundaryAuthorizationMethods<TBoundary extends RuntimeBoundary> =
+  TBoundary extends "research_collection"
+    ? Readonly<{
+        consumeAndDispatch(dispatch: RuntimeBoundaryDispatch): Readonly<RuntimeBoundaryReceipt>;
+        guardCompletion(
+          completion: RuntimeBoundaryCompletion,
+        ): Readonly<RuntimeBoundaryCompletionFacts>;
+      }>
+    : Readonly<{
+        consume(): Readonly<RuntimeBoundaryReceipt>;
+      }>;
+
+/**
+ * Network collection authority can only be consumed around a synchronous
+ * dispatch invocation. Non-network boundaries retain the ordinary one-shot
+ * consume method.
+ */
+export type RuntimeBoundaryAuthorization<TBoundary extends RuntimeBoundary = RuntimeBoundary> =
+  TBoundary extends RuntimeBoundary
+    ? RuntimeBoundaryAuthorizationBase<TBoundary> & RuntimeBoundaryAuthorizationMethods<TBoundary>
+    : never;
 
 interface RuntimeAuditEventBase {
   readonly aggregateId: "runtime:authority";

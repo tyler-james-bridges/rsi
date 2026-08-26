@@ -12,6 +12,7 @@ import {
   type OperatorControlCommand,
   type OperatorControlProvider,
   type OperatorEventQuery,
+  type OperatorReadCanaryProvider,
   type OperatorResearchProvider,
   type OperatorRuntimeProvider,
   type OperatorSnapshotProvider,
@@ -106,6 +107,80 @@ function researchProjection() {
         proposal: researchProposal(),
       },
     ],
+  };
+}
+
+const CANARY_FINGERPRINT = `sha256:${"d".repeat(64)}` as const;
+
+function readCanaryPlan() {
+  return {
+    schemaVersion: 1 as const,
+    planId: "x-nft-market-pulse-v1" as const,
+    providerId: "x-api-v2" as const,
+    operation: "x.recent-search.v1" as const,
+    endpoint: "https://api.x.com/2/tweets/search/recent" as const,
+    method: "GET" as const,
+    sortOrder: "recency" as const,
+    maximumRequests: 1 as const,
+    maximumResults: 10 as const,
+    maximumChargeUsdMicros: "50000" as const,
+    requestFingerprint: CANARY_FINGERPRINT,
+    rawContentDisposition: "encrypted_ephemeral" as const,
+    automaticRetries: 0 as const,
+  };
+}
+
+function readCanaryReceipt() {
+  const requestId = "11111111-1111-4111-8111-111111111111";
+  return {
+    schemaVersion: 1 as const,
+    receiptId: `x-read-canary:${requestId}`,
+    planId: "x-nft-market-pulse-v1" as const,
+    providerId: "x-api-v2" as const,
+    requestId,
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    requestFingerprint: CANARY_FINGERPRINT,
+    outcome: "accepted" as const,
+    failureCode: null,
+    acquiredAt: "2026-08-25T21:00:00.000Z",
+    completedAt: "2026-08-25T21:00:01.000Z",
+    postCount: 3,
+    byteLength: 1_024,
+    hasNextPage: false,
+    rateLimit: { limit: 450, remaining: 449, resetAtUnixSeconds: 1_788_000_000 },
+    maximumRequests: 1 as const,
+    maximumResults: 10 as const,
+    maximumChargeUsdMicros: "50000" as const,
+    actualChargeUsdMicros: null,
+    runtime: {
+      authorizationId: "33333333-3333-4333-8333-333333333333",
+      eventHash: "e".repeat(64),
+      eventSequence: 8,
+      modeRevision: 2,
+    },
+    capture: { eventHash: "f".repeat(64), eventSequence: 9 },
+  };
+}
+
+function readCanaryProjection(status: "completed" | "ready" | "running" = "ready") {
+  return {
+    schemaVersion: 1 as const,
+    status,
+    credentialStatus: "configured" as const,
+    plan: readCanaryPlan(),
+    lastReceipt: status === "completed" ? readCanaryReceipt() : null,
+  };
+}
+
+function readCanaryCommand() {
+  return {
+    schemaVersion: 1 as const,
+    planId: "x-nft-market-pulse-v1" as const,
+    expectedRuntimeRevision: 2,
+    requestId: "11111111-1111-4111-8111-111111111111",
+    typedPlanIdAcknowledgement: "x-nft-market-pulse-v1" as const,
+    oneRequestAcknowledgement: true as const,
+    maximumChargeUsdMicrosAcknowledgement: "50000" as const,
   };
 }
 
@@ -212,6 +287,18 @@ describe("operator HTTP API", () => {
   async function restartWithResearch(research: OperatorResearchProvider): Promise<void> {
     await running.close();
     running = await startOperatorServer(provider, { port: 0, research });
+  }
+
+  async function restartWithReadCanary(
+    readCanary: OperatorReadCanaryProvider,
+    runtime?: OperatorRuntimeProvider,
+  ): Promise<void> {
+    await running.close();
+    running = await startOperatorServer(provider, {
+      port: 0,
+      readCanary,
+      ...(runtime === undefined ? {} : { runtime }),
+    });
   }
 
   it("binds to loopback by default and serves JSON health with defensive headers", async () => {
@@ -575,6 +662,213 @@ describe("operator HTTP API", () => {
       expect(JSON.stringify(body)).not.toContain("raw-secret");
       expect(JSON.stringify(body)).not.toContain("deadbeef");
     }
+  });
+
+  it("serves only the closed Stage 1 read-canary projection", async () => {
+    const readCanary: OperatorReadCanaryProvider = {
+      abortActive: vi.fn(),
+      executeReadCanary: vi.fn(() => readCanaryReceipt()),
+      getReadCanaryProjection: vi.fn(() => readCanaryProjection("completed")),
+    };
+    await restartWithReadCanary(readCanary);
+
+    const response = await get("/api/read-canary");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ readCanary: readCanaryProjection("completed") });
+    expect((await get("/api/read-canary?detail=full")).status).toBe(400);
+
+    const serialized = JSON.stringify(await (await get("/api/read-canary")).json());
+    expect(serialized).not.toContain('"query"');
+    expect(serialized).not.toContain('"token"');
+    expect(serialized).not.toContain('"text"');
+  });
+
+  it("rejects read-canary projections with extra source material or credentials", async () => {
+    const unsafeValues = [
+      { ...readCanaryProjection(), query: "source-material" },
+      {
+        ...readCanaryProjection(),
+        plan: { ...readCanaryPlan(), bearerToken: "credential-material" },
+      },
+      {
+        ...readCanaryProjection("completed"),
+        lastReceipt: { ...readCanaryReceipt(), text: "captured-material" },
+      },
+      {
+        ...readCanaryProjection("completed"),
+        lastReceipt: {
+          ...readCanaryReceipt(),
+          rateLimit: { limit: 0, remaining: 0, resetAtUnixSeconds: 1_788_000_000 },
+        },
+      },
+    ];
+    for (const unsafe of unsafeValues) {
+      await restartWithReadCanary({
+        abortActive: vi.fn(),
+        executeReadCanary: vi.fn(() => readCanaryReceipt()),
+        getReadCanaryProjection: () => unsafe as never,
+      });
+      const response = await get("/api/read-canary");
+      const body = await response.json();
+      expect(response.status).toBe(500);
+      expect(body).toEqual({
+        error: { code: "internal_error", message: "The operator snapshot could not be read." },
+      });
+      expect(JSON.stringify(body)).not.toContain("source-material");
+      expect(JSON.stringify(body)).not.toContain("credential-material");
+      expect(JSON.stringify(body)).not.toContain("captured-material");
+    }
+  });
+
+  it("accepts exactly the typed, same-origin one-shot canary command", async () => {
+    const commands: unknown[] = [];
+    const readCanary: OperatorReadCanaryProvider = {
+      abortActive: vi.fn(),
+      executeReadCanary: vi.fn((command) => {
+        commands.push(command);
+        return readCanaryReceipt();
+      }),
+      getReadCanaryProjection: vi.fn(() => readCanaryProjection()),
+    };
+    await restartWithReadCanary(readCanary);
+    const response = await fetch(`${running.origin}/api/read-canary/run`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: running.origin,
+        "sec-fetch-site": "same-origin",
+        "x-rsi-operator-request": "1",
+      },
+      body: JSON.stringify(readCanaryCommand()),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ result: readCanaryReceipt() });
+    expect(commands).toEqual([readCanaryCommand()]);
+    expect(commands.every(Object.isFrozen)).toBe(true);
+  });
+
+  it("rejects malformed, expanded, and cross-origin canary commands before execution", async () => {
+    const executeReadCanary = vi.fn(() => readCanaryReceipt());
+    await restartWithReadCanary({
+      abortActive: vi.fn(),
+      executeReadCanary,
+      getReadCanaryProjection: vi.fn(() => readCanaryProjection()),
+    });
+    const validHeaders = {
+      "content-type": "application/json",
+      origin: running.origin,
+      "sec-fetch-site": "same-origin",
+      "x-rsi-operator-request": "1",
+    };
+    const valid = readCanaryCommand();
+    const cases: Array<Readonly<{ body: unknown; headers?: Record<string, string> }>> = [
+      { body: { ...valid, query: "not-accepted" } },
+      { body: { ...valid, bearerToken: "not-accepted" } },
+      { body: { ...valid, oneRequestAcknowledgement: false } },
+      { body: { ...valid, maximumChargeUsdMicrosAcknowledgement: 50_000 } },
+      { body: { ...valid, maximumChargeUsdMicrosAcknowledgement: "50001" } },
+      { body: { ...valid, typedPlanIdAcknowledgement: "yes" } },
+      { body: { ...valid, expectedRuntimeRevision: 0 } },
+      { body: { ...valid, requestId: "not-a-uuid" } },
+      { body: valid, headers: { ...validHeaders, origin: "https://attacker.invalid" } },
+      {
+        body: valid,
+        headers: { ...validHeaders, "sec-fetch-site": "cross-site" },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const response = await fetch(`${running.origin}/api/read-canary/run`, {
+        method: "POST",
+        headers: testCase.headers ?? validHeaders,
+        body: JSON.stringify(testCase.body),
+      });
+      expect([400, 403]).toContain(response.status);
+    }
+    expect(executeReadCanary).not.toHaveBeenCalled();
+  });
+
+  it("serializes canary execution and persists STOP without waiting for the pending run", async () => {
+    const order: string[] = [];
+    let completeCanary!: (receipt: ReturnType<typeof readCanaryReceipt>) => void;
+    const pendingCanary = new Promise<ReturnType<typeof readCanaryReceipt>>((resolve) => {
+      completeCanary = resolve;
+    });
+    const executeReadCanary = vi.fn(() => {
+      order.push("canary-started");
+      return pendingCanary;
+    });
+    const readCanary: OperatorReadCanaryProvider = {
+      abortActive: vi.fn(() => {
+        order.push("canary-aborted");
+      }),
+      executeReadCanary,
+      getReadCanaryProjection: vi.fn(() => readCanaryProjection("running")),
+    };
+    const runtime: OperatorRuntimeProvider = {
+      supportedActions: ["runtime-stop"],
+      executeRuntimeControl: vi.fn(() => {
+        order.push("runtime-stopped");
+        return runtimeSnapshot("STOPPED", 3);
+      }),
+      getRuntimeSnapshot: vi.fn(() => runtimeSnapshot("RESEARCH", 2)),
+    };
+    await restartWithReadCanary(readCanary, runtime);
+    const headers = {
+      "content-type": "application/json",
+      origin: running.origin,
+      "sec-fetch-site": "same-origin",
+      "x-rsi-operator-request": "1",
+    };
+
+    const first = fetch(`${running.origin}/api/read-canary/run`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(readCanaryCommand()),
+    });
+    await vi.waitFor(() => expect(executeReadCanary).toHaveBeenCalledOnce());
+
+    const concurrent = await fetch(`${running.origin}/api/read-canary/run`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        ...readCanaryCommand(),
+        requestId: "44444444-4444-4444-8444-444444444444",
+      }),
+    });
+    expect(concurrent.status).toBe(409);
+    expect(await concurrent.json()).toMatchObject({ error: { code: "read_canary_conflict" } });
+
+    const stopped = await fetch(`${running.origin}/api/control`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        action: "runtime-stop",
+        requestId: "55555555-5555-4555-8555-555555555555",
+      }),
+    });
+    expect(stopped.status).toBe(200);
+    expect(order).toEqual(["canary-started", "canary-aborted", "runtime-stopped"]);
+    expect(readCanary.abortActive).toHaveBeenCalledOnce();
+
+    completeCanary(readCanaryReceipt());
+    expect((await first).status).toBe(200);
+  });
+
+  it("keeps the Stage 0 surface unchanged when the read canary is absent", async () => {
+    expect((await get("/api/read-canary")).status).toBe(501);
+    const response = await fetch(`${running.origin}/api/read-canary/run`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: running.origin,
+        "x-rsi-operator-request": "1",
+      },
+      body: JSON.stringify(readCanaryCommand()),
+    });
+    expect(response.status).toBe(501);
+    expect(await response.json()).toMatchObject({ error: { code: "read_canary_unavailable" } });
   });
 
   it("accepts only the closed same-origin control vocabulary when controls are configured", async () => {

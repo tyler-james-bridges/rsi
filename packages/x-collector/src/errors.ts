@@ -1,7 +1,10 @@
+import type { XRateLimitReceipt } from "./rate-limit.js";
+
 export type XCollectorErrorCode =
   | "INVALID_CONFIGURATION"
   | "INVALID_CREDENTIAL"
   | "INVALID_QUERY"
+  | "RUNTIME_AUTHORIZATION_FAILED"
   | "ATTEMPT_AUTHORIZATION_FAILED"
   | "CLOCK_REGRESSION"
   | "ABORTED"
@@ -11,11 +14,13 @@ export type XCollectorErrorCode =
   | "HTTP_STATUS"
   | "UNSUPPORTED_CONTENT_ENCODING"
   | "UNSUPPORTED_CONTENT_TYPE"
+  | "INVALID_RATE_LIMIT_METADATA"
   | "RESPONSE_TOO_LARGE"
   | "CONTENT_LENGTH_MISMATCH"
   | "CREDENTIAL_IN_REQUEST"
   | "CREDENTIAL_IN_RESPONSE"
   | "MALFORMED_JSON"
+  | "PARTIAL_RESPONSE"
   | "INVALID_RESPONSE_SCHEMA"
   | "CASSETTE_MISS"
   | "INVALID_CASSETTE"
@@ -26,6 +31,7 @@ export type XCollectorSafeDetails = Readonly<{
   limitBytes?: number;
   receivedBytes?: number;
   path?: string;
+  rateLimit?: XRateLimitReceipt;
 }>;
 
 /** An intentionally small error surface that never retains transport errors or response bodies. */

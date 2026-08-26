@@ -33,11 +33,14 @@ import {
   QuarantinedXRecentSearchResponse,
   XCollectorError,
   X_JSON_CONTENT_TYPES,
+  X_RECENT_SEARCH_RESERVED_USD_MICRO,
   isXRecentSearchCollector,
   parseXRecentSearchResponse,
   prepareRecentSearchRequest,
   quarantineNetworkResponse,
+  copyXRateLimitReceipt,
   type PreparedXRecentSearchRequest,
+  type XRateLimitReceipt,
   type XRecentSearchCollector,
   type XRecentSearchResult,
 } from "@rsi/x-collector";
@@ -62,6 +65,8 @@ export interface XIngestionDependencies {
   readonly now?: () => string;
   /** Required for every non-dev attempt, including collectorless crash recovery. */
   readonly operationsStore?: SqliteOperationsStore;
+  /** Best-effort cancellation for an in-flight collection; ignored after bytes arrive. */
+  readonly signal?: AbortSignal;
   readonly store: SqliteEventStore;
   readonly vault: SnapshotVault;
 }
@@ -77,12 +82,12 @@ export interface XIngestionResult {
   readonly expiresAt: string;
   readonly failureCode: string | null;
   readonly postCount: number | null;
+  /** Sanitized provider counters from this collection only; never reconstructed from storage. */
+  readonly rateLimit: XRateLimitReceipt | null;
   readonly status: XCaptureStatus;
 }
 
 interface CaptureProjection {
-  readonly authorCount: number | null;
-  readonly editedPostCount: number | null;
   readonly failureCode: string | null;
   readonly postCount: number | null;
   readonly sourceIdentifiers: Extract<CaptureSourceIdentifiers, { readonly source: "x" }>;
@@ -108,7 +113,10 @@ function readNow(dependencies: Readonly<XIngestionDependencies>, label: string):
 }
 
 function safeFailureCode(error: unknown): string {
-  return error instanceof XCollectorError ? error.code : "INVALID_RESPONSE_SCHEMA";
+  if (!(error instanceof XCollectorError)) return "INVALID_RESPONSE_SCHEMA";
+  return error.code === "MALFORMED_JSON" || error.code === "INVALID_RESPONSE_SCHEMA"
+    ? error.code
+    : "INVALID_RESPONSE_SCHEMA";
 }
 
 function sha256(value: Uint8Array): `sha256:${string}` {
@@ -125,7 +133,7 @@ function assertExactNetworkBinding(
     binding.lane !== context.lane ||
     binding.operation !== "x.recent-search.v1" ||
     binding.profile !== context.profile ||
-    binding.reservedAtomic !== "150000" ||
+    binding.reservedAtomic !== X_RECENT_SEARCH_RESERVED_USD_MICRO ||
     binding.sessionId !== context.sessionId ||
     binding.sourcePlane !== "social"
   ) {
@@ -167,6 +175,9 @@ function assertConcreteStorageDependencies(
   }
   if (!isSnapshotVault(dependencies.vault)) {
     throw new Error("an authenticated snapshot vault is required");
+  }
+  if (dependencies.signal !== undefined && !(dependencies.signal instanceof AbortSignal)) {
+    throw new Error("an authentic AbortSignal is required");
   }
   if (
     (context.profile !== "dev" || dependencies.operationsStore !== undefined) &&
@@ -297,13 +308,11 @@ function identifiersFromParsed(
   parsed: XRecentSearchResult,
 ): Extract<CaptureSourceIdentifiers, { readonly source: "x" }> {
   return Object.freeze({
-    editIds: Object.freeze([
-      ...new Set(parsed.posts.flatMap((post) => post.edit_history_post_ids)),
-    ]),
+    editIds: Object.freeze([]),
     nextToken: parsed.meta.next_token ?? null,
     postIds: Object.freeze(parsed.posts.map((post) => post.id)),
     source: "x" as const,
-    userIds: Object.freeze(parsed.users.map((user) => user.id)),
+    userIds: Object.freeze([]),
   });
 }
 
@@ -311,8 +320,6 @@ function projectResponse(response: QuarantinedXRecentSearchResponse): CapturePro
   try {
     const parsed = parseXRecentSearchResponse(response);
     return Object.freeze({
-      authorCount: parsed.users.length,
-      editedPostCount: parsed.posts.filter((post) => post.edit_history_post_ids.length > 1).length,
       failureCode: null,
       postCount: parsed.posts.length,
       sourceIdentifiers: identifiersFromParsed(parsed),
@@ -320,8 +327,6 @@ function projectResponse(response: QuarantinedXRecentSearchResponse): CapturePro
     });
   } catch (error) {
     return Object.freeze({
-      authorCount: null,
-      editedPostCount: null,
       failureCode: safeFailureCode(error),
       postCount: null,
       sourceIdentifiers: emptyXIdentifiers(),
@@ -367,10 +372,17 @@ function resultFromEvent(
   ) {
     throw new Error("stored capture event does not match its ingestion context");
   }
+  if (
+    capture.status === "accepted" &&
+    (capture.counts?.actorCount !== 0 || capture.counts.editedRecordCount !== 0)
+  ) {
+    throw new Error("stored capture event contains unsupported X projection counts");
+  }
   return Object.freeze({
     acquiredAt: capture.acquiredAt,
     adapterId: "x.research" as const,
-    authorCount: capture.counts?.actorCount ?? null,
+    // The minimal canary response deliberately requests no actor projection.
+    authorCount: null,
     byteLength: capture.byteLength,
     eventHash: event.eventHash,
     eventId: event.eventId,
@@ -378,7 +390,18 @@ function resultFromEvent(
     expiresAt: capture.expiresAt,
     failureCode: capture.failureCode,
     postCount: capture.counts?.recordCount ?? null,
+    rateLimit: null,
     status: capture.status,
+  });
+}
+
+function withFreshRateLimit(
+  result: Readonly<XIngestionResult>,
+  rateLimit: XRateLimitReceipt | undefined,
+): Readonly<XIngestionResult> {
+  return Object.freeze({
+    ...result,
+    rateLimit: copyXRateLimitReceipt(rateLimit) ?? null,
   });
 }
 
@@ -398,8 +421,9 @@ function assertEventMatchesCommit(
       Date.parse(result.acquiredAt) < Date.parse(minimumAcquiredAt)) ||
     (result.status === "accepted" &&
       (result.postCount !== identifiers.postIds.length ||
-        result.authorCount !== identifiers.userIds.length ||
-        identifiers.postIds.some((postId) => !identifiers.editIds.includes(postId)))) ||
+        result.authorCount !== null ||
+        identifiers.userIds.length !== 0 ||
+        identifiers.editIds.length !== 0)) ||
     (result.status === "rejected" &&
       (identifiers.postIds.length !== 0 ||
         identifiers.userIds.length !== 0 ||
@@ -468,8 +492,10 @@ function appendProjection(
     counts:
       projection.status === "accepted"
         ? {
-            actorCount: projection.authorCount,
-            editedRecordCount: projection.editedPostCount,
+            // Count only records present in the trusted projection; never
+            // infer author or edit facts from the Post payload.
+            actorCount: 0,
+            editedRecordCount: 0,
             recordCount: projection.postCount,
           }
         : null,
@@ -757,7 +783,10 @@ export async function ingestXRecentSearch(
 
   let response: QuarantinedXRecentSearchResponse | undefined;
   try {
-    response = await collector.collectRaw(query);
+    response =
+      dependencies.signal === undefined
+        ? await collector.collectRaw(query)
+        : await collector.collectRaw(query, { signal: dependencies.signal });
     if (!(response instanceof QuarantinedXRecentSearchResponse)) {
       throw new Error("collector returned an invalid quarantine object");
     }
@@ -781,23 +810,29 @@ export async function ingestXRecentSearch(
     if (current?.state === "committed") {
       assertAttemptContext(current, context, request);
       await assertResponseMatchesCommittedCapture(dependencies, current, response);
-      return resumeCommittedAttempt(
-        dependencies,
-        context,
-        current,
-        request,
-        durable?.dispatchedAt ?? undefined,
+      return withFreshRateLimit(
+        await resumeCommittedAttempt(
+          dependencies,
+          context,
+          current,
+          request,
+          durable?.dispatchedAt ?? undefined,
+        ),
+        response.metadata.rateLimit,
       );
     }
     if (current?.state !== "pending") throw new Error("capture attempt became terminal");
 
-    return await captureAndCommit(
-      dependencies,
-      context,
-      current,
-      request,
-      response,
-      durable?.dispatchedAt ?? undefined,
+    return withFreshRateLimit(
+      await captureAndCommit(
+        dependencies,
+        context,
+        current,
+        request,
+        response,
+        durable?.dispatchedAt ?? undefined,
+      ),
+      response.metadata.rateLimit,
     );
   } finally {
     response?.destroy();

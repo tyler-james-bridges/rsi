@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -11,7 +12,10 @@ import {
   InvalidAttemptPermitError,
   OperationsConflictError,
   OperationsIntegrityError,
+  OperationsValidationError,
   SqliteOperationsStore,
+  isNetworkAttemptAuthorization,
+  isNetworkAttemptDispatchReceipt,
   isSqliteOperationsStore,
 } from "../src/index.js";
 
@@ -32,6 +36,52 @@ const T13 = "2026-08-14T12:13:00.000Z";
 const END = "2026-08-14T14:00:00.000Z";
 const directories: string[] = [];
 
+const HELD_WRITE_LOCK_WORKER = String.raw`
+  const { parentPort, workerData } = require("node:worker_threads");
+  const { DatabaseSync } = require("node:sqlite");
+
+  const coordination = new Int32Array(workerData.coordination);
+  const database = new DatabaseSync(workerData.path);
+  database.exec("PRAGMA busy_timeout = 5000");
+  database.exec("BEGIN IMMEDIATE");
+  Atomics.store(coordination, 0, 1);
+  Atomics.notify(coordination, 0);
+  parentPort.postMessage("locked");
+
+  Atomics.wait(coordination, 2, 0, 750);
+  Atomics.store(coordination, 1, workerData.releaseClock);
+  Atomics.store(coordination, 0, 0);
+  database.exec("COMMIT");
+  database.close();
+`;
+
+function holdOperationsWriteLock(
+  path: string,
+  coordination: Int32Array,
+  releaseClock: number,
+): Readonly<{ locked: Promise<void>; finished: Promise<void> }> {
+  const worker = new Worker(HELD_WRITE_LOCK_WORKER, {
+    eval: true,
+    workerData: { coordination: coordination.buffer, path, releaseClock },
+  });
+  const locked = new Promise<void>((resolve, reject) => {
+    worker.once("message", (message: unknown) => {
+      if (message === "locked") resolve();
+      else reject(new Error("Lock worker returned an unexpected message"));
+    });
+    worker.once("error", reject);
+  });
+  const finished = new Promise<void>((resolve, reject) => {
+    worker.once("error", reject);
+    worker.once("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Lock worker exited with code ${code}`));
+    });
+  });
+  void finished.catch(() => undefined);
+  return Object.freeze({ locked, finished });
+}
+
 afterEach(async () => {
   await Promise.all(
     directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
@@ -43,7 +93,14 @@ async function fixture() {
   directories.push(directory);
   const path = join(directory, "operations.sqlite");
   const stateKey = randomBytes(32);
-  const store = new SqliteOperationsStore({ path, stateKey });
+  const timing = { monotonic: 120_000, wall: T2 };
+  const store = new SqliteOperationsStore(
+    { path, stateKey },
+    {
+      clock: () => timing.wall,
+      monotonicClock: () => timing.monotonic,
+    },
+  );
   const budgetId = randomUUID();
   store.createBudget({
     budgetId,
@@ -55,7 +112,7 @@ async function fixture() {
     profile: "canary",
     startsAt: T0,
   });
-  return { budgetId, directory, path, stateKey, store };
+  return { budgetId, directory, path, stateKey, store, timing };
 }
 
 interface StoredCursorEnvelope {
@@ -137,6 +194,13 @@ function reserve(
   return { input, permit, record: target.store.reserveAttempt(input) };
 }
 
+function dispatch(
+  target: Awaited<ReturnType<typeof fixture>>,
+  permit: ReturnType<typeof SqliteOperationsStore.createAttemptPermit>,
+) {
+  return target.store.createNetworkAttemptAuthorization(permit).consume();
+}
+
 function completeCursorReceipts(
   store: SqliteOperationsStore,
   advanceId: string,
@@ -176,13 +240,14 @@ describe("SqliteOperationsStore budget permits", () => {
     expect(target.store.reserveAttempt(first.input)).toEqual(first.record);
 
     expect(() =>
-      target.store.authorizeAttempt(
-        { ...first.permit, token: "A".repeat(43) as typeof first.permit.token },
-        T2,
-      ),
+      target.store.createNetworkAttemptAuthorization({
+        ...first.permit,
+        token: "A".repeat(43) as typeof first.permit.token,
+      }),
     ).toThrow(InvalidAttemptPermitError);
-    expect(target.store.authorizeAttempt(first.permit, T2).state).toBe("dispatched");
-    expect(() => target.store.authorizeAttempt(first.permit, T2)).toThrow("already consumed");
+    const authorization = target.store.createNetworkAttemptAuthorization(first.permit);
+    expect(authorization.consume()).toMatchObject({ dispatchedAt: T2 });
+    expect(() => authorization.consume()).toThrow("already consumed");
     target.store.closeAttempt(first.permit.attemptId, { closedAt: T3, outcome: "failed" });
 
     const second = reserve(target, "50000");
@@ -198,6 +263,190 @@ describe("SqliteOperationsStore budget permits", () => {
     target.store.close();
   });
 
+  it("issues constructorless immutable authorizations and authenticated dispatch receipts", async () => {
+    const target = await fixture();
+    const attempt = reserve(target, "150000");
+    const authorization = target.store.createNetworkAttemptAuthorization(attempt.permit);
+
+    expect(isNetworkAttemptAuthorization(authorization)).toBe(true);
+    expect(isNetworkAttemptAuthorization({ ...authorization })).toBe(false);
+    expect(Object.getPrototypeOf(authorization)).toBeNull();
+    expect(Object.isFrozen(authorization)).toBe(true);
+    expect(Object.getPrototypeOf(authorization.binding)).toBeNull();
+    expect(Object.isFrozen(authorization.binding)).toBe(true);
+    expect(() => Object.setPrototypeOf(authorization, { consume: () => undefined })).toThrow(
+      TypeError,
+    );
+    expect(() =>
+      Object.defineProperty(authorization, "consume", { value: () => undefined }),
+    ).toThrow(TypeError);
+
+    const receipt = authorization.consume();
+    expect(isNetworkAttemptDispatchReceipt(receipt)).toBe(true);
+    expect(isNetworkAttemptDispatchReceipt({ ...receipt })).toBe(false);
+    expect(Object.getPrototypeOf(receipt)).toBeNull();
+    expect(Object.isFrozen(receipt)).toBe(true);
+    expect(Object.getPrototypeOf(receipt.binding)).toBeNull();
+    expect(Object.isFrozen(receipt.binding)).toBe(true);
+    expect(receipt).toMatchObject({
+      binding: { attemptId: attempt.permit.attemptId },
+      dispatchedAt: T2,
+      kind: "rsi.network-attempt-dispatch.v1",
+    });
+    expect(target.store.readNetworkAttemptBinding(attempt.permit.attemptId)).toMatchObject({
+      dispatchedAt: receipt.dispatchedAt,
+      state: "dispatched",
+    });
+    target.store.close();
+  });
+
+  it("makes malformed consumption terminal and exposes no caller timestamp channel", async () => {
+    const target = await fixture();
+    const attempt = reserve(target, "150000");
+    const malformed = target.store.createNetworkAttemptAuthorization(attempt.permit);
+
+    expect(() => Reflect.apply(malformed.consume, malformed, [T1])).toThrow(
+      OperationsValidationError,
+    );
+    expect("authorizeAttempt" in target.store).toBe(false);
+    expect(target.store.readNetworkAttemptBinding(attempt.permit.attemptId).state).toBe("reserved");
+    expect(() => malformed.consume()).toThrow("already consumed");
+
+    const fresh = target.store.createNetworkAttemptAuthorization(attempt.permit);
+    expect(fresh.consume().dispatchedAt).toBe(T2);
+    target.store.close();
+  });
+
+  it("denies dispatch exactly at expiry and recovers the reservation at that instant", async () => {
+    const target = await fixture();
+    const attempt = reserve(target, "150000");
+    target.timing.wall = "2026-08-14T13:59:59.999Z";
+    target.timing.monotonic = 1_000;
+    const authorization = target.store.createNetworkAttemptAuthorization(attempt.permit);
+
+    target.timing.wall = END;
+    target.timing.monotonic = 1_001;
+    expect(() => authorization.consume()).toThrow("outside its authorization window");
+    expect(() => authorization.consume()).toThrow("already consumed");
+    expect(target.store.readNetworkAttemptBinding(attempt.permit.attemptId).state).toBe("reserved");
+    expect(target.store.recoverExpiredAttempts(END)).toBe(1);
+    expect(target.store.readNetworkAttemptBinding(attempt.permit.attemptId)).toMatchObject({
+      state: "closed",
+    });
+    target.store.close();
+  });
+
+  it("uses monotonic expiry across wall-clock rollback without backdating dispatch", async () => {
+    const accepted = await fixture();
+    const acceptedAttempt = reserve(accepted, "150000");
+    accepted.timing.monotonic = 1_000;
+    accepted.timing.wall = T2;
+    const beforeDeadline = accepted.store.createNetworkAttemptAuthorization(acceptedAttempt.permit);
+    accepted.timing.monotonic = 2_000;
+    accepted.timing.wall = T1;
+    expect(beforeDeadline.consume().dispatchedAt).toBe(T2);
+    accepted.store.close();
+
+    const expired = await fixture();
+    const expiredAttempt = reserve(expired, "150000");
+    expired.timing.monotonic = 1_000;
+    expired.timing.wall = T2;
+    const afterDeadline = expired.store.createNetworkAttemptAuthorization(expiredAttempt.permit);
+    expired.timing.monotonic = 1_000 + Date.parse(END) - Date.parse(T2);
+    expired.timing.wall = T1;
+    expect(() => afterDeadline.consume()).toThrow("outside its authorization window");
+    expect(expired.store.readNetworkAttemptBinding(expiredAttempt.permit.attemptId).state).toBe(
+      "reserved",
+    );
+    expired.store.close();
+
+    const regressed = await fixture();
+    const regressedAttempt = reserve(regressed, "150000");
+    regressed.timing.monotonic = 1_000;
+    regressed.timing.wall = T2;
+    const invalidClock = regressed.store.createNetworkAttemptAuthorization(regressedAttempt.permit);
+    regressed.timing.monotonic = 999;
+    expect(() => invalidClock.consume()).toThrow("outside its authorization window");
+    expect(regressed.store.readNetworkAttemptBinding(regressedAttempt.permit.attemptId).state).toBe(
+      "reserved",
+    );
+    regressed.store.close();
+  });
+
+  it("allows only one of two independently issued authorizations to dispatch", async () => {
+    const target = await fixture();
+    const attempt = reserve(target, "150000");
+    const first = target.store.createNetworkAttemptAuthorization(attempt.permit);
+    const competing = target.store.createNetworkAttemptAuthorization(attempt.permit);
+
+    expect(first.consume().dispatchedAt).toBe(T2);
+    expect(() => competing.consume()).toThrow("already consumed");
+    expect(() => competing.consume()).toThrow("already consumed");
+    expect(target.store.readNetworkAttemptBinding(attempt.permit.attemptId)).toMatchObject({
+      dispatchedAt: T2,
+      state: "dispatched",
+    });
+    target.store.close();
+  });
+
+  it("samples dispatch clocks only after a competing SQLite write lock is acquired", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rsi-operations-lock-"));
+    directories.push(directory);
+    const path = join(directory, "operations.sqlite");
+    const stateKey = randomBytes(32);
+    const coordination = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 3));
+    const wallOrigin = Date.parse(T0);
+    Atomics.store(coordination, 1, Date.parse(T2) - wallOrigin);
+    const store = new SqliteOperationsStore(
+      { path, stateKey },
+      {
+        clock: () => new Date(wallOrigin + Atomics.load(coordination, 1)).toISOString(),
+        monotonicClock: () => {
+          const sampled = Atomics.load(coordination, 1);
+          if (Atomics.load(coordination, 0) === 1) {
+            Atomics.store(coordination, 2, 1);
+            Atomics.notify(coordination, 2);
+          }
+          return sampled;
+        },
+      },
+    );
+    const budgetId = randomUUID();
+    const permit = SqliteOperationsStore.createAttemptPermit();
+    store.createBudget({
+      budgetId,
+      createdAt: T0,
+      currency: "USD_MICRO",
+      endsAt: END,
+      maxAtomic: "150000",
+      maxAttempts: 1,
+      profile: "canary",
+      startsAt: T0,
+    });
+    store.reserveAttempt({
+      attemptId: permit.attemptId,
+      authorizationExpiresAt: T3,
+      budgetId,
+      createdAt: T1,
+      idempotencyKey: `ticket:${permit.attemptId}`,
+      lane: "official",
+      operation: "x.recent-search.v1",
+      permitToken: permit.token,
+      reservedAtomic: "150000",
+      sessionId: randomUUID(),
+      sourcePlane: "social",
+    });
+    const authorization = store.createNetworkAttemptAuthorization(permit);
+    const held = holdOperationsWriteLock(path, coordination, Date.parse(T3) - wallOrigin);
+    await held.locked;
+
+    expect(() => authorization.consume()).toThrow("outside its authorization window");
+    await held.finished;
+    expect(Atomics.load(coordination, 2)).toBe(0);
+    expect(store.readNetworkAttemptBinding(permit.attemptId).state).toBe("reserved");
+    store.close();
+  });
+
   it("reads an authenticated permit-free network binding across restart", async () => {
     const target = await fixture();
     expect(isSqliteOperationsStore(target.store)).toBe(true);
@@ -207,23 +456,85 @@ describe("SqliteOperationsStore budget permits", () => {
     expect(target.store.readNetworkAttemptBinding(attempt.permit.attemptId)).toEqual({
       attemptId: attempt.permit.attemptId,
       authorizationExpiresAt: END,
+      budgetId: target.budgetId,
+      closedAt: null,
+      createdAt: T1,
       dispatchedAt: null,
+      idempotencyKey: attempt.input.idempotencyKey,
       lane: "official",
       operation: "x.recent-search.v1",
+      outcome: null,
       profile: "canary",
       reservedAtomic: "150000",
       sessionId: attempt.input.sessionId,
       sourcePlane: "social",
       state: "reserved",
     });
-    target.store.authorizeAttempt(attempt.permit, T2);
+    dispatch(target, attempt.permit);
     target.store.close();
 
     const reopened = new SqliteOperationsStore({ path: target.path, stateKey: target.stateKey });
     const durable = reopened.readNetworkAttemptBinding(attempt.permit.attemptId);
-    expect(durable).toMatchObject({ dispatchedAt: T2, state: "dispatched" });
+    expect(durable).toEqual({
+      attemptId: attempt.permit.attemptId,
+      authorizationExpiresAt: END,
+      budgetId: target.budgetId,
+      closedAt: null,
+      createdAt: T1,
+      dispatchedAt: T2,
+      idempotencyKey: attempt.input.idempotencyKey,
+      lane: "official",
+      operation: "x.recent-search.v1",
+      outcome: null,
+      profile: "canary",
+      reservedAtomic: "150000",
+      sessionId: attempt.input.sessionId,
+      sourcePlane: "social",
+      state: "dispatched",
+    });
     expect(JSON.stringify(durable)).not.toContain(attempt.permit.token);
     expect(() => reopened.readNetworkAttemptBinding(randomUUID())).toThrow(OperationsConflictError);
+    reopened.close();
+  });
+
+  it("reuses authenticated closure facts exactly across restart", async () => {
+    const target = await fixture();
+    const attempt = reserve(target, "150000");
+    dispatch(target, attempt.permit);
+    const closed = target.store.closeAttempt(attempt.permit.attemptId, {
+      closedAt: T3,
+      outcome: "succeeded",
+    });
+    target.store.close();
+
+    const reopened = new SqliteOperationsStore({ path: target.path, stateKey: target.stateKey });
+    const durable = reopened.readNetworkAttemptBinding(attempt.permit.attemptId);
+    expect(durable).toEqual({
+      attemptId: attempt.permit.attemptId,
+      authorizationExpiresAt: END,
+      budgetId: target.budgetId,
+      closedAt: T3,
+      createdAt: T1,
+      dispatchedAt: T2,
+      idempotencyKey: attempt.input.idempotencyKey,
+      lane: "official",
+      operation: "x.recent-search.v1",
+      outcome: "succeeded",
+      profile: "canary",
+      reservedAtomic: "150000",
+      sessionId: attempt.input.sessionId,
+      sourcePlane: "social",
+      state: "closed",
+    });
+    if (durable.closedAt === null || durable.outcome === null) {
+      throw new Error("Closed durable attempt facts are incomplete");
+    }
+    expect(
+      reopened.closeAttempt(durable.attemptId, {
+        closedAt: durable.closedAt,
+        outcome: durable.outcome,
+      }),
+    ).toEqual(closed);
     reopened.close();
   });
 
@@ -277,7 +588,9 @@ describe("SqliteOperationsStore budget permits", () => {
       remainingAtomic: "0",
       reservedAtomic: "150000",
     });
-    expect(() => target.store.authorizeAttempt(permit, T3)).toThrow("already consumed");
+    expect(() => target.store.createNetworkAttemptAuthorization(permit)).toThrow(
+      "unavailable or invalid",
+    );
     target.store.close();
   });
 
@@ -320,7 +633,7 @@ describe("SqliteOperationsStore budget permits", () => {
         sessionId,
         sourcePlane,
       });
-      target.store.authorizeAttempt(permit, T2);
+      dispatch(target, permit);
       target.store.closeAttempt(permit.attemptId, { closedAt: T3, outcome });
     }
 
@@ -407,7 +720,7 @@ describe("SqliteOperationsStore cursor sequencing", () => {
   it("keeps cursor ciphertext private and commits only after every receipt", async () => {
     const target = await fixture();
     const attempt = reserve(target, "100000");
-    target.store.authorizeAttempt(attempt.permit, T2);
+    dispatch(target, attempt.permit);
     target.store.closeAttempt(attempt.permit.attemptId, { closedAt: T2, outcome: "succeeded" });
     const lineageId = randomUUID();
     target.store.initializeCursorLineage({
@@ -528,8 +841,8 @@ describe("SqliteOperationsStore cursor sequencing", () => {
     const target = await fixture();
     const first = reserve(target, "75000");
     const second = reserve(target, "75000");
-    target.store.authorizeAttempt(first.permit, T2);
-    target.store.authorizeAttempt(second.permit, T2);
+    dispatch(target, first.permit);
+    dispatch(target, second.permit);
     target.store.closeAttempt(first.permit.attemptId, { closedAt: T2, outcome: "succeeded" });
     target.store.closeAttempt(second.permit.attemptId, { closedAt: T2, outcome: "succeeded" });
     const lineageId = randomUUID();
@@ -577,7 +890,7 @@ describe("SqliteOperationsStore cursor sequencing", () => {
     const first = reserve(target, "75000");
     const second = reserve(target, "75000");
     for (const attempt of [first, second]) {
-      target.store.authorizeAttempt(attempt.permit, T2);
+      dispatch(target, attempt.permit);
       target.store.closeAttempt(attempt.permit.attemptId, {
         closedAt: T2,
         outcome: "succeeded",
@@ -672,7 +985,7 @@ describe("SqliteOperationsStore cursor sequencing", () => {
   it("physically erases every aborted candidate envelope from SQLite files", async () => {
     const target = await fixture();
     const attempt = reserve(target, "150000");
-    target.store.authorizeAttempt(attempt.permit, T2);
+    dispatch(target, attempt.permit);
     target.store.closeAttempt(attempt.permit.attemptId, {
       closedAt: T2,
       outcome: "succeeded",
@@ -740,7 +1053,7 @@ describe("SqliteOperationsStore cursor sequencing", () => {
     const first = reserve(target, "75000");
     const second = reserve(target, "75000");
     for (const attempt of [first, second]) {
-      target.store.authorizeAttempt(attempt.permit, T2);
+      dispatch(target, attempt.permit);
       target.store.closeAttempt(attempt.permit.attemptId, {
         closedAt: T2,
         outcome: "succeeded",
@@ -862,7 +1175,7 @@ describe("SqliteOperationsStore cursor sequencing", () => {
   it("heals a crash after logical key deletion and before physical hardening", async () => {
     const target = await fixture();
     const attempt = reserve(target, "150000");
-    target.store.authorizeAttempt(attempt.permit, T2);
+    dispatch(target, attempt.permit);
     target.store.closeAttempt(attempt.permit.attemptId, {
       closedAt: T2,
       outcome: "succeeded",
@@ -929,7 +1242,7 @@ describe("SqliteOperationsStore cursor sequencing", () => {
   it("repeats hardening when a crash leaves the authenticated pending bit after VACUUM", async () => {
     const target = await fixture();
     const attempt = reserve(target, "150000");
-    target.store.authorizeAttempt(attempt.permit, T2);
+    dispatch(target, attempt.permit);
     target.store.closeAttempt(attempt.permit.attemptId, {
       closedAt: T2,
       outcome: "succeeded",
@@ -986,7 +1299,7 @@ describe("SqliteOperationsStore cursor sequencing", () => {
   it("rejects cross-profile attempts, dispatched-only attempts, and timestamp-changing retries", async () => {
     const target = await fixture();
     const attempt = reserve(target, "100000");
-    target.store.authorizeAttempt(attempt.permit, T2);
+    dispatch(target, attempt.permit);
     const lineageId = randomUUID();
     target.store.initializeCursorLineage({
       initializedAt: T0,

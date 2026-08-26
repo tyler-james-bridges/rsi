@@ -9,7 +9,7 @@ Vault, authenticated capture registry, and tamper-evident event store.
 2. canonicalize the query and bind its fingerprint to a pending registry intent **before egress**;
 3. collect one bounded response from the read-only X adapter;
 4. verify the response binding and encrypt the exact bytes under a random opaque capture ID;
-5. parse only after the encrypted capture boundary and derive a bounded private source index;
+5. parse only after the encrypted capture boundary and derive a posts-only private source index;
 6. atomically bind the capture ID and source index to the pending registry intent;
 7. append only `source.capture.recorded.v2`, a closed content-free event; and
 8. destroy the quarantine object and wipe every caller-owned byte copy.
@@ -26,7 +26,16 @@ Malformed responses follow the same short-lived encrypted path and produce a typ
 with an empty private source index. They are not a forensics exception: every capture must be
 crypto-shredded at session close and is independently bounded to at most two hours. Queries,
 response hashes, provider identifiers, URLs, raw text, capture IDs, and storage paths never
-enter the event store or returned result.
+enter the event store or returned result. The minimal projection records Post IDs and an opaque
+next-page token only in the private capture registry; it does not infer authors or edit history
+that the one-request response did not request. Actor/edit event counts therefore mean records
+present in the projection and remain zero.
+
+Callers may provide an `AbortSignal`, which is forwarded only to an in-flight collection. Once
+response bytes arrive, ingestion completes the encrypted-first commit so cancellation cannot
+strand plaintext or turn a valid capture into an untracked artifact. A fresh call may return the
+collector's validated `{ limit, remaining, resetAtUnixSeconds }` receipt. That receipt is never
+written to the capture event and is `null` when a durable retry is reconstructed from storage.
 
 `recoverCaptureStorage` is a mandatory startup step before new ingestion. It resumes Vault
 deletions, tombstones abandoned pending intents, repairs a Vault-deleted/registry-committed
@@ -40,8 +49,9 @@ The registry directory is private (`0700`) and its database is owner-only (`0600
 
 Only collectors branded by the closed X collector factory are accepted; structural lookalikes
 fail before egress. Replay is restricted to `dev`. Live collection requires the exact one-shot
-`x.recent-search.v1` authorization and the concrete authenticated operations store for the
-attempt, lane, profile, session, expiry, social source plane, and reserved USD-micro amount. The
-operations row must be `reserved` before collection and `dispatched` immediately afterward.
+runtime `research_collection` authorization, `x.recent-search.v1` attempt authorization, and the
+concrete authenticated operations store for the attempt, lane, profile, session, expiry, social
+source plane, and reserved USD-micro amount. The operations row must be `reserved` before
+collection and `dispatched` immediately afterward.
 
 This package performs no payments, signing, trading, or other state-changing external actions.

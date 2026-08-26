@@ -1,0 +1,26 @@
+{
+  "name": "@rsi/read-canary",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@rsi/capture-registry": "workspace:*",
+    "@rsi/ingestion": "workspace:*",
+    "@rsi/operations": "workspace:*",
+    "@rsi/runtime": "workspace:*",
+    "@rsi/store": "workspace:*",
+    "@rsi/vault": "workspace:*",
+    "@rsi/x-collector": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}

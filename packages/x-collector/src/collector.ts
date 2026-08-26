@@ -3,6 +3,11 @@ import {
   type NetworkAttemptBinding,
   type NetworkAttemptAuthorization,
 } from "@rsi/operations";
+import {
+  isRuntimeBoundaryAuthorization,
+  type RuntimeBoundaryAuthorization,
+  type RuntimeBoundaryReceipt,
+} from "@rsi/runtime";
 
 import {
   decodeXRecentSearchCassetteBody,
@@ -24,6 +29,7 @@ import {
   type QuarantinedXRecentSearchResponse,
 } from "./quarantine.js";
 import { prepareRecentSearchRequest, type PreparedXRecentSearchRequest } from "./query.js";
+import { readXRateLimitReceipt } from "./rate-limit.js";
 import { readAcquiredAt, type XCollectorClock } from "./time.js";
 
 export type XRecentSearchFetch = (request: Request) => Promise<Response>;
@@ -32,11 +38,16 @@ export type XRecentSearchLiveOptions = Readonly<{
   mode?: "live";
   attemptAuthorization: NetworkAttemptAuthorization;
   bearerToken: string;
-  fetch?: XRecentSearchFetch;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
-  now?: XCollectorClock;
+  runtimeAuthorization: RuntimeBoundaryAuthorization<"research_collection">;
 }>;
+
+export type XRecentSearchLiveTestingOptions = XRecentSearchLiveOptions &
+  Readonly<{
+    fetch?: XRecentSearchFetch;
+    timeoutMs?: number;
+    maxResponseBytes?: number;
+    now?: XCollectorClock;
+  }>;
 
 export type XRecentSearchReplayOptions = Readonly<{
   mode: "replay";
@@ -45,6 +56,8 @@ export type XRecentSearchReplayOptions = Readonly<{
 }>;
 
 export type XRecentSearchCollectorOptions = XRecentSearchLiveOptions | XRecentSearchReplayOptions;
+export type XRecentSearchCollectorTestingOptions =
+  XRecentSearchLiveTestingOptions | XRecentSearchReplayOptions;
 
 export type XRecentSearchCollectOptions = Readonly<{
   signal?: AbortSignal;
@@ -77,10 +90,12 @@ function authenticateCollector(collector: XRecentSearchCollector): XRecentSearch
 
 type ValidatedCollectOptions = Readonly<{ signal?: AbortSignal }>;
 
-const LIVE_KEYS = new Set([
+const LIVE_KEYS = new Set(["mode", "attemptAuthorization", "bearerToken", "runtimeAuthorization"]);
+const LIVE_TESTING_KEYS = new Set([
   "mode",
   "attemptAuthorization",
   "bearerToken",
+  "runtimeAuthorization",
   "fetch",
   "timeoutMs",
   "maxResponseBytes",
@@ -134,6 +149,35 @@ function validateCredential(value: unknown): string {
     );
   }
   return value;
+}
+
+export function xRecentSearchRuntimeActionId(
+  attemptId: string,
+  fingerprint: PreparedXRecentSearchRequest["fingerprint"],
+): string {
+  return `x.rs:${attemptId}:${fingerprint.slice("sha256:".length)}`;
+}
+
+function assertRuntimeReceipt(
+  receipt: Readonly<RuntimeBoundaryReceipt>,
+  authorization: RuntimeBoundaryAuthorization<"research_collection">,
+): void {
+  if (
+    receipt.actionId !== authorization.actionId ||
+    receipt.authorizationId !== authorization.authorizationId ||
+    receipt.boundary !== "research_collection" ||
+    receipt.checkedAt < authorization.requestedAt ||
+    receipt.decision !== "allowed" ||
+    receipt.mode === "STOPPED" ||
+    receipt.modeRevision !== authorization.requestedRevision ||
+    receipt.processInstanceId !== authorization.processInstanceId ||
+    receipt.reason !== "ALLOWED"
+  ) {
+    throw new XCollectorError(
+      "RUNTIME_AUTHORIZATION_FAILED",
+      "The runtime collection authorization was refused.",
+    );
+  }
 }
 
 function validateStore(value: unknown): XRecentSearchCassetteStore {
@@ -379,10 +423,15 @@ async function executeNetworkRequest(
         status: response.status,
       });
     }
+    const rateLimit = readXRateLimitReceipt(response.headers);
     if (response.status !== 200) {
-      throw new XCollectorError("HTTP_STATUS", "The X API returned a non-success status.", {
-        status: response.status,
-      });
+      throw new XCollectorError(
+        "HTTP_STATUS",
+        "The X API returned a non-success status.",
+        rateLimit === undefined
+          ? { status: response.status }
+          : { status: response.status, rateLimit },
+      );
     }
     const contentEncoding = response.headers.get("content-encoding");
     if (contentEncoding !== null && contentEncoding.trim().toLowerCase() !== "identity") {
@@ -402,7 +451,7 @@ async function executeNetworkRequest(
           "The collector clock moved backward during the request.",
         );
       }
-      return quarantineNetworkResponse(prepared, 200, contentType, bytes, acquiredAt);
+      return quarantineNetworkResponse(prepared, 200, contentType, bytes, acquiredAt, rateLimit);
     } finally {
       bytes.fill(0);
     }
@@ -425,12 +474,32 @@ export function createXRecentSearchCollector(
   options: XRecentSearchCollectorOptions,
 ): XRecentSearchCollector;
 export function createXRecentSearchCollector(options: unknown): XRecentSearchCollector {
+  return createXRecentSearchCollectorInternal(options, false);
+}
+
+/** Test-only transport/clock injection. Not exported from the production package entry. */
+export function createXRecentSearchCollectorForTesting(
+  options: XRecentSearchCollectorTestingOptions,
+): XRecentSearchCollector;
+export function createXRecentSearchCollectorForTesting(options: unknown): XRecentSearchCollector {
+  return createXRecentSearchCollectorInternal(options, true);
+}
+
+function createXRecentSearchCollectorInternal(
+  options: unknown,
+  allowTestingHooks: boolean,
+): XRecentSearchCollector {
   if (!isPlainRecord(options)) invalidConfiguration("Collector options must be a plain object.");
   const mode = options.mode === undefined ? "live" : options.mode;
   if (mode !== "live" && mode !== "replay") {
     invalidConfiguration("mode must be live or replay; live response recording is forbidden.");
   }
-  const allowed = mode === "live" ? LIVE_KEYS : REPLAY_KEYS;
+  const allowed =
+    mode === "live" && allowTestingHooks
+      ? LIVE_TESTING_KEYS
+      : mode === "live"
+        ? LIVE_KEYS
+        : REPLAY_KEYS;
   if (!hasOnlyKeys(options, allowed)) {
     invalidConfiguration("Collector options contain an unsupported property.");
   }
@@ -488,6 +557,7 @@ export function createXRecentSearchCollector(options: unknown): XRecentSearchCol
             cassette.response.bodySha256,
             bytes,
             cassette.acquiredAt,
+            cassette.response.rateLimit ?? undefined,
           );
         } finally {
           bytes.fill(0);
@@ -513,6 +583,19 @@ export function createXRecentSearchCollector(options: unknown): XRecentSearchCol
       "The network attempt must be reserved for one fully funded X recent-search call.",
     );
   }
+  const runtimeAuthorization = options.runtimeAuthorization;
+  if (
+    !isRuntimeBoundaryAuthorization(runtimeAuthorization) ||
+    runtimeAuthorization.boundary !== "research_collection" ||
+    runtimeAuthorization.requestedMode === "STOPPED" ||
+    runtimeAuthorization.expiresAt !== attemptAuthorization.binding.authorizationExpiresAt
+  ) {
+    invalidConfiguration(
+      "Live collectors require a matching one-shot runtime collection authorization.",
+    );
+  }
+  const runtimeCollectionAuthorization =
+    runtimeAuthorization as RuntimeBoundaryAuthorization<"research_collection">;
   const fetchImplementation =
     options.fetch === undefined
       ? globalThis.fetch.bind(globalThis)
@@ -538,26 +621,82 @@ export function createXRecentSearchCollector(options: unknown): XRecentSearchCol
       const { signal } = validateCollectOptions(collectOptions);
       const prepared = prepareRecentSearchRequest(query);
       assertCredentialAbsentFromRequest(prepared, bearerToken);
-      const dispatchedAt = readAcquiredAt(clock);
-      try {
-        attemptAuthorization.consume(dispatchedAt);
-      } catch {
+      if (
+        runtimeCollectionAuthorization.actionId !==
+        xRecentSearchRuntimeActionId(attemptAuthorization.binding.attemptId, prepared.fingerprint)
+      ) {
         throw new XCollectorError(
-          "ATTEMPT_AUTHORIZATION_FAILED",
-          "The reserved network attempt could not be authorized.",
+          "RUNTIME_AUTHORIZATION_FAILED",
+          "The runtime collection authorization does not match this request.",
         );
       }
-      const response = await executeNetworkRequest(
-        prepared,
-        bearerToken,
-        fetchImplementation,
-        timeoutMs,
-        maxResponseBytes,
-        signal,
-        clock,
-        dispatchedAt,
-      );
-      return response;
+      if (signal?.aborted === true) {
+        throw new XCollectorError("ABORTED", "The recent-search request was aborted.");
+      }
+      let responsePromise: Promise<QuarantinedXRecentSearchResponse> | undefined;
+      let runtimeDispatchFailure: unknown;
+      try {
+        runtimeCollectionAuthorization.consumeAndDispatch((receipt) => {
+          assertRuntimeReceipt(receipt, runtimeCollectionAuthorization);
+          let dispatchedAt: string;
+          try {
+            dispatchedAt = attemptAuthorization.consume().dispatchedAt;
+          } catch {
+            throw new XCollectorError(
+              "ATTEMPT_AUTHORIZATION_FAILED",
+              "The reserved network attempt could not be authorized.",
+            );
+          }
+          // Calling the async transport begins fetch synchronously, before its
+          // first await. consumeAndDispatch holds the runtime SQLite write lock
+          // across this invocation, closing the cross-process STOP race.
+          responsePromise = executeNetworkRequest(
+            prepared,
+            bearerToken,
+            fetchImplementation,
+            timeoutMs,
+            maxResponseBytes,
+            signal,
+            clock,
+            dispatchedAt,
+          );
+        });
+      } catch (error) {
+        if (responsePromise === undefined) {
+          if (error instanceof XCollectorError) throw error;
+          throw new XCollectorError(
+            "RUNTIME_AUTHORIZATION_FAILED",
+            "The runtime collection authorization could not protect dispatch.",
+          );
+        }
+        // The transport invocation is irreversible. If SQLite COMMIT fails
+        // after fetch was launched, observe the promise through quarantine so
+        // it cannot become an abandoned response or an unhandled rejection.
+        // The missing durable runtime check still makes the collection fail
+        // closed after that response has been drained.
+        runtimeDispatchFailure = error;
+      }
+      if (responsePromise === undefined) {
+        throw new XCollectorError(
+          "RUNTIME_AUTHORIZATION_FAILED",
+          "The runtime collection authorization did not invoke dispatch.",
+        );
+      }
+      if (runtimeDispatchFailure !== undefined) {
+        try {
+          const abandoned = await responsePromise;
+          abandoned.destroy();
+        } catch {
+          // Transport failure cannot supersede the failed durable runtime
+          // commit, but awaiting it prevents an abandoned in-flight promise.
+        }
+        if (runtimeDispatchFailure instanceof XCollectorError) throw runtimeDispatchFailure;
+        throw new XCollectorError(
+          "RUNTIME_AUTHORIZATION_FAILED",
+          "The runtime collection authorization could not commit protected dispatch.",
+        );
+      }
+      return await responsePromise;
     },
   };
   return authenticateCollector(collector);

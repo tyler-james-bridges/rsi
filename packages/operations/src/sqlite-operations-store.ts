@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { types as utilTypes } from "node:util";
 
 import { canonicalJson, type JsonValue } from "@rsi/store";
 import { z } from "zod";
@@ -22,7 +23,9 @@ import {
 } from "./errors.js";
 import {
   createNetworkAttemptAuthorization,
+  createNetworkAttemptDispatchReceipt,
   type NetworkAttemptAuthorization,
+  type NetworkAttemptDispatchReceipt,
 } from "./network-authorization.js";
 import {
   AttemptPermitTokenSchema,
@@ -57,6 +60,7 @@ import type {
   ExternalVerificationReceipt,
   InitializeCursorLineageInput,
   LocalCheckpointReceipt,
+  NetworkAttemptBinding,
   OperationsIntegrityReport,
   ReserveAttemptInput,
   SafeEventReceipt,
@@ -69,6 +73,8 @@ const SCHEMA_VERSION = 2;
 const GENESIS_MAC = "0".repeat(64);
 const MAX_AUTHORIZATION_WINDOW_MS = 2 * 60 * 60 * 1_000;
 const authenticSqliteOperationsStores = new WeakSet<object>();
+const SYSTEM_OPERATIONS_CLOCK = (): string => new Date().toISOString();
+const SYSTEM_MONOTONIC_CLOCK = (): number => performance.now();
 const CURSOR_ADVANCE_ORDER: readonly CursorAdvanceState[] = [
   "staged",
   "validated",
@@ -282,6 +288,89 @@ function compareCanonicalTimes(left: string, right: string): number {
   return Date.parse(left) - Date.parse(right);
 }
 
+interface OperationsClocks {
+  readonly clock: () => string;
+  readonly monotonicClock: () => number;
+}
+
+interface IssuedNetworkAttemptAuthorization {
+  readonly binding: NetworkAttemptBinding;
+  readonly issuedAt: string;
+  readonly monotonicExpiresAt: number;
+  readonly monotonicIssuedAt: number;
+}
+
+function parseOperationsClocks(value: unknown): OperationsClocks {
+  if (value === undefined) {
+    return Object.freeze({
+      clock: SYSTEM_OPERATIONS_CLOCK,
+      monotonicClock: SYSTEM_MONOTONIC_CLOCK,
+    });
+  }
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    utilTypes.isProxy(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    throw new OperationsValidationError("Operations clock options are invalid");
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => key !== "clock" && key !== "monotonicClock")) {
+    throw new OperationsValidationError("Operations clock options are invalid");
+  }
+  const parsed: Record<"clock" | "monotonicClock", () => number | string> = {
+    clock: SYSTEM_OPERATIONS_CLOCK,
+    monotonicClock: SYSTEM_MONOTONIC_CLOCK,
+  };
+  for (const [key, fallback] of [
+    ["clock", SYSTEM_OPERATIONS_CLOCK],
+    ["monotonicClock", SYSTEM_MONOTONIC_CLOCK],
+  ] as const) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined) {
+      parsed[key] = fallback;
+      continue;
+    }
+    if (
+      !("value" in descriptor) ||
+      !descriptor.enumerable ||
+      typeof descriptor.value !== "function" ||
+      utilTypes.isProxy(descriptor.value)
+    ) {
+      throw new OperationsValidationError(`Operations ${key} is invalid`);
+    }
+    parsed[key] = descriptor.value as () => number | string;
+  }
+  return Object.freeze({
+    clock: parsed.clock as () => string,
+    monotonicClock: parsed.monotonicClock as () => number,
+  });
+}
+
+function readOperationsClock(clock: () => string): string {
+  let value: unknown;
+  try {
+    value = clock();
+  } catch {
+    throw new OperationsValidationError("Operations clock failed");
+  }
+  return parseWithSchema(CanonicalTimestampSchema, value, "operations clock");
+}
+
+function readOperationsMonotonicClock(clock: () => number): number {
+  let value: unknown;
+  try {
+    value = clock();
+  } catch {
+    throw new OperationsValidationError("Operations monotonic clock failed");
+  }
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new OperationsValidationError("Operations monotonic clock is invalid");
+  }
+  return value;
+}
+
 interface MutableAttemptGroup {
   abortedCount: number;
   attemptCount: number;
@@ -391,15 +480,25 @@ export interface SqliteOperationsStoreOptions {
   readonly stateKey: Uint8Array;
 }
 
+export interface SqliteOperationsStoreClockOptions {
+  readonly clock?: () => string;
+  readonly monotonicClock?: () => number;
+}
+
 export class SqliteOperationsStore {
   readonly path: string;
 
   private closed = false;
+  private readonly clock: () => string;
   private readonly cursorWrappingKey: Buffer;
   private readonly database: DatabaseSync;
   private readonly macKey: Buffer;
+  private readonly monotonicClock: () => number;
 
-  constructor(options: SqliteOperationsStoreOptions) {
+  constructor(
+    options: SqliteOperationsStoreOptions,
+    clockOptions?: SqliteOperationsStoreClockOptions,
+  ) {
     if (
       typeof options !== "object" ||
       options === null ||
@@ -408,7 +507,10 @@ export class SqliteOperationsStore {
     ) {
       throw new OperationsValidationError("path must be a non-empty string");
     }
+    const clocks = parseOperationsClocks(clockOptions);
     this.path = options.path;
+    this.clock = clocks.clock;
+    this.monotonicClock = clocks.monotonicClock;
     const keys = deriveOperationsKeys(options.stateKey);
     this.cursorWrappingKey = keys.cursorWrappingKey;
     this.macKey = keys.macKey;
@@ -440,7 +542,7 @@ export class SqliteOperationsStore {
 
   createNetworkAttemptAuthorization(permit: AttemptPermit): NetworkAttemptAuthorization {
     const parsed = parseWithSchema(AttemptPermitSchema, permit, "attempt permit");
-    return this.transaction(() => {
+    const issued = this.transaction(() => {
       const attempt = this.getAttemptRow(parsed.attemptId);
       if (attempt === undefined) throw new InvalidAttemptPermitError("Attempt permit is unknown");
       this.assertAttemptRow(attempt);
@@ -453,36 +555,39 @@ export class SqliteOperationsStore {
       const budget = this.getBudgetRow(attempt.budget_id);
       if (budget === undefined) throw new OperationsIntegrityError("Attempt budget is missing");
       this.assertBudgetRow(budget);
-      return createNetworkAttemptAuthorization(
-        {
-          attemptId: attempt.attempt_id,
-          authorizationExpiresAt: attempt.authorization_expires_at,
-          lane: parseWithSchema(ResearchLaneSchema, attempt.lane, "attempt lane"),
-          operation: parseWithSchema(
-            ResearchOperationSchema,
-            attempt.operation,
-            "attempt operation",
-          ),
-          profile: parseWithSchema(OperationsProfileSchema, budget.profile, "attempt profile"),
-          reservedAtomic: attempt.reserved_atomic as AtomicAmount,
-          sessionId: attempt.session_id,
-          sourcePlane: parseWithSchema(
-            SourcePlaneSchema,
-            attempt.source_plane,
-            "attempt source plane",
-          ),
-        },
-        (dispatchedAt) => {
-          this.authorizeAttempt(
-            {
-              attemptId: parsed.attemptId,
-              token: parsed.token as AttemptPermitToken,
-            },
-            dispatchedAt,
-          );
-        },
-      );
+      // Both clocks are sampled only after BEGIN IMMEDIATE succeeds. Lock wait
+      // therefore counts against the durable authorization window.
+      const issuedAt = readOperationsClock(this.clock);
+      const monotonicIssuedAt = readOperationsMonotonicClock(this.monotonicClock);
+      const remainingMilliseconds =
+        Date.parse(attempt.authorization_expires_at) - Date.parse(issuedAt);
+      if (
+        compareCanonicalTimes(issuedAt, attempt.created_at) < 0 ||
+        remainingMilliseconds <= 0 ||
+        compareCanonicalTimes(issuedAt, budget.ends_at) >= 0
+      ) {
+        throw new InvalidAttemptPermitError("Attempt permit is outside its authorization window");
+      }
+      const monotonicExpiresAt = monotonicIssuedAt + remainingMilliseconds;
+      if (!Number.isFinite(monotonicExpiresAt)) {
+        throw new OperationsValidationError("Operations monotonic clock is out of range");
+      }
+      return Object.freeze({
+        binding: this.networkAttemptBinding(attempt, budget),
+        issuedAt,
+        monotonicExpiresAt,
+        monotonicIssuedAt,
+      } satisfies IssuedNetworkAttemptAuthorization);
     });
+    return createNetworkAttemptAuthorization(issued.binding, () =>
+      this.#consumeNetworkAttemptAuthorization(
+        {
+          attemptId: parsed.attemptId,
+          token: parsed.token as AttemptPermitToken,
+        },
+        issued,
+      ),
+    );
   }
 
   /**
@@ -500,21 +605,17 @@ export class SqliteOperationsStore {
       const budget = this.getBudgetRow(attempt.budget_id);
       if (budget === undefined) throw new OperationsIntegrityError("Attempt budget is missing");
       this.assertBudgetRow(budget);
+      const binding = this.networkAttemptBinding(attempt, budget);
+      const facts = this.attemptFromRow(attempt);
       return Object.freeze({
-        attemptId: attempt.attempt_id,
-        authorizationExpiresAt: attempt.authorization_expires_at,
-        dispatchedAt: attempt.dispatched_at,
-        lane: parseWithSchema(ResearchLaneSchema, attempt.lane, "attempt lane"),
-        operation: parseWithSchema(ResearchOperationSchema, attempt.operation, "attempt operation"),
-        profile: parseWithSchema(OperationsProfileSchema, budget.profile, "attempt profile"),
-        reservedAtomic: attempt.reserved_atomic as AtomicAmount,
-        sessionId: attempt.session_id,
-        sourcePlane: parseWithSchema(
-          SourcePlaneSchema,
-          attempt.source_plane,
-          "attempt source plane",
-        ),
-        state: attempt.state as AttemptState,
+        ...binding,
+        budgetId: facts.budgetId,
+        closedAt: facts.closedAt,
+        createdAt: facts.createdAt,
+        dispatchedAt: facts.dispatchedAt,
+        idempotencyKey: facts.idempotencyKey,
+        outcome: facts.outcome,
+        state: facts.state,
       });
     });
   }
@@ -1210,13 +1311,10 @@ export class SqliteOperationsStore {
     });
   }
 
-  authorizeAttempt(permitInput: AttemptPermit, dispatchedAtInput: string): AttemptRecord {
-    const permit = parseWithSchema(AttemptPermitSchema, permitInput, "attempt permit");
-    const dispatchedAt = parseWithSchema(
-      CanonicalTimestampSchema,
-      dispatchedAtInput,
-      "dispatchedAt",
-    );
+  #consumeNetworkAttemptAuthorization(
+    permit: AttemptPermit,
+    issued: IssuedNetworkAttemptAuthorization,
+  ): Readonly<NetworkAttemptDispatchReceipt> {
     return this.transaction(() => {
       const row = this.getAttemptRow(permit.attemptId);
       if (row === undefined) throw new InvalidAttemptPermitError("Attempt permit is unknown");
@@ -1227,18 +1325,37 @@ export class SqliteOperationsStore {
       if (!secureEqualHex(row.permit_hash, sha256(permit.token))) {
         throw new InvalidAttemptPermitError("Attempt permit is invalid");
       }
-      if (
-        compareCanonicalTimes(dispatchedAt, row.created_at) < 0 ||
-        compareCanonicalTimes(dispatchedAt, row.authorization_expires_at) > 0
-      ) {
-        throw new InvalidAttemptPermitError("Attempt permit is outside its authorization window");
-      }
       const budgetRow = this.getBudgetRow(row.budget_id);
       if (budgetRow === undefined) throw new OperationsIntegrityError("Attempt budget is missing");
       this.assertBudgetRow(budgetRow);
-      if (compareCanonicalTimes(dispatchedAt, budgetRow.ends_at) > 0) {
-        throw new BudgetExceededError("WINDOW_CLOSED", "Budget window closed before dispatch");
+      const binding = this.networkAttemptBinding(row, budgetRow);
+      if (
+        binding.attemptId !== issued.binding.attemptId ||
+        binding.authorizationExpiresAt !== issued.binding.authorizationExpiresAt ||
+        binding.lane !== issued.binding.lane ||
+        binding.operation !== issued.binding.operation ||
+        binding.profile !== issued.binding.profile ||
+        binding.reservedAtomic !== issued.binding.reservedAtomic ||
+        binding.sessionId !== issued.binding.sessionId ||
+        binding.sourcePlane !== issued.binding.sourcePlane
+      ) {
+        throw new OperationsIntegrityError("Attempt authorization binding changed before dispatch");
       }
+
+      // Re-sample only after acquiring the write lock. Wall time protects
+      // against forward jumps, while monotonic time keeps rollback from
+      // extending the authorization lifetime.
+      const observedAt = readOperationsClock(this.clock);
+      const monotonicAt = readOperationsMonotonicClock(this.monotonicClock);
+      if (
+        compareCanonicalTimes(observedAt, row.authorization_expires_at) >= 0 ||
+        monotonicAt < issued.monotonicIssuedAt ||
+        monotonicAt >= issued.monotonicExpiresAt
+      ) {
+        throw new InvalidAttemptPermitError("Attempt permit is outside its authorization window");
+      }
+      const dispatchedAt =
+        compareCanonicalTimes(observedAt, issued.issuedAt) < 0 ? issued.issuedAt : observedAt;
 
       const updated: Omit<AttemptRow, "row_mac"> = {
         ...this.withoutAttemptMac(row),
@@ -1256,7 +1373,7 @@ export class SqliteOperationsStore {
         sessionId: row.session_id,
         sourcePlane: row.source_plane,
       });
-      return this.attemptFromRow({ ...updated, row_mac: rowMac });
+      return createNetworkAttemptDispatchReceipt(binding, dispatchedAt);
     });
   }
 
@@ -1321,7 +1438,7 @@ export class SqliteOperationsStore {
       const rows = this.database
         .prepare(
           `SELECT * FROM rsi_attempts
-            WHERE state != 'closed' AND authorization_expires_at < ?
+            WHERE state != 'closed' AND authorization_expires_at <= ?
             ORDER BY created_at, attempt_id`,
         )
         .all(recoveredAt) as unknown as AttemptRow[];
@@ -2135,6 +2252,22 @@ export class SqliteOperationsStore {
     });
   }
 
+  private networkAttemptBinding(
+    row: AttemptRow,
+    budget: BudgetRow,
+  ): Readonly<NetworkAttemptBinding> {
+    return Object.freeze({
+      attemptId: row.attempt_id,
+      authorizationExpiresAt: row.authorization_expires_at,
+      lane: parseWithSchema(ResearchLaneSchema, row.lane, "attempt lane"),
+      operation: parseWithSchema(ResearchOperationSchema, row.operation, "attempt operation"),
+      profile: parseWithSchema(OperationsProfileSchema, budget.profile, "attempt profile"),
+      reservedAtomic: row.reserved_atomic as AtomicAmount,
+      sessionId: row.session_id,
+      sourcePlane: parseWithSchema(SourcePlaneSchema, row.source_plane, "attempt source plane"),
+    });
+  }
+
   private writeAttempt(row: Omit<AttemptRow, "row_mac">, rowMac: string): void {
     const updated = this.database
       .prepare(
@@ -2822,7 +2955,7 @@ export class SqliteOperationsStore {
       if (
         attempt.dispatched_at !== null &&
         (Date.parse(attempt.dispatched_at) < created ||
-          Date.parse(attempt.dispatched_at) > expires ||
+          Date.parse(attempt.dispatched_at) >= expires ||
           Date.parse(attempt.dispatched_at) > Date.parse(budget.ends_at))
       ) {
         errors.push(`Attempt ${attempt.attempt_id} has an invalid dispatch time`);

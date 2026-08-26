@@ -194,10 +194,16 @@ async function localFixture(withSources: boolean) {
   });
   signer.append(eventStore, { createdAt: plus(100) });
 
-  const operationsStore = new SqliteOperationsStore({
-    path: join(directory, "operations.sqlite"),
-    stateKey: Uint8Array.from(randomBytes(32)),
-  });
+  const operationsStore = new SqliteOperationsStore(
+    {
+      path: join(directory, "operations.sqlite"),
+      stateKey: Uint8Array.from(randomBytes(32)),
+    },
+    {
+      clock: () => plus(4),
+      monotonicClock: () => 240_000,
+    },
+  );
   closers.push(() => operationsStore.close());
   const budgetId = randomUUID();
   operationsStore.createBudget({
@@ -273,7 +279,7 @@ function addClosedSources(store: SqliteOperationsStore, budgetId: string): void 
       sessionId: SESSION_ID,
       sourcePlane,
     });
-    store.authorizeAttempt(permit, plus(4));
+    store.createNetworkAttemptAuthorization(permit).consume();
     store.closeAttempt(permit.attemptId, { closedAt: plus(5), outcome });
   }
 }
