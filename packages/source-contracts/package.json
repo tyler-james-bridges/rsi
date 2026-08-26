@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./legacy-opensea-fixtures": "./src/opensea.ts",
+    "./opensea-trending": "./src/opensea-trending.ts"
   },
   "scripts": {
     "format:check": "prettier --check .",

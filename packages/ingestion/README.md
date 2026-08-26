@@ -3,6 +3,30 @@
 This package joins the bounded read-only X collector to RSI's encrypted capture
 Vault, authenticated capture registry, and tamper-evident event store.
 
+The fixed OpenSea trending path is intentionally isolated behind
+`@rsi/ingestion/opensea-trending`; it is not exported from the package root. It accepts no
+request input and binds exactly one `opensea.trending-collections.v1` attempt to the
+`marketplace` lane and source plane with the non-payment authorization slot `reservedAtomic:
+"1"`. Live bytes are encrypted in Vault before strict schema parsing. Only as many as ten
+`collection_slug` identifiers enter the private capture registry, while the durable event and
+returned result exclude slugs, addresses, provider hashes, cursors, text, URLs, API keys, and
+capture IDs. Fresh results may include a boolean `hasNextPage` and validated rate-limit counters;
+neither is reconstructed on retry.
+
+OpenSea crash recovery requires the authenticated operations binding, capture-registry row, and
+Vault capture. It never accepts a caller-supplied quarantine or re-brands stored bytes as a live
+network response. After checking the attempt fingerprint and Vault metadata, it parses directly
+inside the Vault byte-copy wipe scope and compares the projection with the committed private
+identifiers. Recovery needs no collector, API key, or egress. Malformed content still crosses the
+encrypt-first boundary and becomes `INVALID_RESPONSE_SCHEMA` with an empty private identifier
+set.
+
+The encrypted Vault media type carries a private, hex-only `rsi-provenance` digest over the exact
+provider content type, fixed request fingerprint, and full durable dispatch binding. This keeps
+the provider bytes exact while preventing a genuine capture from one attempt from being swapped
+into another attempt that shares the same fixed request fingerprint. The digest never enters an
+event or result.
+
 `ingestXRecentSearch` follows a strict lifecycle:
 
 1. validate the closed session, lane, profile, attempt, retention, and network-authorization context;

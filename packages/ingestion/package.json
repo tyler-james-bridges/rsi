@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./opensea-trending": "./src/opensea-trending.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -13,7 +14,9 @@
   },
   "dependencies": {
     "@rsi/capture-registry": "workspace:*",
+    "@rsi/opensea-collector": "workspace:*",
     "@rsi/operations": "workspace:*",
+    "@rsi/source-contracts": "workspace:*",
     "@rsi/store": "workspace:*",
     "@rsi/vault": "workspace:*",
     "@rsi/x-collector": "workspace:*",

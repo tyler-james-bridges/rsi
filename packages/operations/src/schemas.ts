@@ -38,6 +38,7 @@ export const ResearchOperationSchema = z.enum([
   "alchemy.json-rpc.v1",
   "opensea.rest.v1",
   "opensea.stream.v1",
+  "opensea.trending-collections.v1",
   "x.recent-search.v1",
 ]);
 

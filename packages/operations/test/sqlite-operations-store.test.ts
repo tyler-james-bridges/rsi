@@ -603,8 +603,8 @@ describe("SqliteOperationsStore budget permits", () => {
       createdAt: T0,
       currency: "USD_MICRO",
       endsAt: END,
-      maxAtomic: "800000",
-      maxAttempts: 8,
+      maxAtomic: "900000",
+      maxAttempts: 9,
       profile: "canary",
       startsAt: T0,
     });
@@ -615,6 +615,7 @@ describe("SqliteOperationsStore budget permits", () => {
       ["security", "x.recent-search.v1", "social", "succeeded"],
       ["discovery", "x.recent-search.v1", "social", "empty"],
       ["marketplace", "opensea.rest.v1", "marketplace", "succeeded"],
+      ["marketplace", "opensea.trending-collections.v1", "marketplace", "succeeded"],
       ["marketplace", "opensea.stream.v1", "marketplace", "empty"],
       ["contract", "alchemy.json-rpc.v1", "canonical_chain", "succeeded"],
     ] as const;
@@ -640,15 +641,15 @@ describe("SqliteOperationsStore budget permits", () => {
     const summary = target.store.getSessionAttemptSummary(sessionId, "canary");
     expect(summary).toMatchObject({
       allAttemptsClosed: true,
-      attemptCount: 8,
+      attemptCount: 9,
       canonicalChain: { attemptCount: 1, closedCount: 1, succeededCount: 1 },
       crossProfileAttemptCount: 0,
       openSea: {
-        rest: { attemptCount: 1, succeededCount: 1 },
+        rest: { attemptCount: 2, succeededCount: 2 },
         stream: { attemptCount: 1, emptyCount: 1 },
       },
       profile: "canary",
-      reservedAtomic: "800000",
+      reservedAtomic: "900000",
       schemaVersion: 1,
       sessionId,
       xLanes: {

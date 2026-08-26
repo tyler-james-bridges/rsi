@@ -1,3 +1,9 @@
+/**
+ * @deprecated Synthetic, normalized Get Order and Stream fixtures only. These schemas do not
+ * describe live OpenSea wire responses. Import this module explicitly through
+ * `@rsi/source-contracts/legacy-opensea-fixtures`; it is intentionally absent from the package
+ * root and from the live trending-collections contract.
+ */
 import { z } from "zod";
 
 import {
@@ -13,6 +19,7 @@ import {
 } from "./common.js";
 
 export const OPENSEA_CONTRACT_REVIEW_DATE = "2026-08-15";
+export const OPENSEA_LEGACY_FIXTURES_STATUS = "legacy-synthetic-non-live" as const;
 export const OPENSEA_REST_MAXIMUM_BYTES = 2 * 1_024 * 1_024;
 export const OPENSEA_STREAM_MAXIMUM_EVENT_BYTES = 256 * 1_024;
 

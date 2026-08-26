@@ -409,6 +409,7 @@ function groupForAttempt(groups: SessionAttemptGroups, row: AttemptRow): Mutable
     case "alchemy.json-rpc.v1":
       return groups.canonicalChain;
     case "opensea.rest.v1":
+    case "opensea.trending-collections.v1":
       return groups.openSeaRest;
     case "opensea.stream.v1":
       return groups.openSeaStream;

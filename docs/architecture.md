@@ -3,9 +3,9 @@
 > [!IMPORTANT]
 > This document describes RSI's longer-term architecture. The active
 > [single-machine production path](./production-readiness/README.md) is authoritative.
-> The current code has no commissioned live adapter, wallet integration, transaction
-> builder, or wallet signer. Future components grant no authority merely because they
-> appear below.
+> Exactly one bounded X read canary was commissioned successfully; the current code has no
+> continuously enabled live adapter, wallet integration, transaction builder, or wallet signer.
+> Future components grant no authority merely because they appear below.
 
 ## Objective
 
@@ -84,7 +84,7 @@ The first executable domain object is an NFT purchase intent. It commits to:
 - evidence IDs;
 - unique nonce and expiry.
 
-`@rsi/domain` encodes the object as EIP-712 typed data. The kernel allowlists the recipient, persists used intent IDs and nonces, and requires a fresh OpenSea observation carrying the exact order hash. A future signer must still independently reconstruct the order, verify the EIP-712 digest, simulate it, and revalidate state immediately before broadcast.
+`@rsi/domain` encodes the object as EIP-712 typed data. The kernel allowlists the recipient, persists used intent IDs and nonces, and requires a fresh OpenSea observation carrying the exact order hash. Before that evidence can become policy-eligible, trusted provenance must also bind it to an exact commissioned endpoint and parser contract, the authorized request and capture lifecycle, and a freshness proof. An untrusted or synthetic object that merely declares `source.kind = "opensea"` is insufficient. A future signer must still independently reconstruct the order, verify the EIP-712 digest, simulate it, and revalidate state immediately before broadcast.
 
 ## Recursive-improvement boundary
 
@@ -114,11 +114,31 @@ The event store can be checkpointed into a separate, hash-linked journal. Each c
 
 The policy read/decide/append step runs inside one SQLite `BEGIN IMMEDIATE` transaction. A clean restart rebuilds intent-ID, nonce, and daily-spend state from approved decisions, and multiple local writers sharing that database cannot approve from stale snapshots. This does not coordinate separate database copies or hosts; a future distributed executor still requires one durable authorization authority.
 
-The recorded-fixture policy pipeline does not persist raw fixture files. The X ingestion path sends exact response bytes into an ephemeral AES-256-GCM vault before typed parsing. Each capture has an opaque random identifier and fresh data key; metadata is encrypted with the body, while a separate profile-bound encrypted registry binds the request attempt and private source identifiers. Durable events receive only closed operational counts, timestamps, statuses, and opaque identifiers. Session cleanup destroys capture keys and index material, writes content-free deletion evidence, and reconciles pending or orphaned state after restart. The operator projection and every future transaction component must never read the vault or registry.
+The recorded-fixture policy pipeline does not persist raw fixture files. The X and isolated OpenSea
+ingestion paths send exact response bytes into an ephemeral AES-256-GCM vault before typed parsing.
+Each capture has an opaque random identifier and fresh data key; metadata is encrypted with the
+body, while a separate profile-bound encrypted registry binds the request attempt and private
+source identifiers. Durable events receive only closed operational counts, timestamps, statuses,
+and opaque identifiers. Session cleanup destroys capture keys and index material, writes
+content-free deletion evidence, and reconciles pending or orphaned state after restart. The
+operator projection and every future transaction component must never read the vault or registry.
 
 Recovery is split deliberately. The state-evidence component signs checkpoint, event-head, schema, release, and runbook evidence but is not itself restorable history. The sanitized event archive preserves and verifies every allowed production event from genesis. The signed release bundle preserves the allowlisted source, lockfile, configuration schemas, runbooks, recovery procedure, SBOM, and test summary. A genuine-store local controller cross-checks all three verification reports and supplies their exact statuses and hashes to lifecycle acceptance. Recovery drills restore into a fresh temporary directory on the same Mac; optional encrypted off-host copies do not change runtime authority.
 
-The X collector pins one endpoint-specific recent-search contract and exposes only live and replay modes. Live mode accepts a bearer credential only through construction, consumes an authentic runtime `research_collection` authorization and an independently durable attempt authorization, issues `GET` only to the exact X origin/path, requests identity encoding, refuses compression and redirects, bounds time and decoded response size, and quarantines bytes before parsing. Runtime write locks linearize both dispatch against cross-process STOP and the later content-free result checkpoint against STOP. The production export does not expose transport or clock injection. No live recording/cassette sink exists; synthetic cassettes are constructed offline through a test-only entry. The Stage 1 coordinator adds a code-owned query, one durable singleton claim, a fixed ten-result/$0.05 ceiling, macOS Keychain isolation, STOP-linked cancellation, encrypted capture, and a content-free receipt. It checkpoints sanitized result facts before closing the attempt, destroys the capture key and records the authenticated registry tombstone before publishing the receipt, and resumes those steps without a credential or network path after restart. A real credentialed canary is still required before moving the adapter from `quarantined` to `approved`.
+The X collector pins one endpoint-specific recent-search contract and exposes only live and replay modes. Live mode accepts a bearer credential only through construction, consumes an authentic runtime `research_collection` authorization and an independently durable attempt authorization, issues `GET` only to the exact X origin/path, requests identity encoding, refuses compression and redirects, bounds time and decoded response size, and quarantines bytes before parsing. Runtime write locks linearize both dispatch against cross-process STOP and the later content-free result checkpoint against STOP. The production export does not expose transport or clock injection. No live recording/cassette sink exists; synthetic cassettes are constructed offline through a test-only entry. The Stage 1 coordinator adds a code-owned query, one durable singleton claim, a fixed ten-result/$0.05 ceiling, macOS Keychain isolation, STOP-linked cancellation, encrypted capture, and a content-free receipt. It checkpoints sanitized result facts before closing the attempt, destroys the capture key and records the authenticated registry tombstone before publishing the receipt, and resumes those steps without a credential or network path after restart. Exactly one credentialed canary completed successfully on 2026-08-25 and returned to `STOPPED`; that bounded result did not move the continuous collector from `quarantined` to `approved`.
+
+The OpenSea canary has a separate offline-verified foundation for exactly one Base
+trending-collections `GET` to
+`https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=base&limit=10`.
+The fixed source contract, one-shot collector, isolated Keychain host, durable attempt binding, and
+encrypt-first ingestion/recovery boundary are implemented. Their graph permits no order or
+fulfillment route, Stream/WebSocket, retry, redirect, pagination, wallet, payment, x402, policy
+approval, execution, or transaction dependency. Legacy Get Order/Stream fixtures are quarantined
+synthetic contracts rather than live provider evidence. A final canary controller must still add a
+durable singleton claim, retain the same runtime authorization through STOP-guarded completion,
+crypto-shred the capture before emitting a content-free receipt, and pass a dedicated executable
+authority-graph gate. This work has not created, accessed, or used an OpenSea API key; whether the
+owner already has one is unknown. No OpenSea provider request has been made or authorized.
 
 The operator service binds to IPv4 loopback, serves fixed same-origin dashboard assets, and rejects
 foreign Host/Origin values. Stage 0 status and research routes validate exact content-free schemas
