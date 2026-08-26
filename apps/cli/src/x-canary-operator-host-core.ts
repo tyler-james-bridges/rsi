@@ -41,6 +41,9 @@ interface DatabaseIdentity {
   readonly inode?: bigint;
 }
 
+const PRIVATE_DIRECTORY_MODE = 0o700n;
+const EFFECTIVE_USER_ID = typeof process.geteuid === "function" ? BigInt(process.geteuid()) : null;
+
 export interface XCanaryOperatorPaths {
   readonly captureRegistry: string;
   readonly eventStore: string;
@@ -73,8 +76,18 @@ async function resolveDatabaseIdentity(path: string): Promise<DatabaseIdentity> 
   if (path === ":memory:") {
     throw new TypeError("The Stage 1 canary requires durable, separate storage files");
   }
-  await mkdir(dirname(path), { recursive: true });
+  await mkdir(dirname(path), { mode: Number(PRIVATE_DIRECTORY_MODE), recursive: true });
   const parent = await realpath(dirname(path));
+  const parentEntry = await lstat(parent, { bigint: true });
+  if (
+    !parentEntry.isDirectory() ||
+    parentEntry.isSymbolicLink() ||
+    (parentEntry.mode & 0o777n) !== PRIVATE_DIRECTORY_MODE ||
+    EFFECTIVE_USER_ID === null ||
+    parentEntry.uid !== EFFECTIVE_USER_ID
+  ) {
+    throw new TypeError("Stage 1 data directories must be owner-only (mode 0700)");
+  }
   const canonicalPath = resolve(parent, basename(path));
   try {
     const entry = await lstat(canonicalPath, { bigint: true });

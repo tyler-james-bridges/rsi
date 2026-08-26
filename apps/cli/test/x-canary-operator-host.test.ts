@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -82,6 +82,37 @@ describe("Stage 1 X canary operator host", () => {
     expect(Object.keys(productionHost)).toEqual(["startXCanaryOperator"]);
     expect(productionHost).not.toHaveProperty("startXCanaryOperatorWithHost");
     expect(productionHost).not.toHaveProperty("startXCanaryOperatorWithCredentialHostForTesting");
+  });
+
+  it("rejects a non-private data directory before reading credentials", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-x-canary-host-permissions-"));
+    await chmod(directory, 0o755);
+    const requests: CredentialCommandRequest[] = [];
+
+    await expect(
+      startXCanaryOperatorForTesting({
+        credentialHost: credentialHost(requests),
+        databasePath: join(directory, "runtime.sqlite"),
+        port: 0,
+        researchDatabasePath: join(directory, "research.sqlite"),
+      }),
+    ).rejects.toThrow("Stage 1 data directories must be owner-only (mode 0700)");
+    expect(requests).toEqual([]);
+    expect(await readdir(directory)).toEqual([]);
+  });
+
+  it("creates an absent Stage 1 data directory with owner-only permissions", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-x-canary-host-private-parent-"));
+    const dataDirectory = join(directory, "stage1");
+
+    operator = await startXCanaryOperatorForTesting({
+      credentialHost: credentialHost(),
+      databasePath: join(dataDirectory, "runtime.sqlite"),
+      port: 0,
+      researchDatabasePath: join(dataDirectory, "research.sqlite"),
+    });
+
+    expect((await stat(dataDirectory)).mode & 0o777).toBe(0o700);
   });
 
   it("boots STOPPED and performs one explicit local-operator canary without leaking content", async () => {

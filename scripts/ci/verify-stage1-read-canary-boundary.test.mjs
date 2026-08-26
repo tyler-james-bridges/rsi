@@ -113,12 +113,29 @@ void startXCanaryOperator;
   write(
     root,
     "apps/cli/src/x-canary-operator-host-core.ts",
-    `import { SqliteCaptureRegistry } from "@rsi/capture-registry";
+    `import { lstat, mkdir, realpath, stat } from "node:fs/promises";
+import { dirname } from "node:path";
+import { SqliteCaptureRegistry } from "@rsi/capture-registry";
 import type { DarwinXReadCanaryKeychain } from "@rsi/credential-host";
 import { SqliteOperationsStore } from "@rsi/operations";
 import { XReadCanaryController } from "@rsi/read-canary";
 import { SqliteRuntimeController } from "@rsi/runtime";
 import { SnapshotVault } from "@rsi/vault";
+const PRIVATE_DIRECTORY_MODE = 0o700n;
+const EFFECTIVE_USER_ID = typeof process.geteuid === "function" ? BigInt(process.geteuid()) : null;
+async function resolveDatabaseIdentity(path: string) {
+  await mkdir(dirname(path), { mode: Number(PRIVATE_DIRECTORY_MODE), recursive: true });
+  const parent = await realpath(dirname(path));
+  const parentEntry = await lstat(parent, { bigint: true });
+  if (
+    !parentEntry.isDirectory() ||
+    parentEntry.isSymbolicLink() ||
+    (parentEntry.mode & 0o777n) !== PRIVATE_DIRECTORY_MODE ||
+    (EFFECTIVE_USER_ID === null || parentEntry.uid !== EFFECTIVE_USER_ID)
+  ) throw new Error("unsafe fixture directory");
+  void stat;
+  return path;
+}
 export interface StartXCanaryOperatorOptions {
   readonly databasePath: string;
   readonly port: number;
@@ -189,6 +206,7 @@ export async function startXCanaryOperatorWithHost(
   options: StartXCanaryOperatorOptions,
   credentialHost: DarwinXReadCanaryKeychain,
 ): Promise<RunningXCanaryOperator> {
+  await resolveDatabaseIdentity(options.databasePath);
   const runtime = SqliteRuntimeController.open({
     openedAt: "2026-01-01T00:00:00.000Z",
     path: options.databasePath,
@@ -1402,6 +1420,15 @@ export const injectedCollectorFactory = createXRecentSearchCollectorForTesting;
       "  readonly databasePath: string;\n  readonly credentialHost?: DarwinXReadCanaryKeychain;",
     );
     expectFailure(root, /keep credential and transport injection out of public options/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/x-canary-operator-host-core.ts",
+      "    (EFFECTIVE_USER_ID === null || parentEntry.uid !== EFFECTIVE_USER_ID)\n",
+      "    false\n",
+    );
+    expectFailure(root, /owner-owned mode-0700 data directory/u);
   });
   withFixture((root) => {
     replace(
