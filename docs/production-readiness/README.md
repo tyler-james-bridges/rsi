@@ -118,6 +118,15 @@ per-Post price, rate limits, and account credit. The reviewed plan is exactly on
 no retries, and a maximum reserved cost of 50,000 USD micro-units ($0.05). Actual provider charge
 is reported as unknown unless X supplies an independently verifiable billing receipt.
 
+The Stage 1 data directory contains keyed operational and capture state and must be owned by the
+operator with mode `0700`. Startup checks this before reading credentials or reporting the canary
+ready. For the default paths, commission the directory once from the repository root:
+
+```bash
+mkdir -p apps/cli/.local
+chmod 700 apps/cli/.local
+```
+
 Create four generic-password items in the login Keychain under the fixed account
 `rsi-stage1-x-read-canary` and these services:
 

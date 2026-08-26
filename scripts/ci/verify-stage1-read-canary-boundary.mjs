@@ -190,6 +190,7 @@ const SPECIAL_PLATFORM_IMPORTS = new Map([
 ]);
 const REVIEWED_PROCESS_PROPERTIES = new Map([
   ["apps/cli/src/x-canary-operator.ts", new Set(["argv", "exitCode", "once", "stderr"])],
+  ["apps/cli/src/x-canary-operator-host-core.ts", new Set(["geteuid"])],
   ["packages/capture-registry/src/sqlite-capture-registry.ts", new Set(["geteuid"])],
   ["packages/credential-host/src/x-read-canary-keychain.ts", new Set(["platform"])],
   ["packages/vault/src/snapshot-vault.ts", new Set(["geteuid"])],
@@ -1969,6 +1970,20 @@ function verifyOperatorHostBoundary(root, graph, violations) {
     ) {
       violations.push(
         `${OPERATOR_HOST_CORE_FILE} must keep credential and transport injection out of public options`,
+      );
+    }
+
+    const privateDirectoryRequirements = [
+      /const\s+PRIVATE_DIRECTORY_MODE\s*=\s*0o700n/u,
+      /typeof\s+process\.geteuid\s*===\s*"function"\s*\?\s*BigInt\(process\.geteuid\(\)\)\s*:\s*null/u,
+      /mkdir\(dirname\(path\),\s*\{\s*mode:\s*Number\(PRIVATE_DIRECTORY_MODE\),\s*recursive:\s*true\s*\}\)/u,
+      /lstat\(parent,\s*\{\s*bigint:\s*true\s*\}\)/u,
+      /\(parentEntry\.mode\s*&\s*0o777n\)\s*!==\s*PRIVATE_DIRECTORY_MODE/u,
+      /EFFECTIVE_USER_ID\s*===\s*null\s*\|\|\s*parentEntry\.uid\s*!==\s*EFFECTIVE_USER_ID/u,
+    ];
+    if (privateDirectoryRequirements.some((pattern) => !pattern.test(core))) {
+      violations.push(
+        `${OPERATOR_HOST_CORE_FILE} must enforce an owner-owned mode-0700 data directory before credential access`,
       );
     }
 

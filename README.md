@@ -102,7 +102,8 @@ The operator service binds to IPv4 loopback and has no network authentication. D
 The production-shaped Stage 1 host is `pnpm operator:x-canary`. It also boots `STOPPED` and cannot
 sign, pay, trade, publish, or paginate. Its dashboard will not enable the single canary button until
 the operator enters `RESEARCH`, types the fixed plan ID, and acknowledges one request and the
-$0.05 maximum. Starting the host alone makes no X request. See the
+$0.05 maximum. Its local data directory must be owner-only (`0700`), which startup verifies before
+reading credentials or reporting readiness. Starting the host alone makes no X request. See the
 [production path](docs/production-readiness/README.md#x-read-canary-commissioning) before adding a
 credential or pressing Run.
 
