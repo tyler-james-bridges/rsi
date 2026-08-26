@@ -4,16 +4,19 @@ import { describe, expect, it } from "vitest";
 
 import {
   SourceContractError,
-  corroborateOpenSeaListing,
   parseCanonicalAssetFixture,
   parseFinalizedBlockFixture,
-  parseOpenSeaRestFixture,
-  parseOpenSeaStreamFixture,
   prepareCanonicalAssetRequest,
   prepareFinalizedBlockRequest,
+} from "../src/index.js";
+import {
+  OPENSEA_LEGACY_FIXTURES_STATUS,
+  corroborateOpenSeaListing,
+  parseOpenSeaRestFixture,
+  parseOpenSeaStreamFixture,
   prepareOpenSeaRestRequest,
   prepareOpenSeaStreamSubscription,
-} from "../src/index.js";
+} from "@rsi/source-contracts/legacy-opensea-fixtures";
 
 const CONTRACT = `0x${"11".repeat(20)}`;
 const PROTOCOL = `0x${"22".repeat(20)}`;
@@ -28,6 +31,10 @@ const RUNTIME_CODE = "0x60006000";
 const IMPLEMENTATION_CODE = "0x60016001";
 
 describe("OpenSea offline contracts", () => {
+  it("labels the explicitly imported fixtures as synthetic and non-live", () => {
+    expect(OPENSEA_LEGACY_FIXTURES_STATUS).toBe("legacy-synthetic-non-live");
+  });
+
   it("prepares only fixed read-only descriptors without credential values", () => {
     const rest = prepareOpenSeaRestRequest(restExpected());
     expect(rest).toMatchObject({

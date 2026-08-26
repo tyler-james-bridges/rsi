@@ -161,9 +161,15 @@ importers:
       "@rsi/capture-registry":
         specifier: workspace:*
         version: link:../capture-registry
+      "@rsi/opensea-collector":
+        specifier: workspace:*
+        version: link:../opensea-collector
       "@rsi/operations":
         specifier: workspace:*
         version: link:../operations
+      "@rsi/source-contracts":
+        specifier: workspace:*
+        version: link:../source-contracts
       "@rsi/store":
         specifier: workspace:*
         version: link:../store
@@ -183,6 +189,18 @@ importers:
       "@rsi/runtime":
         specifier: workspace:*
         version: link:../runtime
+
+  packages/opensea-collector:
+    dependencies:
+      "@rsi/operations":
+        specifier: workspace:*
+        version: link:../operations
+      "@rsi/runtime":
+        specifier: workspace:*
+        version: link:../runtime
+      "@rsi/source-contracts":
+        specifier: workspace:*
+        version: link:../source-contracts
 
   packages/operations:
     dependencies:

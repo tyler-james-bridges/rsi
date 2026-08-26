@@ -16,9 +16,9 @@ RSI currently has no live transaction authority. State-changing adapters are dis
 credentials are absent, activation caps are unset, and the operator UI is loopback-only. Its
 persisted Stage 0 runtime always boots into `STOPPED`; `RESEARCH` and `PROPOSE_ONLY` grant only
 one-shot collection and non-executable proposal-persistence boundaries. Payment, signing, policy
-approval, execution, broadcast, and publication are permanently denied. No `READ_CANARY` has
-been commissioned yet. The X `READ_CANARY` implementation is present and offline-verified; that is
-not evidence that X authentication or the live response currently works.
+approval, execution, broadcast, and publication are permanently denied. Exactly one X
+`READ_CANARY` was commissioned successfully on 2026-08-25 and returned to `STOPPED`; it did not
+authorize continuous collection or any other provider. OpenSea and Base RPC remain uncommissioned.
 
 ## Compatibility components are not gates
 
@@ -109,58 +109,61 @@ pricing, authentication, schemas, and contract addresses can change. Before any 
 the current official documentation and deployed addresses, pin the exact accepted contract, and
 repeat the bounded canary. Historical notes or social posts are not activation evidence.
 
-## X read-canary commissioning
+## X read-canary commissioning — completed 2026-08-25
 
-The code is ready for one supervised request; the live result remains unproven. Immediately before
-commissioning, verify X's official recent-search endpoint, app-only bearer authentication, current
-per-Post price, rate limits, and account credit. The reviewed plan is exactly one `GET` to
-`https://api.x.com/2/tweets/search/recent`, `max_results=10`, `sort_order=recency`, no pagination,
-no retries, and a maximum reserved cost of 50,000 USD micro-units ($0.05). Actual provider charge
-is reported as unknown unless X supplies an independently verifiable billing receipt.
+The reviewed plan issued exactly one `GET` to
+`https://api.x.com/2/tweets/search/recent`, with `max_results=10`, `sort_order=recency`, no
+pagination, no retry, and a maximum authorized reservation of 50,000 USD micro-units ($0.05). The
+request succeeded with 10 accepted posts and 2,739 response bytes. The response reported a next
+page, but it was not requested. Rate-limit remaining changed from 450 to 449. The exact provider
+charge remains unknown because no independently verifiable billing receipt was supplied.
 
-The Stage 1 data directory contains keyed operational and capture state and must be owned by the
-operator with mode `0700`. Startup checks this before reading credentials or reporting the canary
-ready. For the default paths, commission the directory once from the repository root:
+The durable attempt closed `succeeded`, the raw-capture key was destroyed, the keyed deletion was
+verified before receipt, and the operator returned to `STOPPED`. The complete content-free record
+is [X read-canary evidence](./evidence/x-read-canary-2026-08-25.md). This result validates only that
+single bounded request. It does not authorize resetting the singleton state, making another X
+request, or promoting the collector to continuous operation.
 
-```bash
-mkdir -p apps/cli/.local
-chmod 700 apps/cli/.local
-```
+The Stage 1 data directory remains owner-only (`0700`). Credential and storage-key values remain
+forbidden in shell history, environment variables, `.env`, chat, Git, screenshots, livestream
+output, events, and operator projections. Restart recovery may finish only the already-recorded
+content-free result; it has no credential or egress path and cannot retry the provider request.
 
-Create four generic-password items in the login Keychain under the fixed account
-`rsi-stage1-x-read-canary` and these services:
+## OpenSea read-canary build status
 
-- `dev.rsi.canary.x-read` — the app-only bearer token;
-- `dev.rsi.canary.operations-state` — a fresh canonical 32-byte base64url key;
-- `dev.rsi.canary.capture-registry` — a different fresh canonical 32-byte base64url key;
-- `dev.rsi.canary.vault-wrapping` — a third different fresh canonical 32-byte base64url key.
+The OpenSea offline foundation is implemented. The fixed candidate contract is plan
+`opensea-base-trending-collections-v1`, provider `opensea-api-v2`, and operation
+`opensea.trending-collections.v1`: exactly one `GET` to
+`https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=base&limit=10`.
+It is Base-only, JSON-only, identity-encoded, limited to at most 10 collections, and permits no
+retry, redirect, pagination, alternate query, or alternate destination.
 
-Use the Keychain UI, or run the following once per service and paste the value only at the hidden
-prompt. Keeping `-w` last prompts instead of placing the secret in the process arguments:
+The reviewed source parser, one-shot dual-authorized collector, separate macOS Keychain boundary,
+exact dispatch provenance, encrypt-before-parse ingestion, and credential-free recovery path are
+present and offline-tested. The remaining commissioning block is a production controller with a
+durable singleton claim, STOP-guarded completion, verified capture deletion before its content-free
+receipt, and a dedicated executable authority-graph gate.
 
-```bash
-/usr/bin/security add-generic-password -U \
-  -a rsi-stage1-x-read-canary \
-  -s dev.rsi.canary.x-read \
-  -w
-```
+This build excludes order and fulfillment endpoints, OpenSea Stream/WebSocket access, wallets,
+payments, x402, signing, policy approval, execution, and transaction code. An HTTP 402 response
+must fail closed rather than invoke a payment path. The older synthetic Get Order and Stream
+fixtures are quarantined historical test contracts, not current live-schema or activation evidence.
 
-Never put those values in shell history, environment variables, `.env`, chat, Git, screenshots, or
-livestream output. Then run `pnpm operator:x-canary`, confirm it starts `STOPPED`, use the loopback
-dashboard to enter `RESEARCH`, type `x-nft-market-pulse-v1`, acknowledge one request and $0.05, and
-press Run once. STOP remains available during the request. A different request ID, controller, or
-process cannot claim a second request from the same durable canary state.
-
-If the process exits after dispatch, restart the same command on the same files. Startup reads only
-the three storage keys, repairs Vault/registry crash seams, and either finishes the already-recorded
-content-free result or records `INTERRUPTED`; it never reads the X bearer and never retries the
-provider request. A successful or rejected captured receipt is published only after the raw-capture
-key has been destroyed and the keyed registry records the deletion.
+This work has not created, accessed, or used an OpenSea API key; whether the owner already has one
+is unknown. No OpenSea provider request has been made or authorized.
+Credential creation and the first live request require separate explicit authorization after the
+controller, authority graph, current account limits, and exact schema have been reviewed. The
+canary may produce a content-free commissioning receipt only. Before any later
+marketplace observation can become policy-eligible, trusted provenance must bind it to an exact
+commissioned endpoint, parser contract, request, capture lifecycle, and freshness proof;
+`source.kind = "opensea"` alone is never sufficient.
 
 ## Next build target
 
-Commission the already-built X `READ_CANARY`, inspect its sanitized receipt, and keep the adapter in
-quarantine if authentication, schema, rate metadata, or capture verification fails. Then implement
-OpenSea and Base RPC canaries one at a time. Only after live proposals are useful and auditable
-should the owner fund the tiny research wallet for one AgentCash/x402 paid read. Capital activation
-values remain local and unset in source.
+Build the supervised OpenSea controller around the completed offline foundation: one durable
+singleton claim, retained runtime authority through completion, verified capture deletion before
+receipt, restart recovery without the API key or egress, and a dedicated authority-graph gate.
+After separate authorization, commission that one read and inspect its sanitized receipt before
+building the Base RPC canary. Only after live proposals are useful and auditable should the owner
+fund the tiny research wallet for one AgentCash/x402 paid read. Capital activation values remain
+local and unset in source.

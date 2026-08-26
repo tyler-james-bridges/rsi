@@ -5,7 +5,11 @@ export type SourcePlane = "canonical_chain" | "marketplace" | "social";
 export type ResearchLane = "contract" | "discovery" | "marketplace" | "official" | "security";
 
 export type ResearchOperation =
-  "alchemy.json-rpc.v1" | "opensea.rest.v1" | "opensea.stream.v1" | "x.recent-search.v1";
+  | "alchemy.json-rpc.v1"
+  | "opensea.rest.v1"
+  | "opensea.stream.v1"
+  | "opensea.trending-collections.v1"
+  | "x.recent-search.v1";
 
 export type AtomicAmount = string & { readonly __atomicAmount: unique symbol };
 

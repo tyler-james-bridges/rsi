@@ -63,7 +63,7 @@ export const RSI_ADAPTER_CATALOG = Object.freeze(
       status: "quarantined",
       credentialBoundary: "quarantine-worker",
       notes:
-        "Pinned recent-search collector with offline replay; live credentials remain unverified and it never supplies transaction authority.",
+        "Pinned recent-search collector with offline replay; one bounded credentialed canary succeeded, continuous collection remains quarantined, and it never supplies transaction authority.",
     },
     {
       id: "agentcash.x402",
@@ -79,7 +79,8 @@ export const RSI_ADAPTER_CATALOG = Object.freeze(
       capability: "read_only",
       status: "disabled",
       credentialBoundary: "market-data-worker",
-      notes: "Produces canonical collection, listing, ownership, and bid evidence.",
+      notes:
+        "The fixed trending-read foundation is offline-verified but uncommissioned; this adapter remains disabled, and canonical ownership stays a separate Base RPC responsibility.",
     },
     {
       id: "opensea.seaport",

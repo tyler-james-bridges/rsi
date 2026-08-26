@@ -3,8 +3,9 @@
 > [!IMPORTANT]
 > This charter does not grant current authority. The active
 > [single-machine production path](./production-readiness/README.md) controls staged
-> activation. The current code has no commissioned live adapter, wallet integration,
-> transaction builder, wallet signer, or live-capital path.
+> activation. One bounded X read canary has been commissioned, but the current code has no
+> continuously enabled live adapter, wallet integration, transaction builder, wallet signer, or
+> live-capital path.
 
 RSI is designed to learn with real economic consequences. Historical replay is a security test, not a fake portfolio. Live operation begins only when every activation field below is explicitly set and reviewed.
 

@@ -3,8 +3,8 @@
 > [!IMPORTANT]
 > These standards describe future integration options. Under the active
 > [single-machine production path](./production-readiness/README.md), the current code
-> has no commissioned live adapter, wallet integration, transaction builder, or wallet
-> signer. Standards do not activate capabilities.
+> has completed one bounded X read canary but has no continuously enabled live adapter, wallet
+> integration, transaction builder, or wallet signer. Standards do not activate capabilities.
 
 RSI deliberately keeps the standards surface small. Draft standards are version-pinned behind adapters so their future changes do not leak through the system.
 

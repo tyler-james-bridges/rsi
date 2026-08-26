@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./opensea-trending": "./src/opensea-trending.ts",
+    "./opensea-trending-testing": "./src/opensea-trending-testing.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",

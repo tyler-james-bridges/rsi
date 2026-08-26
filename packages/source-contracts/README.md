@@ -2,16 +2,36 @@
 
 `@rsi/source-contracts` is an offline-only safety package. It contains no `fetch`, WebSocket,
 credential, environment-variable, retry, provider SDK, or filesystem implementation. It prepares
-credential-free request descriptors and validates bounded synthetic response fixtures so later
-commissioning has an exact contract to test before any transport can be enabled.
+credential-free request descriptors and validates bounded response bytes or synthetic fixtures so
+later commissioning has an exact contract to test before any transport can be enabled.
 
-The OpenSea contract was reviewed against the official v2 Get Order and Stream documentation on
-2026-08-15. REST is the confirming source; Stream is a provisional collection trigger only. The
-current fixture normalization deliberately excludes metadata, media, URLs, makers, signatures,
-free-form text, and every write/trading endpoint. It binds Base asset identity, active order hash,
-protocol, price, start/end time, and the 120-second freshness ceiling. A future quarantined adapter
-must map the then-current raw provider schema to this exact record and destroy the raw capture; this
-package does not silently assume that the fixture is a live response.
+## OpenSea trending collections
+
+`@rsi/source-contracts/opensea-trending` is the live-wire, read-only contract reviewed against the
+official OpenSea API v2 OpenAPI description on 2026-08-25. It can prepare exactly one request:
+
+```text
+GET https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=base&limit=10
+```
+
+The origin, path, and fixed ordered query are exported separately; the URL is composed from those
+three constants so no caller can confuse query parameters with a path or supply its own query.
+The descriptor names `x-api-key` as the credential header but never accepts or contains a
+credential. It has no request input, cursor input, retry, pagination, order, token-ID, wallet,
+payment, or execution capability. The strict response parser admits only the documented
+`CollectionResponse` fields, requires at most ten unique collection slugs, one to sixteen valid
+Base contract addresses per collection, and requires every collection to be verified, enabled,
+and non-NSFW. Provider text, metadata, media, URLs, feature flags, and the optional cursor are
+discarded. The trusted result contains only rank, slug, normalized Base addresses, acquisition and
+expiry timestamps, and whether a valid cursor was present.
+
+## Legacy OpenSea fixtures
+
+`@rsi/source-contracts/legacy-opensea-fixtures` contains the old synthetic, normalized Get Order
+and Stream fixtures reviewed on 2026-08-15. They are **legacy synthetic/non-live** schemas: they do
+not describe live OpenSea wire responses and are intentionally absent from the package root and
+the trending contract. They exclude metadata, media, URLs, makers, signatures, free-form text, and
+write/trading endpoints. Nothing may use them as a parser for trending-collections responses.
 
 The canonical-chain contract prepares `eth_getBlockByNumber("finalized", false)` and a second
 block-number-pinned batch containing only block-hash revalidation, `eth_getCode`, ERC-165, and
@@ -28,6 +48,7 @@ approved canary; fixture success is not that proof.
 
 Official references:
 
+- <https://docs.opensea.io/reference/get_trending_collections>
 - <https://docs.opensea.io/reference/get_order>
 - <https://docs.opensea.io/docs/stream-real-time-events>
 - <https://www.alchemy.com/docs/reference/node-supported-chains>

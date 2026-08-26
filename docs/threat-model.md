@@ -3,8 +3,9 @@
 > [!IMPORTANT]
 > This document includes the future execution threat surface. The active
 > [single-machine production path](./production-readiness/README.md) governs current
-> authority and retention. The current code has no commissioned live adapter, wallet
-> integration, transaction builder, wallet signer, or capital authority.
+> authority and retention. One bounded X read canary has been commissioned, but the current code
+> has no continuously enabled live adapter, wallet integration, transaction builder, wallet signer,
+> or capital authority.
 
 ## Prime assumption
 
