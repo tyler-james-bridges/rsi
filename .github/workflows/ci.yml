@@ -54,6 +54,9 @@ jobs:
       - name: Prove the Stage 1 X read canary has only its reviewed read authority
         run: pnpm ci:stage1
 
+      - name: Prove the OpenSea read canary has only its reviewed read authority
+        run: pnpm ci:opensea
+
       - name: Verify format, types, and tests
         run: pnpm check
 

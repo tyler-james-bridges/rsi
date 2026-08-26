@@ -129,20 +129,23 @@ forbidden in shell history, environment variables, `.env`, chat, Git, screenshot
 output, events, and operator projections. Restart recovery may finish only the already-recorded
 content-free result; it has no credential or egress path and cannot retry the provider request.
 
-## OpenSea read-canary build status
+## OpenSea read-canary implementation — complete but uncommissioned
 
-The OpenSea offline foundation is implemented. The fixed candidate contract is plan
-`opensea-base-trending-collections-v1`, provider `opensea-api-v2`, and operation
+The fixed candidate contract is plan `opensea-base-trending-collections-v1`, provider
+`opensea-api-v2`, and operation
 `opensea.trending-collections.v1`: exactly one `GET` to
 `https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=base&limit=10`.
 It is Base-only, JSON-only, identity-encoded, limited to at most 10 collections, and permits no
 retry, redirect, pagination, alternate query, or alternate destination.
 
 The reviewed source parser, one-shot dual-authorized collector, separate macOS Keychain boundary,
-exact dispatch provenance, encrypt-before-parse ingestion, and credential-free recovery path are
-present and offline-tested. The remaining commissioning block is a production controller with a
-durable singleton claim, STOP-guarded completion, verified capture deletion before its content-free
-receipt, and a dedicated executable authority-graph gate.
+exact dispatch provenance, encrypt-before-parse ingestion, durable singleton controller,
+STOP-guarded completion, verified deletion-before-receipt lifecycle, storage-only restart recovery,
+loopback operator, and dedicated executable authority-graph gate with an exact reviewed dashboard
+module pin are present and offline-tested.
+The public plan and receipt contain no collection slug, contract address, attempt ID, capture ID, or
+API key. The one USD micro-unit value is an internal nonzero ledger reserve, not a provider price;
+the actual provider charge remains unknown and the controller has no payment path.
 
 This build excludes order and fulfillment endpoints, OpenSea Stream/WebSocket access, wallets,
 payments, x402, signing, policy approval, execution, and transaction code. An HTTP 402 response
@@ -151,19 +154,18 @@ fixtures are quarantined historical test contracts, not current live-schema or a
 
 This work has not created, accessed, or used an OpenSea API key; whether the owner already has one
 is unknown. No OpenSea provider request has been made or authorized.
-Credential creation and the first live request require separate explicit authorization after the
-controller, authority graph, current account limits, and exact schema have been reviewed. The
-canary may produce a content-free commissioning receipt only. Before any later
+Credential creation or access and the first live request require separate explicit authorization
+after current official documentation, account limits, and the exact response schema have been
+reviewed. The canary may produce a content-free commissioning receipt only. Before any later
 marketplace observation can become policy-eligible, trusted provenance must bind it to an exact
 commissioned endpoint, parser contract, request, capture lifecycle, and freshness proof;
 `source.kind = "opensea"` alone is never sufficient.
 
 ## Next build target
 
-Build the supervised OpenSea controller around the completed offline foundation: one durable
-singleton claim, retained runtime authority through completion, verified capture deletion before
-receipt, restart recovery without the API key or egress, and a dedicated authority-graph gate.
-After separate authorization, commission that one read and inspect its sanitized receipt before
-building the Base RPC canary. Only after live proposals are useful and auditable should the owner
-fund the tiny research wallet for one AgentCash/x402 paid read. Capital activation values remain
-local and unset in source.
+Immediately before commissioning, re-check the official endpoint, API-key authentication, account
+limits, rate-limit headers, and response contract. Then, only after separate authorization, access
+the fixed Keychain items and commission the single OpenSea read. Inspect its content-free receipt
+and keep the adapter quarantined before building the Base RPC canary. Only after live proposals are
+useful and auditable should the owner fund the tiny research wallet for one AgentCash/x402 paid
+read. Capital activation values remain local and unset in source.

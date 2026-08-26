@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./opensea": "./src/opensea.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",
@@ -13,6 +14,7 @@
   "dependencies": {
     "@rsi/capture-registry": "workspace:*",
     "@rsi/ingestion": "workspace:*",
+    "@rsi/opensea-collector": "workspace:*",
     "@rsi/operations": "workspace:*",
     "@rsi/runtime": "workspace:*",
     "@rsi/store": "workspace:*",

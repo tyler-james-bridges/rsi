@@ -6,7 +6,7 @@ import type {
   OperatorRuntimeProvider,
   RuntimeOperatorAction,
   RuntimeOperatorControlCommand,
-} from "./server.js";
+} from "./runtime-types.js";
 
 const RUNTIME_ACTIONS = Object.freeze([
   "runtime-enter-research",

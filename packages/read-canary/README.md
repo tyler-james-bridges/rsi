@@ -1,9 +1,9 @@
 # `@rsi/read-canary`
 
-`@rsi/read-canary` is the commissioning boundary for RSI's first supervised live read. It owns one
-code-reviewed X recent-search plan and exposes only its content-free fingerprint, request count,
-result count, and maximum provider-credit estimate. The raw query is not an operator input or public
-projection.
+`@rsi/read-canary` contains separate commissioning boundaries for RSI's supervised provider reads.
+The root entry owns the code-reviewed X recent-search plan and the `@rsi/read-canary/opensea`
+subpath owns one fixed Base trending-collections plan. Neither provider request is caller-defined,
+and neither public projection exposes raw provider content.
 
 A fixed authenticated event-store key is the durable singleton claim. Competing request IDs,
 controller instances, and process restarts cannot create a second dispatch from the same canary
@@ -23,6 +23,17 @@ has no bearer-token or collector dependency and cannot issue a second request. A
 not trusted until the exact runtime audit, capture event, result checkpoint, closure facts, and
 verified key-destruction state agree.
 
-The current plan remains uncommissioned until a dedicated app-only X credential and the required
-local state keys are present in their fixed macOS Keychain services. No credential may be accepted
-through command-line arguments, environment variables, dashboard fields, or repository files.
+The X singleton was commissioned once on 2026-08-25 and remains consumed. The OpenSea singleton is
+implemented and offline-verified but uncommissioned. Each provider uses distinct fixed macOS
+Keychain services; no credential may be accepted through command-line arguments, environment
+variables, dashboard fields, or repository files.
+
+The distinct `@rsi/read-canary/opensea` entry point applies the same durable, one-shot lifecycle to
+the code-owned Base trending-collections request. Its public plan and receipt contain no collection
+slugs, contract addresses, Vault capture identifiers, API key material, or provider response data.
+Recovery is storage-only: it accepts no API key or collector and cannot perform network egress.
+Non-capture failures receive a strict content-free checkpoint before attempt closure, pending-capture
+cleanup, or receipt publication. Full registry/Vault reconciliation must then prove that no
+unregistered encrypted capture remains before a receipt can publish, so restart recovery preserves
+the exact failure classification and sanitized rate-limit facts without retrying the provider
+request.

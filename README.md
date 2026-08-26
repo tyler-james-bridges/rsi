@@ -37,7 +37,7 @@ RSI researches markets, converts adversarial internet activity into typed eviden
 - An ephemeral AES-256-GCM capture vault with opaque random IDs, per-capture data keys, encrypted metadata, authenticated deletion tombstones, expiry sweeps, and crash recovery. Raw captures—including malformed responses—have no forensic-retention exception.
 - A read-only X recent-search collector with an exact ten-result contract, strict query/response schemas, bounded transport, two independent one-shot authorizations (runtime plus durable attempt), clock-regression checks, and offline replay. One credentialed canary has validated that bounded path; the collector remains quarantined from continuous operation.
 - An encrypt-first X ingestion boundary that keeps hostile bytes ephemeral while persisting only closed, content-free projections.
-- An isolated, offline-verified OpenSea trending-collections foundation for one fixed Base-only GET. Its one-shot collector binds every response to the authentic runtime and durable dispatch, cancels rejected or late response bodies, and cannot retry, paginate, redirect, pay, sign, or trade. Encrypt-first ingestion persists only private collection slugs and a content-free event; no OpenSea request has been commissioned.
+- A production-shaped, offline-verified OpenSea read-canary path for one fixed Base-only GET. Its durable singleton controller retains the authentic runtime authorization through STOP-guarded completion, verifies capture deletion before a content-free receipt, and recovers without the API key or egress. The collector cannot retry, paginate, redirect, pay, sign, or trade; no OpenSea request has been commissioned.
 - A durable operations ledger for hard paid-request budgets, exact operation/amount bindings, and encrypted cursor advancement gated by safe events, checkpoints, external anchors, and independent verification.
 - A profile-bound encrypted capture registry with exact-attempt retry binding, per-attempt keys, content-free deletion records, and restart reconciliation.
 - A signed external-anchor protocol and authenticated publication outbox with retention-policy binding, rollback detection, and offline provider simulations. No real remote immutable-storage adapter is configured.
@@ -50,6 +50,7 @@ RSI researches markets, converts adversarial internet activity into typed eviden
 - A separate typed research ledger for non-executable proposal scorecards. It accepts only a genuine `proposal_persist` authorization in `PROPOSE_ONLY`, rejects raw or executable fields, and exposes exact assets, provenance, scam flags, bounded scores, candidates, and abstentions.
 - A loopback-only operator dashboard/API with fixed same-origin assets, defensive headers, strict runtime/research projections, and closed Stage 0 controls. STOP remains independently available when another dashboard read fails.
 - An optional Stage 1 X read-canary operator with a code-owned query, durable singleton claim, fixed one-request/ten-result/$0.05 ceiling, macOS Keychain boundary, STOP-linearized dispatch/completion, encrypted raw capture, verified crypto-shredding before receipt, and credential-free/no-egress restart recovery. Its single authenticated canary completed successfully on 2026-08-25 and returned to `STOPPED`.
+- A separate optional OpenSea read-canary operator with a fixed Base trending-collections plan, one-request/ten-result/no-payment acknowledgements, its own Keychain account, the same STOP/deletion/recovery guarantees, and a dedicated executable authority-graph gate. It remains uncommissioned.
 - An executable module-graph gate proving the active runtime/operator path cannot reach policy approval, adapters, wallets, signers, AgentCash/x402, transaction, deployment, or arbitrary-call code. Payment, signing, execution, broadcast, policy approval, and publication are explicit permanent denials in Stage 0.
 - A signed, content-free public receipt/correction/tombstone chain with explicit approval, a 24-hour delay, retained-head rollback detection, and a browser-safe fail-closed verifier. It has no deployment or publication adapter.
 - Legacy synthetic OpenSea Get Order/Stream fixtures and offline finalized Base/Robinhood Chain request contracts. The OpenSea fixtures have no transport, credentials, or live-schema status and remain quarantined from the new REST-only canary build; the chain contracts retain strict block-pinned ownership/code and runtime/proxy bindings.
@@ -80,6 +81,7 @@ pnpm demo:pipeline
 pnpm demo:ingestion
 pnpm ci:drills
 pnpm ci:stage1
+pnpm ci:opensea
 pnpm ci:release
 ```
 
@@ -111,6 +113,12 @@ no X request. The durable singleton canary was consumed successfully on 2026-08-
 not authorize resetting its state or issuing another request. See the
 [commissioning record](docs/production-readiness/evidence/x-read-canary-2026-08-25.md).
 
+The production-shaped OpenSea host is `pnpm operator:opensea-canary`. It uses a separate local data
+directory and Keychain account, boots `STOPPED`, and cannot pay, sign, trade, publish, follow a
+cursor, or select another request. Starting it alone makes no OpenSea provider request. The durable
+singleton remains unclaimed; creating or reading its API key and issuing the first live request
+require a separate commissioning authorization.
+
 ## Repository map
 
 ```text
@@ -130,7 +138,7 @@ packages/vault       Ephemeral encrypted capture storage and crypto-shredding
 packages/x-collector Quarantined X recent-search live/replay client
 packages/opensea-collector Fixed one-shot Base trending-collections client
 packages/ingestion   Isolated encrypt-first X and OpenSea safe-event boundaries
-packages/read-canary Durable one-shot X canary coordinator and receipt
+packages/read-canary Separate durable one-shot X and OpenSea coordinators
 packages/credential-host Separate fixed macOS Keychain boundaries for read canaries
 packages/capture-registry Profile-bound encrypted ephemeral capture index
 packages/operations  Paid-attempt budgets and verified encrypted cursors
@@ -158,7 +166,7 @@ Any future paid-read and execution stages use two separate, deliberately low-bal
 ## Current limits
 
 - X recent-search has a credential-injected live implementation, a production-shaped one-shot operator path, and an offline synthetic replay path. The single 2026-08-25 canary validated exactly one ten-result request with no retry or pagination; it did not approve a continuously enabled adapter. The request deliberately used only the minimum `id`/`text` response and no optional field dialect. There is no live recording/cassette mode.
-- The OpenSea phase is currently an offline build for one fixed Base trending-collections REST read: `GET https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=base&limit=10`. This work has not created, accessed, or used an OpenSea API key; whether the owner already has one is unknown. No OpenSea provider request has been made or authorized. Orders, Stream, wallets, payment, x402, policy approval, and execution are excluded; legacy Get Order/Stream schemas remain synthetic-only and quarantined. Base and Robinhood Chain packages remain offline request/fixture contracts with no provider credential or live-schema claim.
+- OpenSea now has a production-shaped but uncommissioned one-shot path for `GET https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=base&limit=10`. Offline tests cover the singleton claim, retained runtime authorization, STOP races, deletion-before-receipt, storage-only recovery, operator process, and static authority graph. This work has not created, accessed, or used an OpenSea API key; whether the owner already has one is unknown. No OpenSea provider request has been made or authorized. Orders, Stream, wallets, payment, x402, policy approval, and execution are excluded; legacy Get Order/Stream schemas remain synthetic-only and quarantined. Base and Robinhood Chain packages remain offline request/fixture contracts with no provider credential or live-schema claim.
 - Signed checkpoints and the external-anchor protocol can authenticate an event-store head, retention policy, and independently pinned suffix. This build still has no real remote immutable-storage adapter or scoped publication credential, so the offline simulations are not independent storage evidence.
 - Policy spend/replay state survives a clean reopen, and SQLite serializes concurrent writers that share one database file. Separate database copies have no distributed coordinator and must never act as parallel execution authorities.
 - The X ingestion path encrypts exact response bytes and metadata before typed parsing, binds retries through the encrypted capture registry, destroys collector-owned raw copies, and reconciles pending or orphaned capture state after restart. The successful one-shot canary did not move the adapter out of quarantine; continuous collection requires a separate promotion decision.

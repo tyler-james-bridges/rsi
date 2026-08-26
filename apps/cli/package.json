@@ -6,6 +6,7 @@
   "scripts": {
     "ingestion": "tsx src/ingestion.ts",
     "operator": "tsx src/operator.ts",
+    "operator:opensea-canary": "tsx src/opensea-canary-operator.ts",
     "operator:x-canary": "tsx src/x-canary-operator.ts",
     "pipeline": "tsx src/pipeline.ts",
     "start": "tsx src/index.ts"
