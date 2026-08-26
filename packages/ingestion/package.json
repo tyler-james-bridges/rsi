@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./capture-storage-recovery": "./src/capture-storage-recovery.ts",
     "./opensea-trending": "./src/opensea-trending.ts"
   },
   "scripts": {

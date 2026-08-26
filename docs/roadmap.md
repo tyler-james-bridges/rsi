@@ -25,7 +25,7 @@ Exit: normal CI passes and RSI can run locally without credentials, funds, or ad
 
 ## Stage 1 — Live research and proposals
 
-Status: **X READ_CANARY commissioned successfully; OpenSea offline foundation complete**
+Status: **X READ_CANARY commissioned; OpenSea READ_CANARY implementation complete and uncommissioned**
 
 - [x] Build the signer-blind X read-canary path with a fixed query, dual one-shot authorization,
       durable singleton claim, Keychain isolation, encrypted capture, sanitized receipt, STOP races,
@@ -36,9 +36,10 @@ Status: **X READ_CANARY commissioned successfully; OpenSea offline foundation co
 - [x] Build and verify the fixed OpenSea source contract, one-shot collector, isolated Keychain
       boundary, exact dispatch provenance, and encrypt-first ingestion/recovery path without a
       credential or provider request.
-- [ ] Add the supervised OpenSea singleton controller, STOP-guarded completion, verified deletion
-      before receipt, and a dedicated authority-graph gate; then separately commission its one
-      Base trending-collections read.
+- [x] Add the supervised OpenSea singleton controller, STOP-guarded completion, verified deletion
+      before receipt, storage-only recovery, loopback operator, and dedicated authority-graph gate.
+- [ ] Separately authorize and commission the one Base trending-collections read, then retain and
+      inspect its content-free receipt without promoting continuous collection.
 - [ ] Build and separately commission the Base RPC read.
 - Re-check current official documentation, authentication, pricing, schemas, and deployed addresses
   immediately before each bounded canary.
@@ -104,11 +105,9 @@ agents.
 
 ## Immediate next work
 
-Wrap the completed `opensea-base-trending-collections-v1` foundation in the supervised singleton
-controller and dedicated authority-graph gate. Preserve the fixed Base-only GET, quarantine legacy
-Get Order/Stream fixtures, retain runtime authority through completion, and verify raw-capture
-deletion before a content-free receipt. No OpenSea API key creation or provider request is
-authorized or has occurred. After the controller passes offline review, request separate
-authorization for the first bounded canary, then add Base RPC. Keep proposal persistence behind
-`PROPOSE_ONLY`; only after proposals are useful should the owner choose an expendable
-research-wallet balance for one AgentCash/x402 call.
+Re-check the official OpenSea endpoint, authentication, account limits, rate-limit receipt, and
+response schema immediately before commissioning. No OpenSea API key creation, access, or provider
+request is authorized or has occurred. Request separate authorization for that first bounded read,
+inspect its content-free receipt, and keep continuous collection quarantined; then add Base RPC.
+Keep proposal persistence behind `PROPOSE_ONLY`; only after proposals are useful should the owner
+choose an expendable research-wallet balance for one AgentCash/x402 call.

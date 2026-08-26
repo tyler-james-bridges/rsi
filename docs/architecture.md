@@ -127,18 +127,21 @@ Recovery is split deliberately. The state-evidence component signs checkpoint, e
 
 The X collector pins one endpoint-specific recent-search contract and exposes only live and replay modes. Live mode accepts a bearer credential only through construction, consumes an authentic runtime `research_collection` authorization and an independently durable attempt authorization, issues `GET` only to the exact X origin/path, requests identity encoding, refuses compression and redirects, bounds time and decoded response size, and quarantines bytes before parsing. Runtime write locks linearize both dispatch against cross-process STOP and the later content-free result checkpoint against STOP. The production export does not expose transport or clock injection. No live recording/cassette sink exists; synthetic cassettes are constructed offline through a test-only entry. The Stage 1 coordinator adds a code-owned query, one durable singleton claim, a fixed ten-result/$0.05 ceiling, macOS Keychain isolation, STOP-linked cancellation, encrypted capture, and a content-free receipt. It checkpoints sanitized result facts before closing the attempt, destroys the capture key and records the authenticated registry tombstone before publishing the receipt, and resumes those steps without a credential or network path after restart. Exactly one credentialed canary completed successfully on 2026-08-25 and returned to `STOPPED`; that bounded result did not move the continuous collector from `quarantined` to `approved`.
 
-The OpenSea canary has a separate offline-verified foundation for exactly one Base
+The OpenSea canary has a separate production-shaped path for exactly one Base
 trending-collections `GET` to
 `https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=base&limit=10`.
 The fixed source contract, one-shot collector, isolated Keychain host, durable attempt binding, and
-encrypt-first ingestion/recovery boundary are implemented. Their graph permits no order or
-fulfillment route, Stream/WebSocket, retry, redirect, pagination, wallet, payment, x402, policy
-approval, execution, or transaction dependency. Legacy Get Order/Stream fixtures are quarantined
-synthetic contracts rather than live provider evidence. A final canary controller must still add a
-durable singleton claim, retain the same runtime authorization through STOP-guarded completion,
-crypto-shred the capture before emitting a content-free receipt, and pass a dedicated executable
-authority-graph gate. This work has not created, accessed, or used an OpenSea API key; whether the
-owner already has one is unknown. No OpenSea provider request has been made or authorized.
+encrypt-first ingestion/recovery boundary feed a durable singleton controller and separate loopback
+operator. The controller retains the same runtime authorization object from dispatch through the
+completion guard, publishes no accepted result after STOP wins, verifies capture-key destruction
+before its content-free receipt, and recovers from authenticated storage without an API key,
+collector, or egress. A dedicated executable graph gate excludes testing hooks, order or
+fulfillment routes, Stream/WebSocket, retry, redirect, pagination, wallet, payment, x402, policy
+approval, execution, and transaction dependencies, and pins the exact reviewed dashboard module
+asset so executable UI drift requires deliberate review. Legacy Get Order/Stream fixtures are
+quarantined synthetic contracts rather than live provider evidence. This work has not created,
+accessed, or used an OpenSea API key; whether the owner already has one is unknown. No OpenSea
+provider request has been made or authorized.
 
 The operator service binds to IPv4 loopback, serves fixed same-origin dashboard assets, and rejects
 foreign Host/Origin values. Stage 0 status and research routes validate exact content-free schemas
@@ -148,8 +151,9 @@ remains usable even when another dashboard request fails. Legacy lifecycle contr
 separate compatibility surface. Providers must never place credentials or hostile raw content in
 operator response objects.
 
-The optional Stage 1 operator adds only closed read-canary status and run routes. It never sends the
-query or bearer credential to the browser. STOP synchronously requests cancellation before the
-runtime persists `STOPPED`; a request already dispatched cannot be unsent, but a post-STOP capture
-is not published as an accepted canary. The active Stage 1 module graph remains signer-blind and has
-no policy approval, wallet, payment, transaction, adapter, deployment, or publication path.
+Each optional read-canary operator adds only provider-specific closed status and run routes. It
+never sends the X query, OpenSea collection identifiers, or either credential to the browser. STOP
+synchronously requests cancellation before the runtime persists `STOPPED`; a request already
+dispatched cannot be unsent, but a capture whose guarded completion loses to STOP is not published
+as accepted. The X and OpenSea production graphs are checked independently and remain signer-blind,
+with no policy approval, wallet, payment, transaction, adapter, deployment, or publication path.

@@ -257,6 +257,9 @@ importers:
       "@rsi/ingestion":
         specifier: workspace:*
         version: link:../ingestion
+      "@rsi/opensea-collector":
+        specifier: workspace:*
+        version: link:../opensea-collector
       "@rsi/operations":
         specifier: workspace:*
         version: link:../operations
