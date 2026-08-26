@@ -20,6 +20,7 @@ const secretPatterns = [
   /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/u,
   /\bAIza[0-9A-Za-z_-]{30,}\b/u,
   /\bsk-[A-Za-z0-9_-]{20,}\b/u,
+  /\bA{18,}[A-Za-z0-9_-]{24,}\b/u,
   /https?:\/\/[^\s/@:]+:[^\s/@]+@[^\s/]+/iu,
 ];
 
@@ -29,6 +30,14 @@ function git(args, maxBuffer = 4 * 1024 * 1024) {
 
 function containsSecret(content) {
   return secretPatterns.some((pattern) => pattern.test(content));
+}
+
+// Keep an executable X bearer-token regression without committing token-shaped
+// fixture text that would itself become a scanner finding.
+const syntheticXBearer = `${"A".repeat(20)}${"bC9_".repeat(8)}`;
+if (!containsSecret(syntheticXBearer)) {
+  process.stderr.write("Secret scan failed (X bearer-token detector regression).\n");
+  process.exit(1);
 }
 
 const filesResult = git(["ls-files", "-co", "--exclude-standard", "-z"]);

@@ -1,22 +1,15 @@
+import { X_RECENT_SEARCH_NEXT_TOKEN_MAX_LENGTH } from "./constants.js";
 import { XCollectorError } from "./errors.js";
 import { sha256 } from "./hash.js";
 import { QuarantinedXRecentSearchResponse } from "./quarantine.js";
+import type { XRateLimitReceipt } from "./rate-limit.js";
 
 export type XStableId = string;
 
+/** The deliberately minimal trusted projection of an untrusted X Post. */
 export type XRecentSearchPost = Readonly<{
   id: XStableId;
   text: string;
-  author_id: XStableId;
-  created_at: string;
-  edit_history_post_ids: readonly XStableId[];
-}>;
-
-export type XRecentSearchUser = Readonly<{
-  id: XStableId;
-  name: string;
-  username: string;
-  created_at: string;
 }>;
 
 export type XRecentSearchMeta = Readonly<{
@@ -24,23 +17,21 @@ export type XRecentSearchMeta = Readonly<{
   newest_id?: XStableId;
   oldest_id?: XStableId;
   next_token?: string;
-  previous_token?: string;
 }>;
 
 export type XRecentSearchResult = Readonly<{
   posts: readonly XRecentSearchPost[];
-  users: readonly XRecentSearchUser[];
-  usersById: Readonly<Record<XStableId, XRecentSearchUser>>;
   meta: XRecentSearchMeta;
   requestFingerprint: string;
   responseHash: string;
   acquiredAt: string;
+  rateLimit: XRateLimitReceipt | undefined;
 }>;
 
 const X_ID_PATTERN = /^[1-9][0-9]{0,18}$/;
-const USERNAME_PATTERN = /^[A-Za-z0-9_]{1,15}$/;
-const PAGE_TOKEN_PATTERN = /^[A-Za-z0-9._~-]{1,2048}$/;
-const UTC_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z$/;
+const PAGE_TOKEN_PATTERN = new RegExp(
+  `^[A-Za-z0-9._~-]{1,${X_RECENT_SEARCH_NEXT_TOKEN_MAX_LENGTH}}$`,
+);
 
 function schemaFailure(path: string, message = "Response schema validation failed."): never {
   throw new XCollectorError("INVALID_RESPONSE_SCHEMA", message, { path });
@@ -77,93 +68,46 @@ function parseId(value: unknown, path: string): XStableId {
   return value;
 }
 
-function parseTimestamp(value: unknown, path: string): string {
-  if (typeof value !== "string") schemaFailure(path);
-  const match = UTC_TIMESTAMP_PATTERN.exec(value);
-  if (match === null) schemaFailure(path);
-  const milliseconds = Date.parse(value);
-  if (!Number.isFinite(milliseconds)) schemaFailure(path);
-  const canonical = new Date(milliseconds).toISOString();
-  const normalized = match[7] === undefined ? value.replace(/Z$/, ".000Z") : value;
-  if (canonical !== normalized) schemaFailure(path);
+function parseText(value: unknown, path: string): string {
+  if (typeof value !== "string" || value.length > 25_000) schemaFailure(path);
   return value;
 }
 
-function parseBoundedString(
-  value: unknown,
-  minimum: number,
-  maximum: number,
+function validateOptionalEditHistory(
+  value: Record<string, unknown>,
+  postId: XStableId,
   path: string,
-): string {
-  if (typeof value !== "string" || value.length < minimum || value.length > maximum) {
+): void {
+  const postDialect = value.edit_history_post_ids;
+  const tweetDialect = value.edit_history_tweet_ids;
+  if (postDialect !== undefined && tweetDialect !== undefined) schemaFailure(path);
+  const history = postDialect ?? tweetDialect;
+  if (history === undefined) return;
+  if (!Array.isArray(history) || history.length < 1 || history.length > 100) {
     schemaFailure(path);
   }
-  return value;
+  const ids = history.map((candidate, index) => parseId(candidate, `${path}[${index}]`));
+  if (new Set(ids).size !== ids.length || !ids.includes(postId)) schemaFailure(path);
 }
 
 function parsePost(value: unknown, index: number): XRecentSearchPost {
   const path = `data[${index}]`;
   assertObject(value, path);
-  assertExactKeys(
-    value,
-    ["id", "text", "author_id", "created_at", "edit_history_post_ids"],
-    [],
-    path,
-  );
+  assertExactKeys(value, ["id", "text"], ["edit_history_post_ids", "edit_history_tweet_ids"], path);
   const id = parseId(value.id, `${path}.id`);
-  const text = parseBoundedString(value.text, 1, 25_000, `${path}.text`);
-  const authorId = parseId(value.author_id, `${path}.author_id`);
-  const createdAt = parseTimestamp(value.created_at, `${path}.created_at`);
-  if (
-    !Array.isArray(value.edit_history_post_ids) ||
-    value.edit_history_post_ids.length < 1 ||
-    value.edit_history_post_ids.length > 100
-  ) {
-    schemaFailure(`${path}.edit_history_post_ids`);
-  }
-  const editHistory = value.edit_history_post_ids.map((candidate, editIndex) =>
-    parseId(candidate, `${path}.edit_history_post_ids[${editIndex}]`),
-  );
-  if (new Set(editHistory).size !== editHistory.length || !editHistory.includes(id)) {
-    schemaFailure(`${path}.edit_history_post_ids`);
-  }
-  return Object.freeze({
-    id,
-    text,
-    author_id: authorId,
-    created_at: createdAt,
-    edit_history_post_ids: Object.freeze(editHistory),
-  });
+  validateOptionalEditHistory(value, id, `${path}.edit_history`);
+  return Object.freeze({ id, text: parseText(value.text, `${path}.text`) });
 }
 
-function parseUser(value: unknown, index: number): XRecentSearchUser {
-  const path = `includes.users[${index}]`;
-  assertObject(value, path);
-  assertExactKeys(value, ["id", "name", "username", "created_at"], [], path);
-  const username = parseBoundedString(value.username, 1, 15, `${path}.username`);
-  if (!USERNAME_PATTERN.test(username)) schemaFailure(`${path}.username`);
-  return Object.freeze({
-    id: parseId(value.id, `${path}.id`),
-    name: parseBoundedString(value.name, 1, 200, `${path}.name`),
-    username,
-    created_at: parseTimestamp(value.created_at, `${path}.created_at`),
-  });
-}
-
-function parseMeta(value: unknown): XRecentSearchMeta {
+function parseMeta(value: unknown, maximumResults: number): XRecentSearchMeta {
   const path = "meta";
   assertObject(value, path);
-  assertExactKeys(
-    value,
-    ["result_count"],
-    ["newest_id", "oldest_id", "next_token", "previous_token"],
-    path,
-  );
+  assertExactKeys(value, ["result_count"], ["newest_id", "oldest_id", "next_token"], path);
   if (
     typeof value.result_count !== "number" ||
     !Number.isInteger(value.result_count) ||
     value.result_count < 0 ||
-    value.result_count > 100
+    value.result_count > maximumResults
   ) {
     schemaFailure(`${path}.result_count`);
   }
@@ -172,19 +116,18 @@ function parseMeta(value: unknown): XRecentSearchMeta {
     newest_id?: XStableId;
     oldest_id?: XStableId;
     next_token?: string;
-    previous_token?: string;
   } = { result_count: value.result_count };
-  if (value.newest_id !== undefined)
+  if (value.newest_id !== undefined) {
     result.newest_id = parseId(value.newest_id, `${path}.newest_id`);
-  if (value.oldest_id !== undefined)
+  }
+  if (value.oldest_id !== undefined) {
     result.oldest_id = parseId(value.oldest_id, `${path}.oldest_id`);
-  for (const key of ["next_token", "previous_token"] as const) {
-    const token = value[key];
-    if (token !== undefined) {
-      if (typeof token !== "string" || !PAGE_TOKEN_PATTERN.test(token))
-        schemaFailure(`${path}.${key}`);
-      result[key] = token;
+  }
+  if (value.next_token !== undefined) {
+    if (typeof value.next_token !== "string" || !PAGE_TOKEN_PATTERN.test(value.next_token)) {
+      schemaFailure(`${path}.next_token`);
     }
+    result.next_token = value.next_token;
   }
   return Object.freeze(result);
 }
@@ -193,6 +136,16 @@ function compareIds(left: XStableId, right: XStableId): number {
   const leftValue = BigInt(left);
   const rightValue = BigInt(right);
   return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
+}
+
+function rejectPartialErrors(value: unknown): void {
+  if (!Array.isArray(value) || value.length > 100) schemaFailure("errors");
+  if (value.length > 0) {
+    throw new XCollectorError(
+      "PARTIAL_RESPONSE",
+      "The X response contains partial errors and remains quarantined.",
+    );
+  }
 }
 
 export function parseXRecentSearchResponse(
@@ -221,41 +174,31 @@ export function parseXRecentSearchResponse(
     }
 
     assertObject(decoded, "response");
-    assertExactKeys(decoded, ["meta"], ["data", "includes"], "response");
-    const meta = parseMeta(decoded.meta);
+    assertExactKeys(decoded, ["meta"], ["data", "errors"], "response");
+    if (decoded.errors !== undefined) rejectPartialErrors(decoded.errors);
+    const meta = parseMeta(decoded.meta, quarantine.metadata.maxResults);
 
-    const posts =
-      decoded.data === undefined
-        ? []
-        : (() => {
-            if (
-              !Array.isArray(decoded.data) ||
-              decoded.data.length < 1 ||
-              decoded.data.length > quarantine.metadata.maxResults
-            ) {
-              schemaFailure("data");
-            }
-            return decoded.data.map(parsePost);
-          })();
-    if (meta.result_count !== posts.length) schemaFailure("meta.result_count");
-
-    let users: readonly XRecentSearchUser[] = [];
-    if (decoded.includes !== undefined) {
-      assertObject(decoded.includes, "includes");
-      assertExactKeys(decoded.includes, ["users"], [], "includes");
-      if (
-        !Array.isArray(decoded.includes.users) ||
-        decoded.includes.users.length < 1 ||
-        decoded.includes.users.length > 100
-      ) {
-        schemaFailure("includes.users");
+    let posts: readonly XRecentSearchPost[];
+    if (decoded.data === undefined) {
+      if (meta.result_count !== 0) schemaFailure("data");
+      posts = Object.freeze([]);
+    } else {
+      if (!Array.isArray(decoded.data) || decoded.data.length > quarantine.metadata.maxResults) {
+        schemaFailure("data");
       }
-      users = Object.freeze(decoded.includes.users.map(parseUser));
+      posts = Object.freeze(decoded.data.map(parsePost));
     }
+    if (meta.result_count !== posts.length) schemaFailure("meta.result_count");
+    if (new Set(posts.map((post) => post.id)).size !== posts.length) schemaFailure("data");
 
-    if ((posts.length === 0) !== (users.length === 0)) schemaFailure("includes.users");
     if (posts.length === 0) {
-      if (meta.newest_id !== undefined || meta.oldest_id !== undefined) schemaFailure("meta");
+      if (
+        meta.newest_id !== undefined ||
+        meta.oldest_id !== undefined ||
+        meta.next_token !== undefined
+      ) {
+        schemaFailure("meta");
+      }
     } else {
       if (meta.newest_id === undefined || meta.oldest_id === undefined) schemaFailure("meta");
       const sortedIds = posts.map((post) => post.id).sort(compareIds);
@@ -264,37 +207,13 @@ export function parseXRecentSearchResponse(
       }
     }
 
-    if (new Set(posts.map((post) => post.id)).size !== posts.length) schemaFailure("data");
-    if (new Set(users.map((user) => user.id)).size !== users.length)
-      schemaFailure("includes.users");
-
-    const referencedAuthors = new Set(posts.map((post) => post.author_id));
-    const usersById: Record<XStableId, XRecentSearchUser> = Object.create(null) as Record<
-      XStableId,
-      XRecentSearchUser
-    >;
-    for (const user of users) {
-      if (!referencedAuthors.has(user.id)) schemaFailure("includes.users");
-      usersById[user.id] = user;
-    }
-    for (const post of posts) {
-      const author = usersById[post.author_id];
-      if (author === undefined || Date.parse(author.created_at) > Date.parse(post.created_at)) {
-        schemaFailure("includes.users");
-      }
-      if (Date.parse(post.created_at) > Date.parse(quarantine.metadata.acquiredAt)) {
-        schemaFailure("data");
-      }
-    }
-
     return Object.freeze({
-      posts: Object.freeze(posts),
-      users: Object.freeze(users),
-      usersById: Object.freeze(usersById),
+      posts,
       meta,
       requestFingerprint: quarantine.metadata.requestFingerprint,
       responseHash: quarantine.metadata.responseHash,
       acquiredAt: quarantine.metadata.acquiredAt,
+      rateLimit: quarantine.metadata.rateLimit,
     });
   } finally {
     bytes.fill(0);

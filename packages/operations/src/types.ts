@@ -29,7 +29,12 @@ export interface NetworkAttemptBinding {
 
 /** Read-only authenticated attempt facts; never contains the one-shot permit token. */
 export interface DurableNetworkAttemptBinding extends NetworkAttemptBinding {
+  readonly budgetId: string;
+  readonly closedAt: string | null;
+  readonly createdAt: string;
   readonly dispatchedAt: string | null;
+  readonly idempotencyKey: string;
+  readonly outcome: AttemptOutcome | null;
   readonly state: AttemptState;
 }
 

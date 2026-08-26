@@ -25,15 +25,24 @@ importers:
 
   apps/cli:
     dependencies:
+      "@rsi/capture-registry":
+        specifier: workspace:*
+        version: link:../../packages/capture-registry
       "@rsi/checkpoints":
         specifier: workspace:*
         version: link:../../packages/checkpoints
+      "@rsi/credential-host":
+        specifier: workspace:*
+        version: link:../../packages/credential-host
       "@rsi/domain":
         specifier: workspace:*
         version: link:../../packages/domain
       "@rsi/ingestion":
         specifier: workspace:*
         version: link:../../packages/ingestion
+      "@rsi/operations":
+        specifier: workspace:*
+        version: link:../../packages/operations
       "@rsi/operator":
         specifier: workspace:*
         version: link:../operator
@@ -43,6 +52,9 @@ importers:
       "@rsi/policy":
         specifier: workspace:*
         version: link:../../packages/policy
+      "@rsi/read-canary":
+        specifier: workspace:*
+        version: link:../../packages/read-canary
       "@rsi/research-ledger":
         specifier: workspace:*
         version: link:../../packages/research-ledger
@@ -67,6 +79,9 @@ importers:
       "@rsi/domain":
         specifier: workspace:*
         version: link:../../packages/domain
+      "@rsi/read-canary":
+        specifier: workspace:*
+        version: link:../../packages/read-canary
       "@rsi/runtime":
         specifier: workspace:*
         version: link:../../packages/runtime
@@ -108,6 +123,8 @@ importers:
       "@rsi/store":
         specifier: workspace:*
         version: link:../store
+
+  packages/credential-host: {}
 
   packages/domain:
     dependencies:
@@ -163,6 +180,9 @@ importers:
       "@rsi/checkpoints":
         specifier: workspace:*
         version: link:../checkpoints
+      "@rsi/runtime":
+        specifier: workspace:*
+        version: link:../runtime
 
   packages/operations:
     dependencies:
@@ -207,6 +227,33 @@ importers:
 
   packages/public-projection:
     dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/read-canary:
+    dependencies:
+      "@rsi/capture-registry":
+        specifier: workspace:*
+        version: link:../capture-registry
+      "@rsi/ingestion":
+        specifier: workspace:*
+        version: link:../ingestion
+      "@rsi/operations":
+        specifier: workspace:*
+        version: link:../operations
+      "@rsi/runtime":
+        specifier: workspace:*
+        version: link:../runtime
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
+      "@rsi/vault":
+        specifier: workspace:*
+        version: link:../vault
+      "@rsi/x-collector":
+        specifier: workspace:*
+        version: link:../x-collector
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -303,6 +350,9 @@ importers:
       "@rsi/operations":
         specifier: workspace:*
         version: link:../operations
+      "@rsi/runtime":
+        specifier: workspace:*
+        version: link:../runtime
 
 packages:
   "@adraffy/ens-normalize@1.11.1":

@@ -35,6 +35,9 @@ import type {
   RuntimeBoundary,
   RuntimeBoundaryAuthorization,
   RuntimeBoundaryAuthorizationInput,
+  RuntimeBoundaryCompletion,
+  RuntimeBoundaryCompletionFacts,
+  RuntimeBoundaryDispatch,
   RuntimeBoundaryDecisionReason,
   RuntimeBoundaryReceipt,
   RuntimeMode,
@@ -243,6 +246,21 @@ function boundaryReason(
     return "STALE_REVISION";
   }
   if (Date.parse(checkedAt) >= Date.parse(requested.expiresAt)) return "EXPIRED";
+  if (!modeAllowsBoundary(state.mode, requested.boundary)) return "MODE_NOT_ALLOWED";
+  return "ALLOWED";
+}
+
+function boundaryCompletionReason(
+  requested: RequestedBoundary,
+  state: RuntimeState,
+): RuntimeBoundaryDecisionReason {
+  if (requested.boundary !== "research_collection") return "PERMANENTLY_FORBIDDEN";
+  if (requested.requestedProcessInstanceId !== state.processInstanceId) {
+    return "PROCESS_SUPERSEDED";
+  }
+  if (requested.requestedMode !== state.mode || requested.requestedRevision !== state.revision) {
+    return "STALE_REVISION";
+  }
   if (!modeAllowsBoundary(state.mode, requested.boundary)) return "MODE_NOT_ALLOWED";
   return "ALLOWED";
 }
@@ -608,6 +626,64 @@ function appendBoundaryCheck(
   return boundaryReceipt(event, payload);
 }
 
+function assertDurableAllowedBoundary(store: SqliteEventStore, requested: IssuedBoundary): void {
+  const event = store.getByIdempotencyKey(`runtime-boundary-v1:${requested.authorizationId}`);
+  if (
+    event === undefined ||
+    event.aggregateId !== RUNTIME_AGGREGATE_ID ||
+    event.type !== RUNTIME_BOUNDARY_EVENT_TYPE ||
+    event.idempotencyKey !== `runtime-boundary-v1:${requested.authorizationId}`
+  ) {
+    throw new RuntimeIntegrityError(
+      "Runtime completion has no exact durable boundary authorization",
+    );
+  }
+  const payload = parsedEventPayload(
+    event,
+    RuntimeBoundaryEventPayloadSchema,
+    "Runtime completion boundary event",
+  );
+  if (
+    payload.actionId !== requested.actionId ||
+    payload.authorizationId !== requested.authorizationId ||
+    payload.boundary !== "research_collection" ||
+    payload.decision !== "allowed" ||
+    payload.reason !== "ALLOWED" ||
+    payload.expiresAt !== requested.expiresAt ||
+    payload.requestedAt !== requested.requestedAt ||
+    payload.requestedMode !== requested.requestedMode ||
+    payload.requestedProcessInstanceId !== requested.requestedProcessInstanceId ||
+    payload.requestedRevision !== requested.requestedRevision ||
+    payload.checkedMode !== requested.requestedMode ||
+    payload.checkedProcessInstanceId !== requested.requestedProcessInstanceId ||
+    payload.checkedRevision !== requested.requestedRevision
+  ) {
+    throw new RuntimeIntegrityError(
+      "Runtime completion boundary authorization does not match its protected dispatch",
+    );
+  }
+}
+
+function boundaryCompletionFacts(
+  requested: IssuedBoundary,
+  state: RuntimeState,
+  checkedAt: string,
+): Readonly<RuntimeBoundaryCompletionFacts> {
+  const reason = boundaryCompletionReason(requested, state);
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    actionId: requested.actionId,
+    authorizationId: requested.authorizationId,
+    boundary: "research_collection" as const,
+    checkedAt,
+    decision: reason === "ALLOWED" ? ("allowed" as const) : ("denied" as const),
+    mode: state.mode,
+    modeRevision: state.revision,
+    processInstanceId: state.processInstanceId,
+    reason,
+  });
+}
+
 export class SqliteRuntimeController {
   readonly path: string;
   readonly processInstanceId: string;
@@ -887,6 +963,9 @@ export class SqliteRuntimeController {
       requestedMode: requested.requestedMode,
       requestedRevision: requested.requestedRevision,
       consume: () => this.#consumeBoundaryAuthorization(requested),
+      consumeAndDispatch: (dispatch) =>
+        this.#consumeBoundaryAuthorizationAndDispatch(requested, dispatch),
+      guardCompletion: (completion) => this.#guardBoundaryCompletion(requested, completion),
     });
   }
 
@@ -924,6 +1003,62 @@ export class SqliteRuntimeController {
     });
     if (receipt.decision === "denied") throw new RuntimeBoundaryDeniedError(receipt);
     return receipt;
+  }
+
+  #consumeBoundaryAuthorizationAndDispatch(
+    requested: IssuedBoundary,
+    dispatch: RuntimeBoundaryDispatch,
+  ): Readonly<RuntimeBoundaryReceipt> {
+    this.#assertAuthentic();
+    const receipt = this.#store.withExclusiveTransaction(() => {
+      const replay = replayRuntimeStore(this.#store);
+      // The current mode, process, revision, and lifetime are checked only
+      // after the cross-process SQLite write lock is held. The synchronous
+      // transport invocation then occurs before that lock can be released, so
+      // a competing STOP writer cannot persist in the validation/dispatch gap.
+      const clockAt = readRuntimeClock(this.#clock);
+      const monotonicAt = readMonotonicClock(this.#monotonicClock);
+      let checkedAt = nonRegressingBoundaryTime(clockAt, replay, requested.requestedAt);
+      if (
+        (monotonicAt < requested.monotonicIssuedAt ||
+          monotonicAt >= requested.monotonicExpiresAt) &&
+        Date.parse(checkedAt) < Date.parse(requested.expiresAt)
+      ) {
+        checkedAt = requested.expiresAt;
+      }
+      const checked = appendBoundaryCheck(this.#store, replay, requested, checkedAt);
+      if (checked.decision === "allowed") dispatch(checked);
+      return checked;
+    });
+    if (receipt.decision === "denied") throw new RuntimeBoundaryDeniedError(receipt);
+    return receipt;
+  }
+
+  #guardBoundaryCompletion(
+    requested: IssuedBoundary,
+    completion: RuntimeBoundaryCompletion,
+  ): Readonly<RuntimeBoundaryCompletionFacts> {
+    this.#assertAuthentic();
+    return this.#store.withExclusiveTransaction(() => {
+      const replay = replayRuntimeStore(this.#store);
+      // Completion authority is derived only from the exact durable ALLOWED
+      // check that protected this authorization's dispatch. A structural
+      // lookalike or a dispatch whose transaction did not commit cannot pass.
+      assertDurableAllowedBoundary(this.#store, requested);
+      const state = replay.state;
+      if (state === null) throw new RuntimeIntegrityError("Runtime state is unavailable");
+      const checkedAt = nonRegressingBoundaryTime(
+        readRuntimeClock(this.#clock),
+        replay,
+        requested.requestedAt,
+      );
+      const facts = boundaryCompletionFacts(requested, state, checkedAt);
+      // The content-free result checkpoint is invoked while this SQLite write
+      // lock remains held. Therefore either completion wins and STOP follows,
+      // or STOP wins and this callback is never invoked.
+      if (facts.decision === "allowed") completion(facts);
+      return facts;
+    });
   }
 
   #assertAuthentic(): void {

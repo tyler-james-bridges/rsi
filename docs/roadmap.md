@@ -25,7 +25,13 @@ Exit: normal CI passes and RSI can run locally without credentials, funds, or ad
 
 ## Stage 1 — Live research and proposals
 
-- Commission one source at a time: X read, OpenSea read, then Base RPC read.
+Status: **X canary implementation complete; authenticated canary not yet commissioned**
+
+- [x] Build the signer-blind X read-canary path with a fixed query, dual one-shot authorization,
+      durable singleton claim, Keychain isolation, encrypted capture, sanitized receipt, STOP races,
+      operator UI, and a dedicated authority-graph gate.
+- [ ] Commission the single authenticated X read canary and retain its sanitized receipt.
+- [ ] Commission OpenSea read, then Base RPC read, one source at a time.
 - Re-check current official documentation, authentication, pricing, schemas, and deployed addresses
   immediately before each bounded canary.
 - Keep raw provider content inside quarantine and persist only typed, provenance-rich evidence.
@@ -90,8 +96,8 @@ agents.
 
 ## Immediate next work
 
-Commission one supervised read canary on the existing Mac, beginning with X and then adding
-OpenSea and Base reads one provider at a time. Re-check current official provider contracts before
-each canary, route every attempt through the runtime's one-shot `research_collection` boundary,
-and keep proposal persistence behind `PROPOSE_ONLY`. Only after proposals are useful should the
-owner choose an expendable research-wallet balance for one AgentCash/x402 call.
+Perform the already-built supervised X read canary on the existing Mac after the operator verifies
+the current official X contract and commissions the four fixed Keychain items. Review the sanitized
+receipt before changing adapter status. Then add OpenSea and Base reads one provider at a time.
+Keep proposal persistence behind `PROPOSE_ONLY`; only after proposals are useful should the owner
+choose an expendable research-wallet balance for one AgentCash/x402 call.

@@ -46,7 +46,7 @@ describe("deterministic synthetic fixture replay", () => {
   });
 
   it("replays an explicitly constructed synthetic cassette byte-identically without network", async () => {
-    const query = { query: "recorded fictional evidence", maxResults: 10 };
+    const query = { query: "recorded fictional evidence" };
     const cassette = syntheticCassette(query);
     const store = new MemoryCassetteStore([cassette]);
     const snapshot = store.snapshot();
@@ -77,8 +77,38 @@ describe("deterministic synthetic fixture replay", () => {
     }
   });
 
+  it("integrity-binds and replays only structured rate-limit receipt metadata", async () => {
+    const query = { query: "synthetic rate receipt" };
+    const request = prepareRecentSearchRequest(query);
+    const response = quarantineNetworkResponse(
+      request,
+      200,
+      "application/json",
+      validResponseBytes(),
+      ACQUIRED_AT,
+      { limit: 450, remaining: 449, resetAtUnixSeconds: 1787685600 },
+    );
+    const cassette = createXRecentSearchCassette(request, response);
+    response.destroy();
+
+    expect(cassette.response.rateLimit).toEqual({
+      limit: 450,
+      remaining: 449,
+      resetAtUnixSeconds: 1787685600,
+    });
+    expect(JSON.stringify(cassette)).not.toContain("x-rate-limit-");
+
+    const replay = createXRecentSearchCollector({
+      mode: "replay",
+      cassetteStore: new MemoryCassetteStore([cassette]),
+    });
+    const replayed = await replay.collectRaw(query);
+    expect(replayed.metadata.rateLimit).toEqual(cassette.response.rateLimit);
+    replayed.destroy();
+  });
+
   it("wipes replay decode and validation buffers after quarantine handoff", async () => {
-    const query = { query: "synthetic wipe evidence", maxResults: 10 };
+    const query = { query: "synthetic wipe evidence" };
     const cassette = syntheticCassette(query);
     const store = new MemoryCassetteStore([cassette]);
     const expected = validResponseBytes();
@@ -156,7 +186,7 @@ describe("deterministic synthetic fixture replay", () => {
         cassette.response.bodyBase64 = Buffer.from("changed").toString("base64");
       },
       (cassette: any) => {
-        cassette.acquiredAt = "2026-08-11T19:20:21Z";
+        cassette.acquiredAt = "2026-08-25T19:20:21Z";
       },
       (cassette: any) => {
         cassette.request.authorization = `Bearer ${TEST_BEARER_TOKEN}`;
@@ -166,6 +196,13 @@ describe("deterministic synthetic fixture replay", () => {
           "https://api.x.com",
           "https://example.invalid",
         );
+      },
+      (cassette: any) => {
+        cassette.response.rateLimit = {
+          limit: 450,
+          remaining: 451,
+          resetAtUnixSeconds: 1787685600,
+        };
       },
     ]) {
       const tampered = structuredClone(baseline);

@@ -11,11 +11,11 @@ describe("offline ingestion demo", () => {
       networkUsed: false,
       credentialsUsed: false,
       executionEnabled: false,
-      xApiContractVersion: "x-api-v2-recent-search.endpoint-reference.2026-08-11.post-fields-v1",
+      xApiContractVersion: "x-api-v2-recent-search.2026-08-25.minimal-one-request-v2",
       ingestion: {
         status: "accepted",
         postCount: 1,
-        authorCount: 1,
+        authorCount: null,
         rawContentEncrypted: true,
         captureVerified: true,
       },

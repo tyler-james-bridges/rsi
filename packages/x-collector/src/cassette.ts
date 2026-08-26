@@ -7,6 +7,7 @@ import { XCollectorError } from "./errors.js";
 import { isSha256, sha256, type Sha256 } from "./hash.js";
 import type { QuarantinedXRecentSearchResponse } from "./quarantine.js";
 import { prepareRecentSearchRequest, type PreparedXRecentSearchRequest } from "./query.js";
+import { validateXRateLimitReceipt, type XRateLimitReceipt } from "./rate-limit.js";
 import { isCanonicalAcquiredAt } from "./time.js";
 
 export type XRecentSearchCassette = Readonly<{
@@ -22,6 +23,7 @@ export type XRecentSearchCassette = Readonly<{
     byteLength: number;
     bodySha256: Sha256;
     bodyBase64: string;
+    rateLimit: XRateLimitReceipt | null;
   }>;
   integritySha256: Sha256;
 }>;
@@ -58,8 +60,13 @@ function cassetteIntegrity(input: {
     byteLength: number;
     bodySha256: string;
     bodyBase64: string;
+    rateLimit: XRateLimitReceipt | null;
   };
 }): Sha256 {
+  const rateLimit =
+    input.response.rateLimit === null
+      ? "none"
+      : `${input.response.rateLimit.limit}:${input.response.rateLimit.remaining}:${input.response.rateLimit.resetAtUnixSeconds}`;
   return sha256(
     [
       input.version,
@@ -71,6 +78,7 @@ function cassetteIntegrity(input: {
       String(input.response.byteLength),
       input.response.bodySha256,
       input.response.bodyBase64,
+      rateLimit,
     ].join("\n"),
   );
 }
@@ -110,12 +118,11 @@ function validateCanonicalRequest(canonicalRequest: string, fingerprint: Sha256)
   if (queryLine === undefined) invalidCassette();
   const parameters = new URLSearchParams(queryLine);
   const entries = [...parameters.entries()];
-  const requiredKeys = ["expansions", "max_results", "post.fields", "query", "user.fields"];
-  const allowedKeys = new Set([...requiredKeys, "next_token"]);
+  const requiredKeys = ["max_results", "query", "sort_order"];
+  const allowedKeys = new Set(requiredKeys);
   if (
     entries.some(([key]) => !allowedKeys.has(key)) ||
-    requiredKeys.some((key) => parameters.getAll(key).length !== 1) ||
-    parameters.getAll("next_token").length > 1
+    requiredKeys.some((key) => parameters.getAll(key).length !== 1)
   ) {
     invalidCassette();
   }
@@ -125,16 +132,7 @@ function validateCanonicalRequest(canonicalRequest: string, fingerprint: Sha256)
 
   let prepared: PreparedXRecentSearchRequest;
   try {
-    const nextToken = parameters.get("next_token");
-    prepared = prepareRecentSearchRequest(
-      nextToken === null
-        ? { query: parameters.get("query"), maxResults: Number(maxResultsText) }
-        : {
-            query: parameters.get("query"),
-            maxResults: Number(maxResultsText),
-            nextToken,
-          },
-    );
+    prepared = prepareRecentSearchRequest({ query: parameters.get("query") });
   } catch {
     invalidCassette();
   }
@@ -173,7 +171,14 @@ export function validateXRecentSearchCassette(input: unknown): XRecentSearchCass
 
   if (
     !isPlainRecord(response) ||
-    !hasExactKeys(response, ["status", "contentType", "byteLength", "bodySha256", "bodyBase64"]) ||
+    !hasExactKeys(response, [
+      "status",
+      "contentType",
+      "byteLength",
+      "bodySha256",
+      "bodyBase64",
+      "rateLimit",
+    ]) ||
     response.status !== 200 ||
     !Number.isSafeInteger(response.byteLength) ||
     (response.byteLength as number) < 0 ||
@@ -184,6 +189,12 @@ export function validateXRecentSearchCassette(input: unknown): XRecentSearchCass
   }
   const contentType = normalizedJsonContentType(response.contentType);
   if (contentType === undefined) invalidCassette();
+  let rateLimit: XRateLimitReceipt | null;
+  try {
+    rateLimit = response.rateLimit === null ? null : validateXRateLimitReceipt(response.rateLimit);
+  } catch {
+    invalidCassette();
+  }
   const bytes = decodeCanonicalBase64(response.bodyBase64);
   try {
     if (bytes.byteLength !== response.byteLength || sha256(bytes) !== response.bodySha256) {
@@ -203,6 +214,7 @@ export function validateXRecentSearchCassette(input: unknown): XRecentSearchCass
         byteLength: bytes.byteLength,
         bodySha256: response.bodySha256,
         bodyBase64: response.bodyBase64 as string,
+        rateLimit,
       },
     };
     if (cassetteIntegrity(integrityInput) !== input.integritySha256) invalidCassette();
@@ -220,6 +232,7 @@ export function validateXRecentSearchCassette(input: unknown): XRecentSearchCass
         byteLength: bytes.byteLength,
         bodySha256: response.bodySha256,
         bodyBase64: response.bodyBase64 as string,
+        rateLimit,
       }),
       integritySha256: input.integritySha256,
     });
@@ -255,6 +268,7 @@ export function createXRecentSearchCassette(
         bodyBase64: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(
           "base64",
         ),
+        rateLimit: response.metadata.rateLimit ?? null,
       },
     };
     return validateXRecentSearchCassette({
@@ -290,6 +304,7 @@ function cassettesAreIdentical(left: XRecentSearchCassette, right: XRecentSearch
     left.response.byteLength === right.response.byteLength &&
     left.response.bodySha256 === right.response.bodySha256 &&
     left.response.bodyBase64 === right.response.bodyBase64 &&
+    JSON.stringify(left.response.rateLimit) === JSON.stringify(right.response.rateLimit) &&
     left.integritySha256 === right.integritySha256
   );
 }

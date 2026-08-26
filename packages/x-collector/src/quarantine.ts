@@ -8,6 +8,11 @@ import {
 import { XCollectorError } from "./errors.js";
 import { isSha256, sha256, type Sha256 } from "./hash.js";
 import type { PreparedXRecentSearchRequest } from "./query.js";
+import {
+  copyXRateLimitReceipt,
+  isXRateLimitReceipt,
+  type XRateLimitReceipt,
+} from "./rate-limit.js";
 import { isCanonicalAcquiredAt } from "./time.js";
 
 export type XResponseProvenance = "network" | "cassette";
@@ -23,6 +28,7 @@ export type XQuarantineMetadata = Readonly<{
   byteLength: number;
   responseHash: Sha256;
   provenance: XResponseProvenance;
+  rateLimit: XRateLimitReceipt | undefined;
 }>;
 
 const QUARANTINE_METADATA_FIELDS = [
@@ -36,6 +42,7 @@ const QUARANTINE_METADATA_FIELDS = [
   "byteLength",
   "responseHash",
   "provenance",
+  "rateLimit",
 ] as const;
 
 type QuarantineMetadataField = (typeof QUARANTINE_METADATA_FIELDS)[number];
@@ -102,7 +109,8 @@ export class QuarantinedXRecentSearchResponse {
       typeof values.contentType !== "string" ||
       !(X_JSON_CONTENT_TYPES as readonly string[]).includes(values.contentType) ||
       sha256(copiedBytes) !== values.responseHash ||
-      (values.provenance !== "network" && values.provenance !== "cassette")
+      (values.provenance !== "network" && values.provenance !== "cassette") ||
+      (values.rateLimit !== undefined && !isXRateLimitReceipt(values.rateLimit))
     ) {
       copiedBytes?.fill(0);
       throw new XCollectorError("INVALID_RESPONSE_SCHEMA", "Invalid quarantine metadata.");
@@ -118,6 +126,10 @@ export class QuarantinedXRecentSearchResponse {
       byteLength: values.byteLength as number,
       responseHash: values.responseHash,
       provenance: values.provenance,
+      rateLimit:
+        values.rateLimit === undefined
+          ? undefined
+          : copyXRateLimitReceipt(values.rateLimit as XRateLimitReceipt),
     });
     this.#bytes = copiedBytes;
     Object.freeze(this);
@@ -145,12 +157,16 @@ export class QuarantinedXRecentSearchResponse {
   }
 }
 
+Object.freeze(QuarantinedXRecentSearchResponse.prototype);
+Object.freeze(QuarantinedXRecentSearchResponse);
+
 export function quarantineNetworkResponse(
   request: PreparedXRecentSearchRequest,
   status: 200,
   contentType: string,
   bytes: Uint8Array,
   acquiredAt: string,
+  rateLimit?: XRateLimitReceipt,
 ): QuarantinedXRecentSearchResponse {
   return new QuarantinedXRecentSearchResponse(
     {
@@ -164,6 +180,7 @@ export function quarantineNetworkResponse(
       byteLength: bytes.byteLength,
       responseHash: sha256(bytes),
       provenance: "network",
+      rateLimit: copyXRateLimitReceipt(rateLimit),
     },
     bytes,
   );
@@ -175,6 +192,7 @@ export function quarantineCassetteResponse(
   responseHash: Sha256,
   bytes: Uint8Array,
   acquiredAt: string,
+  rateLimit?: XRateLimitReceipt,
 ): QuarantinedXRecentSearchResponse {
   return new QuarantinedXRecentSearchResponse(
     {
@@ -188,6 +206,7 @@ export function quarantineCassetteResponse(
       byteLength: bytes.byteLength,
       responseHash,
       provenance: "cassette",
+      rateLimit: copyXRateLimitReceipt(rateLimit),
     },
     bytes,
   );

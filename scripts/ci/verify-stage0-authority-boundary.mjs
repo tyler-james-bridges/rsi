@@ -48,15 +48,74 @@ const OFFLINE_ONLY_ENTRYPOINTS = new Set([
 const SAFE_EXTERNAL_MODULES = new Set(["zod"]);
 const SAFE_PLATFORM_MODULES = new Set([
   "node:async_hooks",
-  "node:crypto",
-  "node:fs",
-  "node:fs/promises",
-  "node:http",
-  "node:net",
   "node:path",
   "node:perf_hooks",
   "node:sqlite",
   "node:util",
+]);
+const SPECIAL_PLATFORM_IMPORTS = new Map([
+  [
+    "node:crypto",
+    Object.freeze({
+      files: new Map([
+        ["apps/cli/src/operator.ts", Object.freeze(["randomUUID"])],
+        [
+          "packages/session-lifecycle/src/sqlite-session-coordinator.ts",
+          Object.freeze(["createHmac", "hkdfSync", "timingSafeEqual"]),
+        ],
+        ["packages/store/src/sqlite-event-store.ts", Object.freeze(["createHash", "randomUUID"])],
+      ]),
+    }),
+  ],
+  [
+    "node:fs",
+    Object.freeze({
+      files: new Map([
+        [
+          "packages/session-lifecycle/src/sqlite-session-coordinator.ts",
+          Object.freeze(["chmodSync", "existsSync", "lstatSync", "mkdirSync"]),
+        ],
+      ]),
+    }),
+  ],
+  [
+    "node:fs/promises",
+    Object.freeze({
+      files: new Map([
+        ["apps/cli/src/operator.ts", Object.freeze(["lstat", "mkdir", "realpath", "stat"])],
+      ]),
+    }),
+  ],
+  [
+    "node:http",
+    Object.freeze({
+      file: "apps/operator/src/server.ts",
+      names: Object.freeze(["IncomingMessage", "Server", "ServerResponse", "createServer"]),
+    }),
+  ],
+  [
+    "node:net",
+    Object.freeze({
+      file: "apps/operator/src/server.ts",
+      names: Object.freeze(["BlockList", "isIP"]),
+    }),
+  ],
+]);
+const FORBIDDEN_NETWORK_MODULES = new Set([
+  "dgram",
+  "dns",
+  "dns/promises",
+  "http",
+  "http2",
+  "https",
+  "net",
+  "node:dgram",
+  "node:dns",
+  "node:dns/promises",
+  "node:http2",
+  "node:https",
+  "node:tls",
+  "tls",
 ]);
 const FORBIDDEN_PLATFORM_MODULES = new Map([
   ["child_process", "arbitrary process execution"],
@@ -71,14 +130,76 @@ const NODE_BUILTINS = new Set([...builtinModules, ...builtinModules.map((name) =
 // This is a deliberately syntactic review gate, not a general proof against
 // intentionally obfuscated JavaScript. Reject every loader entry point the
 // scanner can identify, including property/destructuring aliases.
-const FORBIDDEN_MODULE_LOADER_IDENTIFIERS = new Set(["createRequire", "getBuiltinModule"]);
-const FORBIDDEN_MODULE_LOADER_LITERALS = new Set(["createRequire", "getBuiltinModule"]);
+const FORBIDDEN_MODULE_LOADER_IDENTIFIERS = new Set([
+  "_load",
+  "allowExtension",
+  "createRequire",
+  "enableLoadExtension",
+  "getBuiltinModule",
+  "loadExtension",
+  "require",
+]);
+const FORBIDDEN_MODULE_LOADER_LITERALS = new Set([
+  "_load",
+  "allowExtension",
+  "createRequire",
+  "enableLoadExtension",
+  "getBuiltinModule",
+  "loadExtension",
+  "require",
+]);
+const FORBIDDEN_PROCESS_LOADER_APIS = new Set(["_linkedBinding", "binding", "dlopen"]);
 const FORBIDDEN_DYNAMIC_CODE_IDENTIFIERS = new Set([
   "AsyncFunction",
   "eval",
   "Function",
   "GeneratorFunction",
+  "constructor",
 ]);
+const FORBIDDEN_DYNAMIC_CODE_LITERALS = new Set(
+  [...FORBIDDEN_DYNAMIC_CODE_IDENTIFIERS].filter((name) => name !== "constructor"),
+);
+const FORBIDDEN_NETWORK_GLOBALS = new Set([
+  "EventSource",
+  "WebSocketStream",
+  "WebTransport",
+  "WebSocket",
+  "XMLHttpRequest",
+  "sendBeacon",
+]);
+const FORBIDDEN_CRYPTO_AUTHORITY_IDENTIFIERS = new Set([
+  "CryptoKey",
+  "ECDH",
+  "SubtleCrypto",
+  "createECDH",
+  "createPrivateKey",
+  "createPublicKey",
+  "createSign",
+  "deriveBits",
+  "deriveKey",
+  "diffieHellman",
+  "exportKey",
+  "generateKey",
+  "generateKeyPair",
+  "generateKeyPairSync",
+  "generateKeySync",
+  "importKey",
+  "privateDecrypt",
+  "privateEncrypt",
+  "sign",
+  "subtle",
+  "unwrapKey",
+  "webcrypto",
+  "wrapKey",
+]);
+const FORBIDDEN_CRYPTO_AUTHORITY_LITERALS = new Set(FORBIDDEN_CRYPTO_AUTHORITY_IDENTIFIERS);
+const REVIEWED_NETWORK_URL_LITERALS = new Set([
+  // Local URL parsing sentinel; it is never a routable destination.
+  "http://operator.invalid",
+  // A content-free plan/receipt discriminator, not a transport implementation.
+  "https://api.x.com/2/tweets/search/recent",
+]);
+const NETWORK_URL_LITERAL = /\b(?:https?|wss?):\/\/[A-Za-z0-9][^"'`\s)<]*/giu;
 
 const FORBIDDEN_EXTERNAL_PACKAGE =
   /(?:^|[/@._-])(?:agentcash|agentpay|x402|walletconnect|metamask|wagmi|ethers|web3|permissionless|pimlico|account-abstraction|safe-global)(?:$|[/@._-])/iu;
@@ -184,39 +305,117 @@ function discoverWorkspacePackages(root) {
   return packages;
 }
 
-function conditionTarget(value) {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const target = conditionTarget(item);
-      if (target !== undefined) return target;
+const ACTIVE_RUNTIME_EXPORT_CONDITIONS = new Set([
+  "node-addons",
+  "node",
+  "module-sync",
+  "import",
+  "require",
+  // A caller can activate this normally tooling-only branch with
+  // `--conditions=types`; require it to agree with every executable target.
+  "types",
+  "default",
+]);
+const REVIEWED_EXPORT_CONDITIONS = new Set(ACTIVE_RUNTIME_EXPORT_CONDITIONS);
+
+function validateWorkspaceExports(value, label = "workspace exports") {
+  if (typeof value === "string") {
+    if (!value.startsWith("./")) {
+      throw new Error(`${label} target must be a relative package path`);
     }
-    return undefined;
+    if (value.includes("*") || value.endsWith("/")) {
+      throw new Error(`${label} contains an unsupported wildcard/folder target ${value}`);
+    }
+    return;
+  }
+  if (value === null) {
+    throw new Error(`${label} contains a null target`);
+  }
+  if (Array.isArray(value)) {
+    throw new Error(`${label} contains an unsupported fallback array`);
+  }
+  if (typeof value !== "object") {
+    throw new Error(`${label} contains an invalid target`);
+  }
+  const entries = Object.entries(value);
+  const subpathEntries = entries.filter(([key]) => key.startsWith("."));
+  if (subpathEntries.length > 0 && subpathEntries.length !== entries.length) {
+    throw new Error(`${label} cannot mix subpath and condition keys`);
+  }
+  if (subpathEntries.length > 0) {
+    for (const [key, target] of subpathEntries) {
+      if ((key !== "." && !key.startsWith("./")) || key.includes("*") || key.endsWith("/")) {
+        throw new Error(`${label} contains an unsupported wildcard/folder key ${key}`);
+      }
+      validateWorkspaceExports(target, `${label}[${key}]`);
+    }
+    return;
+  }
+  for (const [condition, target] of entries) {
+    if (!REVIEWED_EXPORT_CONDITIONS.has(condition)) {
+      throw new Error(`${label} contains unreviewed condition ${condition}`);
+    }
+    validateWorkspaceExports(target, `${label}[${condition}]`);
+  }
+}
+
+function runtimeConditionTargets(value, targets = []) {
+  if (typeof value === "string") {
+    targets.push(value);
+    return targets;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) runtimeConditionTargets(item, targets);
+    return targets;
   }
   if (value !== null && typeof value === "object") {
-    for (const condition of ["types", "import", "node", "default"]) {
-      const target = conditionTarget(value[condition]);
-      if (target !== undefined) return target;
+    for (const [condition, target] of Object.entries(value)) {
+      if (ACTIVE_RUNTIME_EXPORT_CONDITIONS.has(condition)) {
+        runtimeConditionTargets(target, targets);
+      }
     }
   }
+  return targets;
+}
+
+function conditionTarget(value) {
+  const targets = [...new Set(runtimeConditionTargets(value))];
+  if (targets.length > 1) {
+    throw new Error(`workspace export has divergent runtime targets: ${targets.join(", ")}`);
+  }
+  if (targets.length === 1) return targets[0];
+  if (typeof value === "string") return value;
   return undefined;
+}
+
+function exportValueForSubpath(exportsValue, subpath) {
+  if (exportsValue !== undefined) validateWorkspaceExports(exportsValue);
+  if (typeof exportsValue === "string" || Array.isArray(exportsValue)) {
+    return subpath === "" ? exportsValue : undefined;
+  }
+  if (exportsValue === null || typeof exportsValue !== "object") return undefined;
+  const keys = Object.keys(exportsValue);
+  const subpathKeys = keys.filter((key) => key.startsWith("."));
+  if (subpathKeys.length > 0 && subpathKeys.length !== keys.length) {
+    throw new Error("workspace exports cannot mix subpath and condition keys");
+  }
+  if (subpathKeys.length > 0) {
+    const exportKey = subpath === "" ? "." : `./${subpath}`;
+    return exportsValue[exportKey];
+  }
+  return subpath === "" ? exportsValue : undefined;
 }
 
 function packageTarget(workspacePackage, subpath) {
   const { manifest } = workspacePackage;
-  const exportKey = subpath === "" ? "." : `./${subpath}`;
   if (manifest.exports !== undefined) {
-    const exportValue =
-      typeof manifest.exports === "string" || Array.isArray(manifest.exports)
-        ? subpath === ""
-          ? manifest.exports
-          : undefined
-        : manifest.exports?.[exportKey];
+    const exportValue = exportValueForSubpath(manifest.exports, subpath);
     const target = conditionTarget(exportValue);
     if (target !== undefined) return target;
+    return undefined;
   }
   if (subpath !== "") return `./src/${subpath}`;
-  for (const field of ["types", "module", "main"]) {
+  for (const field of ["main", "module"]) {
     if (typeof manifest[field] === "string") return manifest[field];
   }
   return "./src/index.ts";
@@ -318,15 +517,23 @@ function parseSource(path) {
 
 function analyzeSource(source) {
   const imports = [];
+  const bareFetchIndexes = [];
+  const runtimeDynamicImportIndexes = [];
   const forbiddenIdentifiers = [];
   const forbiddenLiterals = [];
+  const forbiddenCryptoAuthority = new Set();
   const forbiddenDynamicCode = [];
   const forbiddenModuleLoaders = [];
+  const forbiddenNetworkGlobals = new Set();
   const allLiterals = new Set();
 
   const isLiteral = (token) =>
     token?.kind === ts.SyntaxKind.StringLiteral ||
     token?.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral;
+  const isTemplateFragment = (token) =>
+    token?.kind === ts.SyntaxKind.TemplateHead ||
+    token?.kind === ts.SyntaxKind.TemplateMiddle ||
+    token?.kind === ts.SyntaxKind.TemplateTail;
   const moduleLiteral = (token) => (isLiteral(token) ? token.value : undefined);
   const statementEnd = (start) => {
     for (let index = start; index < source.tokens.length; index += 1) {
@@ -337,17 +544,67 @@ function analyzeSource(source) {
     }
     return source.tokens.length;
   };
+  const destructuresFromProcess = (propertyIndex) => {
+    let openBrace = -1;
+    for (let cursor = propertyIndex - 1; cursor >= Math.max(0, propertyIndex - 64); cursor -= 1) {
+      const kind = source.tokens[cursor].kind;
+      if (kind === ts.SyntaxKind.SemicolonToken || kind === ts.SyntaxKind.EqualsToken) break;
+      if (kind === ts.SyntaxKind.OpenBraceToken) {
+        openBrace = cursor;
+        break;
+      }
+    }
+    if (openBrace < 0) return false;
+    let closeBrace = -1;
+    for (
+      let cursor = propertyIndex + 1;
+      cursor < Math.min(source.tokens.length, propertyIndex + 64);
+      cursor += 1
+    ) {
+      const kind = source.tokens[cursor].kind;
+      if (kind === ts.SyntaxKind.SemicolonToken || kind === ts.SyntaxKind.EqualsToken) break;
+      if (kind === ts.SyntaxKind.CloseBraceToken) {
+        closeBrace = cursor;
+        break;
+      }
+    }
+    if (closeBrace < 0) return false;
+    for (
+      let cursor = closeBrace + 1;
+      cursor < Math.min(source.tokens.length - 1, closeBrace + 32);
+      cursor += 1
+    ) {
+      if (source.tokens[cursor].kind === ts.SyntaxKind.SemicolonToken) return false;
+      if (source.tokens[cursor].kind !== ts.SyntaxKind.EqualsToken) continue;
+      return (
+        source.tokens[cursor + 1]?.kind === ts.SyntaxKind.Identifier &&
+        source.tokens[cursor + 1]?.value === "process"
+      );
+    }
+    return false;
+  };
 
   for (let index = 0; index < source.tokens.length; index += 1) {
     const token = source.tokens[index];
+    const identifier =
+      token.kind === ts.SyntaxKind.Identifier || token.kind === ts.SyntaxKind.RequireKeyword
+        ? (token.value ?? token.text)
+        : undefined;
+    const networkGlobalObject =
+      token.kind === ts.SyntaxKind.Identifier || token.kind === ts.SyntaxKind.GlobalKeyword
+        ? (token.value ?? token.text)
+        : undefined;
     if (token.kind === ts.SyntaxKind.Identifier && FORBIDDEN_CODE_IDENTIFIERS.has(token.value)) {
       forbiddenIdentifiers.push(token.value);
     }
     if (
       token.kind === ts.SyntaxKind.Identifier &&
-      FORBIDDEN_MODULE_LOADER_IDENTIFIERS.has(token.value)
+      FORBIDDEN_CRYPTO_AUTHORITY_IDENTIFIERS.has(token.value)
     ) {
-      forbiddenModuleLoaders.push(token.value);
+      forbiddenCryptoAuthority.add(token.value);
+    }
+    if (identifier !== undefined && FORBIDDEN_MODULE_LOADER_IDENTIFIERS.has(identifier)) {
+      forbiddenModuleLoaders.push(identifier);
     }
     if (
       token.kind === ts.SyntaxKind.Identifier &&
@@ -355,8 +612,35 @@ function analyzeSource(source) {
     ) {
       forbiddenDynamicCode.push(token.value);
     }
-    if (isLiteral(token)) {
+    if (
+      token.kind === ts.SyntaxKind.ConstructorKeyword &&
+      source.tokens[index - 1]?.kind === ts.SyntaxKind.DotToken
+    ) {
+      forbiddenDynamicCode.push("constructor");
+    }
+    if (identifier !== undefined && FORBIDDEN_NETWORK_GLOBALS.has(identifier)) {
+      forbiddenNetworkGlobals.add(identifier);
+    }
+    if (isLiteral(token) || isTemplateFragment(token)) {
       allLiterals.add(token.value);
+    }
+    if (isLiteral(token)) {
+      if (token.value === "fetch" || FORBIDDEN_NETWORK_GLOBALS.has(token.value)) {
+        forbiddenNetworkGlobals.add(`computed ${token.value}`);
+      }
+      if (FORBIDDEN_DYNAMIC_CODE_LITERALS.has(token.value)) {
+        forbiddenDynamicCode.push(token.value);
+      }
+      if (
+        token.value === "constructor" &&
+        source.tokens[index - 1]?.kind === ts.SyntaxKind.OpenBracketToken &&
+        source.tokens[index + 1]?.kind === ts.SyntaxKind.CloseBracketToken
+      ) {
+        forbiddenDynamicCode.push("constructor");
+      }
+      if (FORBIDDEN_CRYPTO_AUTHORITY_LITERALS.has(token.value)) {
+        forbiddenCryptoAuthority.add(token.value);
+      }
       if (
         FORBIDDEN_PROTOCOL_LITERALS.has(token.value) ||
         FORBIDDEN_CODE_IDENTIFIERS.has(token.value)
@@ -368,48 +652,132 @@ function analyzeSource(source) {
       }
     }
 
+    if (identifier === "fetch") {
+      forbiddenNetworkGlobals.add("fetch");
+      if (source.tokens[index + 1]?.kind === ts.SyntaxKind.OpenParenToken) {
+        bareFetchIndexes.push(index);
+      }
+    }
+    if (
+      ["global", "globalThis", "self", "window"].includes(networkGlobalObject) &&
+      source.tokens[index + 1]?.kind === ts.SyntaxKind.OpenBracketToken &&
+      moduleLiteral(source.tokens[index + 2]) === "fetch"
+    ) {
+      forbiddenNetworkGlobals.add(`${networkGlobalObject}[fetch]`);
+    }
+    if (
+      identifier === "Reflect" &&
+      source.tokens[index + 1]?.kind === ts.SyntaxKind.DotToken &&
+      (source.tokens[index + 2]?.kind === ts.SyntaxKind.Identifier ||
+        source.tokens[index + 2]?.kind === ts.SyntaxKind.GetKeyword) &&
+      (source.tokens[index + 2]?.value ?? source.tokens[index + 2]?.text) === "get" &&
+      source.tokens[index + 3]?.kind === ts.SyntaxKind.OpenParenToken &&
+      source.tokens[index + 4]?.kind === ts.SyntaxKind.Identifier &&
+      ["global", "globalThis", "self", "window"].includes(source.tokens[index + 4]?.value) &&
+      source.tokens[index + 5]?.kind === ts.SyntaxKind.CommaToken &&
+      moduleLiteral(source.tokens[index + 6]) === "fetch"
+    ) {
+      forbiddenNetworkGlobals.add(`Reflect.get(${source.tokens[index + 4].value}, fetch)`);
+    }
+    if (
+      identifier === "process" &&
+      source.tokens[index + 1]?.kind === ts.SyntaxKind.DotToken &&
+      source.tokens[index + 2]?.kind === ts.SyntaxKind.Identifier &&
+      FORBIDDEN_PROCESS_LOADER_APIS.has(source.tokens[index + 2]?.value)
+    ) {
+      forbiddenModuleLoaders.push(`process.${source.tokens[index + 2].value}`);
+    }
+    if (
+      identifier === "process" &&
+      source.tokens[index + 1]?.kind === ts.SyntaxKind.OpenBracketToken &&
+      FORBIDDEN_PROCESS_LOADER_APIS.has(moduleLiteral(source.tokens[index + 2]))
+    ) {
+      forbiddenModuleLoaders.push(`process.${moduleLiteral(source.tokens[index + 2])}`);
+    }
+    if (
+      identifier === "Reflect" &&
+      source.tokens[index + 1]?.kind === ts.SyntaxKind.DotToken &&
+      (source.tokens[index + 2]?.kind === ts.SyntaxKind.Identifier ||
+        source.tokens[index + 2]?.kind === ts.SyntaxKind.GetKeyword) &&
+      (source.tokens[index + 2]?.value ?? source.tokens[index + 2]?.text) === "get" &&
+      source.tokens[index + 3]?.kind === ts.SyntaxKind.OpenParenToken &&
+      source.tokens[index + 4]?.kind === ts.SyntaxKind.Identifier &&
+      source.tokens[index + 4]?.value === "process" &&
+      source.tokens[index + 5]?.kind === ts.SyntaxKind.CommaToken &&
+      FORBIDDEN_PROCESS_LOADER_APIS.has(moduleLiteral(source.tokens[index + 6]))
+    ) {
+      forbiddenModuleLoaders.push(`process.${moduleLiteral(source.tokens[index + 6])}`);
+    }
+    if (
+      identifier !== undefined &&
+      FORBIDDEN_PROCESS_LOADER_APIS.has(identifier) &&
+      destructuresFromProcess(index)
+    ) {
+      forbiddenModuleLoaders.push(`process.${identifier}`);
+    }
+
     if (token.kind === ts.SyntaxKind.ImportKeyword) {
       const next = source.tokens[index + 1];
       if (next?.kind === ts.SyntaxKind.DotToken) continue;
       if (next?.kind === ts.SyntaxKind.OpenParenToken) {
+        runtimeDynamicImportIndexes.push(index);
         const specifier = moduleLiteral(source.tokens[index + 2]);
         const closed = source.tokens[index + 3]?.kind === ts.SyntaxKind.CloseParenToken;
         imports.push(
           specifier !== undefined && closed
-            ? { dynamic: false, specifier }
-            : { dynamic: true, specifier: null },
+            ? { dynamic: false, names: [], specifier }
+            : { dynamic: true, names: [], specifier: null },
         );
         continue;
       }
 
+      // Type-only imports are erased by TypeScript and grant no runtime authority.
+      if (next?.kind === ts.SyntaxKind.TypeKeyword) continue;
+
       const end = statementEnd(index + 1);
       const sideEffectSpecifier = moduleLiteral(next);
       if (sideEffectSpecifier !== undefined) {
-        imports.push({ dynamic: false, specifier: sideEffectSpecifier });
+        imports.push({ dynamic: false, names: [], specifier: sideEffectSpecifier });
         continue;
       }
-      let found;
+      let fromIndex = -1;
       let containsRequire = false;
       for (let cursor = index + 1; cursor < end; cursor += 1) {
         if (
-          source.tokens[cursor].kind === ts.SyntaxKind.Identifier &&
-          source.tokens[cursor].value === "require"
+          (source.tokens[cursor].kind === ts.SyntaxKind.Identifier ||
+            source.tokens[cursor].kind === ts.SyntaxKind.RequireKeyword) &&
+          (source.tokens[cursor].value ?? source.tokens[cursor].text) === "require"
         ) {
           containsRequire = true;
         }
         if (source.tokens[cursor].kind !== ts.SyntaxKind.FromKeyword) continue;
-        found = moduleLiteral(source.tokens[cursor + 1]);
+        fromIndex = cursor;
         break;
       }
-      if (found !== undefined) imports.push({ dynamic: false, specifier: found });
-      else if (!containsRequire) imports.push({ dynamic: true, specifier: null });
+      if (fromIndex >= 0) {
+        const specifier = moduleLiteral(source.tokens[fromIndex + 1]);
+        const names = [];
+        for (let cursor = index + 1; cursor < fromIndex; cursor += 1) {
+          const candidate = source.tokens[cursor];
+          if (candidate.kind === ts.SyntaxKind.Identifier) names.push(candidate.value);
+          if (candidate.kind === ts.SyntaxKind.StringLiteral) names.push(candidate.value);
+        }
+        imports.push(
+          specifier === undefined
+            ? { dynamic: true, names, specifier: null }
+            : { dynamic: false, names, specifier },
+        );
+      } else if (!containsRequire) {
+        imports.push({ dynamic: true, names: [], specifier: null });
+      }
       continue;
     }
 
     if (token.kind === ts.SyntaxKind.ExportKeyword) {
       let declarationStart = index + 1;
       if (source.tokens[declarationStart]?.kind === ts.SyntaxKind.TypeKeyword) {
-        declarationStart += 1;
+        // `export type ... from` is also erased from the runtime graph.
+        continue;
       }
       if (
         source.tokens[declarationStart]?.kind !== ts.SyntaxKind.OpenBraceToken &&
@@ -423,8 +791,8 @@ function analyzeSource(source) {
         const specifier = moduleLiteral(source.tokens[cursor + 1]);
         imports.push(
           specifier === undefined
-            ? { dynamic: true, specifier: null }
-            : { dynamic: false, specifier },
+            ? { dynamic: true, names: [], specifier: null }
+            : { dynamic: false, names: [], specifier },
         );
         break;
       }
@@ -432,32 +800,60 @@ function analyzeSource(source) {
     }
 
     if (
-      token.kind === ts.SyntaxKind.Identifier &&
-      token.value === "require" &&
+      identifier === "require" &&
       source.tokens[index + 1]?.kind === ts.SyntaxKind.OpenParenToken
     ) {
       const specifier = moduleLiteral(source.tokens[index + 2]);
       const closed = source.tokens[index + 3]?.kind === ts.SyntaxKind.CloseParenToken;
       imports.push(
         specifier !== undefined && closed
-          ? { dynamic: false, specifier }
-          : { dynamic: true, specifier: null },
+          ? { dynamic: false, names: [], specifier }
+          : { dynamic: true, names: [], specifier: null },
       );
     }
   }
   return {
+    bareFetchIndexes,
     imports,
+    forbiddenCryptoAuthority: [...forbiddenCryptoAuthority].sort(),
     forbiddenDynamicCode: [...new Set(forbiddenDynamicCode)].sort(),
     forbiddenIdentifiers: [...new Set(forbiddenIdentifiers)].sort(),
     forbiddenLiterals: [...new Set(forbiddenLiterals)].sort(),
     forbiddenModuleLoaders: [...new Set(forbiddenModuleLoaders)].sort(),
+    forbiddenNetworkGlobals: [...forbiddenNetworkGlobals].sort(),
     literals: allLiterals,
+    runtimeDynamicImportIndexes,
   };
 }
 
-function classifyModuleSpecifier(specifier) {
+function classifyModuleSpecifier(specifier, relativeFile, names = []) {
+  if (FORBIDDEN_NETWORK_MODULES.has(specifier)) {
+    return `unapproved network platform module ${specifier}`;
+  }
   if (FORBIDDEN_PLATFORM_MODULES.has(specifier)) {
     return `platform module ${specifier} (${FORBIDDEN_PLATFORM_MODULES.get(specifier)})`;
+  }
+  const special = SPECIAL_PLATFORM_IMPORTS.get(specifier);
+  if (special !== undefined) {
+    const actualNames = [...new Set(names)].sort();
+    const allowedNames =
+      special.files instanceof Map
+        ? special.files.get(relativeFile)
+        : relativeFile === special.file
+          ? special.names
+          : undefined;
+    if (allowedNames === undefined) {
+      const allowedFiles =
+        special.files instanceof Map ? [...special.files.keys()].sort().join(", ") : special.file;
+      return `${specifier} is allowed only in ${allowedFiles}`;
+    }
+    if (
+      actualNames.length !== allowedNames.length ||
+      actualNames.some((name, index) => name !== allowedNames[index])
+    ) {
+      return `${specifier} imports must be exactly ${allowedNames.join(", ")}`;
+    }
+    return undefined;
   }
   if (REVIEWED_SIGNER_BLIND_SUBPATHS.has(specifier)) return undefined;
   if (FORBIDDEN_WORKSPACE_PACKAGES.has(specifier)) {
@@ -546,6 +942,11 @@ function inspectModuleGraph(root, roots, packages, label) {
         `${label}: ${relativeFile} references financial-authority identifier(s): ${analysis.forbiddenIdentifiers.join(", ")}`,
       );
     }
+    if (analysis.forbiddenCryptoAuthority.length > 0) {
+      violations.push(
+        `${label}: ${relativeFile} references cryptographic signing/key-authority API(s): ${analysis.forbiddenCryptoAuthority.join(", ")}`,
+      );
+    }
     if (analysis.forbiddenLiterals.length > 0) {
       violations.push(
         `${label}: ${relativeFile} declares financial-authority/arbitrary-call capability literal(s): ${analysis.forbiddenLiterals.join(", ")}`,
@@ -561,6 +962,26 @@ function inspectModuleGraph(root, roots, packages, label) {
         `${label}: ${relativeFile} references dynamic-code API(s): ${analysis.forbiddenDynamicCode.join(", ")}`,
       );
     }
+    if (analysis.forbiddenNetworkGlobals.length > 0) {
+      violations.push(
+        `${label}: ${relativeFile} references an unapproved network global: ${analysis.forbiddenNetworkGlobals.join(", ")}`,
+      );
+    }
+    if (analysis.bareFetchIndexes.length > 0) {
+      violations.push(`${label}: ${relativeFile} contains an unaudited bare fetch call`);
+    }
+    if (analysis.runtimeDynamicImportIndexes.length > 0) {
+      violations.push(`${label}: ${relativeFile} contains a runtime import() expression`);
+    }
+    for (const literal of analysis.literals) {
+      if (typeof literal !== "string") continue;
+      for (const match of literal.matchAll(NETWORK_URL_LITERAL)) {
+        const url = match[0];
+        if (!REVIEWED_NETWORK_URL_LITERALS.has(url)) {
+          violations.push(`${label}: ${relativeFile} declares unreviewed network origin ${url}`);
+        }
+      }
+    }
 
     for (const dependency of analysis.imports) {
       if (dependency.dynamic) {
@@ -568,11 +989,12 @@ function inspectModuleGraph(root, roots, packages, label) {
         continue;
       }
       const specifier = dependency.specifier;
-      const classification = classifyModuleSpecifier(specifier);
+      const classification = classifyModuleSpecifier(specifier, relativeFile, dependency.names);
       if (classification !== undefined) {
         violations.push(`${label}: ${relativeFile} imports ${classification}`);
         continue;
       }
+      if (SPECIAL_PLATFORM_IMPORTS.has(specifier)) continue;
 
       let resolvedDependency;
       if (specifier.startsWith(".") || isAbsolute(specifier)) {
@@ -585,7 +1007,15 @@ function inspectModuleGraph(root, roots, packages, label) {
       } else {
         const workspace = packageForSpecifier(specifier, packages);
         if (workspace !== undefined) {
-          const target = packageTarget(workspace.workspacePackage, workspace.subpath);
+          let target;
+          try {
+            target = packageTarget(workspace.workspacePackage, workspace.subpath);
+          } catch (error) {
+            violations.push(
+              `${relativeFile} cannot resolve runtime workspace export ${specifier}: ${error.message}`,
+            );
+            continue;
+          }
           if (target === undefined) {
             violations.push(
               `${label}: ${relativeFile} cannot resolve workspace export ${specifier}`,
@@ -683,11 +1113,12 @@ function verifyRuntimeManifest(root, violations) {
       violations.push(`@rsi/runtime manifest is missing reviewed dependency ${required}`);
     }
   }
-  const exportTarget = conditionTarget(
-    typeof manifest.exports === "object" && manifest.exports !== null
-      ? manifest.exports["."]
-      : manifest.exports,
-  );
+  let exportTarget;
+  try {
+    exportTarget = conditionTarget(exportValueForSubpath(manifest.exports, ""));
+  } catch (error) {
+    violations.push(`@rsi/runtime has an invalid runtime export: ${error.message}`);
+  }
   if (exportTarget !== "./src/index.ts") {
     violations.push(`@rsi/runtime must export only ./src/index.ts from its root entrypoint`);
   }
@@ -695,7 +1126,7 @@ function verifyRuntimeManifest(root, violations) {
     typeof manifest.exports === "object" &&
     manifest.exports !== null &&
     !Array.isArray(manifest.exports) &&
-    Object.keys(manifest.exports).some((key) => key !== ".")
+    Object.keys(manifest.exports).some((key) => key.startsWith(".") && key !== ".")
   ) {
     violations.push(`@rsi/runtime must not expose authority bypass subpath exports`);
   }

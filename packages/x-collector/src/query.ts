@@ -2,29 +2,21 @@ import {
   X_API_ORIGIN,
   X_RECENT_SEARCH_DEFAULT_RESULTS,
   X_RECENT_SEARCH_ENDPOINT,
-  X_RECENT_SEARCH_EXPANSIONS,
-  X_RECENT_SEARCH_MAX_RESULTS,
   X_RECENT_SEARCH_METHOD,
-  X_RECENT_SEARCH_MIN_RESULTS,
-  X_RECENT_SEARCH_NEXT_TOKEN_MAX_LENGTH,
   X_RECENT_SEARCH_PATH,
-  X_RECENT_SEARCH_POST_FIELDS,
   X_RECENT_SEARCH_QUERY_MAX_LENGTH,
-  X_RECENT_SEARCH_USER_FIELDS,
+  X_RECENT_SEARCH_SORT_ORDER,
 } from "./constants.js";
 import { XCollectorError } from "./errors.js";
 import { sha256, type Sha256 } from "./hash.js";
 
 export type XRecentSearchQuery = Readonly<{
   query: string;
-  maxResults?: number;
-  nextToken?: string;
 }>;
 
 export type ValidatedXRecentSearchQuery = Readonly<{
   query: string;
   maxResults: number;
-  nextToken?: string;
 }>;
 
 export type PreparedXRecentSearchRequest = Readonly<{
@@ -36,8 +28,7 @@ export type PreparedXRecentSearchRequest = Readonly<{
   query: ValidatedXRecentSearchQuery;
 }>;
 
-const QUERY_KEYS = new Set(["query", "maxResults", "nextToken"]);
-const NEXT_TOKEN_PATTERN = /^[A-Za-z0-9._~-]+$/;
+const QUERY_KEYS = new Set(["query"]);
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -77,45 +68,7 @@ export function validateXRecentSearchQuery(input: unknown): ValidatedXRecentSear
     );
   }
 
-  const maxResultsDescriptor = Object.getOwnPropertyDescriptor(input, "maxResults");
-  if (maxResultsDescriptor !== undefined && !("value" in maxResultsDescriptor)) {
-    invalidQuery("maxResults must be a data property.");
-  }
-  const maxResults =
-    maxResultsDescriptor === undefined
-      ? X_RECENT_SEARCH_DEFAULT_RESULTS
-      : maxResultsDescriptor.value;
-  if (
-    typeof maxResults !== "number" ||
-    !Number.isInteger(maxResults) ||
-    maxResults < X_RECENT_SEARCH_MIN_RESULTS ||
-    maxResults > X_RECENT_SEARCH_MAX_RESULTS
-  ) {
-    invalidQuery(
-      `maxResults must be an integer from ${X_RECENT_SEARCH_MIN_RESULTS} through ${X_RECENT_SEARCH_MAX_RESULTS}.`,
-    );
-  }
-
-  const nextTokenDescriptor = Object.getOwnPropertyDescriptor(input, "nextToken");
-  if (nextTokenDescriptor !== undefined && !("value" in nextTokenDescriptor)) {
-    invalidQuery("nextToken must be a data property.");
-  }
-  const nextToken = nextTokenDescriptor?.value;
-  if (
-    nextToken !== undefined &&
-    (typeof nextToken !== "string" ||
-      nextToken.length < 1 ||
-      nextToken.length > X_RECENT_SEARCH_NEXT_TOKEN_MAX_LENGTH ||
-      !NEXT_TOKEN_PATTERN.test(nextToken))
-  ) {
-    invalidQuery("nextToken must be a bounded URL-safe opaque token.");
-  }
-
-  return Object.freeze(
-    nextToken === undefined
-      ? { query, maxResults }
-      : { query, maxResults, nextToken: nextToken as string },
-  );
+  return Object.freeze({ query, maxResults: X_RECENT_SEARCH_DEFAULT_RESULTS });
 }
 
 function canonicalizeQuery(parameters: URLSearchParams): string {
@@ -136,10 +89,7 @@ export function prepareRecentSearchRequest(input: unknown): PreparedXRecentSearc
   const url = new URL(X_RECENT_SEARCH_PATH, X_API_ORIGIN);
   url.searchParams.set("query", query.query);
   url.searchParams.set("max_results", String(query.maxResults));
-  url.searchParams.set("post.fields", X_RECENT_SEARCH_POST_FIELDS.join(","));
-  url.searchParams.set("expansions", X_RECENT_SEARCH_EXPANSIONS.join(","));
-  url.searchParams.set("user.fields", X_RECENT_SEARCH_USER_FIELDS.join(","));
-  if (query.nextToken !== undefined) url.searchParams.set("next_token", query.nextToken);
+  url.searchParams.set("sort_order", X_RECENT_SEARCH_SORT_ORDER);
 
   const canonicalRequest = `${X_RECENT_SEARCH_METHOD}\n${X_RECENT_SEARCH_ENDPOINT}\n${canonicalizeQuery(url.searchParams)}`;
   return Object.freeze({

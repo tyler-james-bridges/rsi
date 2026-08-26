@@ -6,15 +6,27 @@ Offline operational primitives for RSI Observer's paid read-only source calls.
 
 `SqliteOperationsStore` durably reserves worst-case `USD_MICRO` cost and an attempt
 slot before any network dispatch. Reservations are never refunded for errors, empty
-responses, timeouts, or aborts. A random permit can be converted to a nominal
-`NetworkAttemptAuthorization`; the collector consumes it synchronously and exactly once
-immediately before calling `fetch`.
+responses, timeouts, or aborts. A random permit can be converted to a constructorless,
+null-prototype, frozen `NetworkAttemptAuthorization`. Its own closure is consumed
+synchronously and exactly once immediately before `fetch`; every attempted consumption,
+including a malformed or rejected one, is terminal and requires a newly issued
+authorization.
 
-After dispatch, `readNetworkAttemptBinding(attemptId)` returns the authenticated
-permit-free binding plus durable attempt state and dispatch time. It exists for
+`consume()` accepts no timestamp or other caller input. `SqliteOperationsStore` samples
+its wall and monotonic clocks only after acquiring the SQLite write lock, rejects the
+authorization at or after its durable expiry, records dispatch, and returns a frozen,
+authenticated `NetworkAttemptDispatchReceipt`. Wall-clock rollback cannot extend the
+monotonic lifetime or backdate the durable dispatch record. The receipt is bound to the
+same attempt, session, profile, source, lane, operation, reservation, and expiry as the
+authorization.
+
+After reservation, `readNetworkAttemptBinding(attemptId)` returns the authenticated
+permit-free binding plus durable attempt state, dispatch time, close time, and outcome.
+`closedAt` and `outcome` remain null unless the attempt is closed. These facts exist for
 crash recovery: ingestion can prove that a committed Vault capture came from the
-original dispatched attempt after the one-shot authorization object is gone. The
-receipt contains no permit token and performs no network action.
+original dispatched attempt after the one-shot authorization object is gone, and a
+reopened coordinator can replay the exact authenticated closure tuple idempotently. The
+binding and dispatch receipt contain no permit token and perform no network action.
 
 SQLite `BEGIN IMMEDIATE`, strict runtime schemas, authenticated rows, and an HMAC audit
 chain enforce the cap across independent store instances. Reservation IDs and

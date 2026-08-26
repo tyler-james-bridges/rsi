@@ -51,6 +51,9 @@ jobs:
       - name: Prove the Stage 0 runtime has no financial authority
         run: pnpm ci:stage0
 
+      - name: Prove the Stage 1 X read canary has only its reviewed read authority
+        run: pnpm ci:stage1
+
       - name: Verify format, types, and tests
         run: pnpm check
 

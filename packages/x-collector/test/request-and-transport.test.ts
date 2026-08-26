@@ -1,35 +1,44 @@
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { ReadableStream } from "node:stream/web";
 
+import { SqliteRuntimeController } from "@rsi/runtime";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   X_RECENT_SEARCH_ENDPOINT,
-  X_RECENT_SEARCH_EXPANSIONS,
-  X_RECENT_SEARCH_POST_FIELDS,
-  X_RECENT_SEARCH_USER_FIELDS,
+  X_RECENT_SEARCH_RESERVED_USD_MICRO,
+  X_RECENT_SEARCH_SORT_ORDER,
   createXRecentSearchCollector,
   prepareRecentSearchRequest,
-  type XRecentSearchFetch,
+  xRecentSearchRuntimeActionId,
 } from "../src/index.js";
+import { createXRecentSearchCollectorForTesting, type XRecentSearchFetch } from "../src/testing.js";
 import {
   ACQUIRED_AT,
   FIXED_CLOCK,
   TEST_BEARER_TOKEN,
   jsonResponse,
   testAttemptAuthorization,
+  testLiveAuthorizations,
+  testRuntimeAuthorization,
+  testRuntimeAuthorizationFixture,
   validResponseBytes,
 } from "./helpers.js";
 
-function createLiveCollector(options: Record<string, unknown>) {
-  return createXRecentSearchCollector({
-    attemptAuthorization: testAttemptAuthorization(),
+function createLiveCollector(query: string, options: Record<string, unknown>) {
+  return createXRecentSearchCollectorForTesting({
+    ...testLiveAuthorizations(query),
     now: FIXED_CLOCK,
     ...options,
   } as never);
 }
 
 describe("closed and pinned requests", () => {
-  it("pins the production endpoint, method, parameters, fields, headers, and redirect policy", async () => {
+  it("pins one minimal request to the production endpoint with no pagination or expansions", async () => {
     const fetch = vi.fn<XRecentSearchFetch>(async (request) => {
       const url = new URL(request.url);
       expect(`${url.origin}${url.pathname}`).toBe(X_RECENT_SEARCH_ENDPOINT);
@@ -38,13 +47,16 @@ describe("closed and pinned requests", () => {
       expect(request.credentials).toBe("omit");
       expect(request.body).toBeNull();
       expect([...url.searchParams.keys()].sort()).toEqual(
-        ["query", "max_results", "post.fields", "expansions", "user.fields"].sort(),
+        ["query", "max_results", "sort_order"].sort(),
       );
       expect(url.searchParams.get("query")).toBe("nft evidence -is:retweet");
       expect(url.searchParams.get("max_results")).toBe("10");
-      expect(url.searchParams.get("post.fields")).toBe(X_RECENT_SEARCH_POST_FIELDS.join(","));
-      expect(url.searchParams.get("expansions")).toBe(X_RECENT_SEARCH_EXPANSIONS.join(","));
-      expect(url.searchParams.get("user.fields")).toBe(X_RECENT_SEARCH_USER_FIELDS.join(","));
+      expect(url.searchParams.get("sort_order")).toBe(X_RECENT_SEARCH_SORT_ORDER);
+      expect(url.searchParams.has("next_token")).toBe(false);
+      expect(url.searchParams.has("pagination_token")).toBe(false);
+      expect(url.searchParams.has("post.fields")).toBe(false);
+      expect(url.searchParams.has("tweet.fields")).toBe(false);
+      expect(url.searchParams.has("expansions")).toBe(false);
       expect([...request.headers.keys()].sort()).toEqual([
         "accept",
         "accept-encoding",
@@ -55,11 +67,12 @@ describe("closed and pinned requests", () => {
       expect(request.headers.get("authorization")).toBe(`Bearer ${TEST_BEARER_TOKEN}`);
       return jsonResponse();
     });
-    const collector = createLiveCollector({
+    const collector = createLiveCollector("nft evidence -is:retweet", {
       bearerToken: TEST_BEARER_TOKEN,
       fetch,
       now: FIXED_CLOCK,
     });
+    expect(collector.attemptBinding?.reservedAtomic).toBe(X_RECENT_SEARCH_RESERVED_USD_MICRO);
 
     const raw = await collector.collectRaw({ query: "nft evidence -is:retweet" });
 
@@ -76,62 +89,80 @@ describe("closed and pinned requests", () => {
     );
   });
 
-  it("builds a credential-free deterministic fingerprint and supports one bounded page token", () => {
-    const first = prepareRecentSearchRequest({
-      query: "same query",
-      maxResults: 10,
-      nextToken: "ABC_123",
-    });
-    const second = prepareRecentSearchRequest({
-      nextToken: "ABC_123",
-      maxResults: 10,
-      query: "same query",
-    });
+  it("builds a credential-free deterministic fingerprint from the caller's bounded query only", () => {
+    const first = prepareRecentSearchRequest({ query: "same query" });
+    const second = prepareRecentSearchRequest(
+      Object.assign(Object.create(null), { query: "same query" }),
+    );
 
     expect(first.fingerprint).toBe(second.fingerprint);
     expect(first.canonicalRequest).toBe(second.canonicalRequest);
     expect(first.canonicalRequest).not.toContain(TEST_BEARER_TOKEN);
-    expect(new URL(first.url).searchParams.get("next_token")).toBe("ABC_123");
+    expect(first.query.maxResults).toBe(10);
   });
-
-  it.each(["url", "method", "headers", "redirect", "params", "tweet.fields"])(
-    "rejects caller-supplied %s before transport",
-    async (property) => {
-      const fetch = vi.fn<XRecentSearchFetch>();
-      const collector = createLiveCollector({
-        bearerToken: TEST_BEARER_TOKEN,
-        fetch,
-      });
-      await expect(
-        collector.collectRaw({ query: "closed query", [property]: "untrusted" }),
-      ).rejects.toMatchObject({ code: "INVALID_QUERY" });
-      expect(fetch).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
-    { query: "" },
-    { query: "   " },
-    { query: "x".repeat(513) },
-    { query: "ok", maxResults: 9 },
-    { query: "ok", maxResults: 11 },
-    { query: "ok", maxResults: 10.5 },
-    { query: "ok", nextToken: "not url safe!" },
-  ])("rejects an out-of-bounds query shape", (input) => {
-    expect(() => prepareRecentSearchRequest(input)).toThrowError(
-      expect.objectContaining({ code: "INVALID_QUERY" }),
-    );
+    "url",
+    "method",
+    "headers",
+    "redirect",
+    "params",
+    "tweet.fields",
+    "post.fields",
+    "expansions",
+    "maxResults",
+    "nextToken",
+    "paginationToken",
+    "startTime",
+    "endTime",
+  ])("rejects caller-supplied %s before transport", async (property) => {
+    const fetch = vi.fn<XRecentSearchFetch>();
+    const collector = createLiveCollector("closed query", {
+      bearerToken: TEST_BEARER_TOKEN,
+      fetch,
+    });
+    await expect(
+      collector.collectRaw({ query: "closed query", [property]: "untrusted" }),
+    ).rejects.toMatchObject({ code: "INVALID_QUERY" });
+    expect(fetch).not.toHaveBeenCalled();
   });
+
+  it.each([{ query: "" }, { query: "   " }, { query: "x".repeat(513) }, { query: "line\nbreak" }])(
+    "rejects an out-of-bounds query shape",
+    (input) => {
+      expect(() => prepareRecentSearchRequest(input)).toThrowError(
+        expect.objectContaining({ code: "INVALID_QUERY" }),
+      );
+    },
+  );
 
   it("rejects method/header/URL configuration channels at collector creation", () => {
     for (const property of ["url", "method", "headers", "redirect"] as const) {
       expect(() =>
-        createLiveCollector({
+        createLiveCollector("test query", {
           bearerToken: TEST_BEARER_TOKEN,
           [property]: "untrusted",
         } as never),
       ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
     }
+  });
+
+  it("keeps transport and clock injection behind the test-only package entry", () => {
+    const authorizations = testLiveAuthorizations("production factory");
+    expect(() =>
+      createXRecentSearchCollector({
+        ...authorizations,
+        bearerToken: TEST_BEARER_TOKEN,
+        fetch: async () => jsonResponse(),
+      } as never),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
+    expect(() =>
+      createXRecentSearchCollector({
+        ...testLiveAuthorizations("production clock"),
+        bearerToken: TEST_BEARER_TOKEN,
+        now: FIXED_CLOCK,
+      } as never),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
   });
 
   it("refuses to construct a live collector without a reserved one-shot authorization", () => {
@@ -140,12 +171,174 @@ describe("closed and pinned requests", () => {
     ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
   });
 
+  it("requires an authentic runtime authorization in addition to the attempt reservation", () => {
+    const attemptAuthorization = testAttemptAuthorization();
+    expect(() =>
+      createXRecentSearchCollector({
+        attemptAuthorization,
+        bearerToken: TEST_BEARER_TOKEN,
+      } as never),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
+    expect(() =>
+      createXRecentSearchCollector({
+        attemptAuthorization,
+        bearerToken: TEST_BEARER_TOKEN,
+        runtimeAuthorization: {},
+      } as never),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
+  });
+
+  it("binds runtime authority to the exact attempt and prepared request fingerprint", async () => {
+    const attemptAuthorization = testAttemptAuthorization();
+    const runtimeAuthorization = testRuntimeAuthorization(attemptAuthorization, "authorized query");
+    const fetch = vi.fn<XRecentSearchFetch>(async () => jsonResponse());
+    const collector = createXRecentSearchCollectorForTesting({
+      attemptAuthorization,
+      bearerToken: TEST_BEARER_TOKEN,
+      fetch,
+      now: FIXED_CLOCK,
+      runtimeAuthorization,
+    });
+
+    await expect(collector.collectRaw({ query: "different query" })).rejects.toMatchObject({
+      code: "RUNTIME_AUTHORIZATION_FAILED",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    const raw = await collector.collectRaw({ query: "authorized query" });
+    expect(fetch).toHaveBeenCalledOnce();
+    raw.destroy();
+  });
+
+  it("rechecks STOP durably when consuming runtime authority", async () => {
+    const attemptAuthorization = testAttemptAuthorization();
+    const { authorization: runtimeAuthorization, runtime } = testRuntimeAuthorizationFixture(
+      attemptAuthorization,
+      "stop race",
+    );
+    const fetch = vi.fn<XRecentSearchFetch>();
+    const collector = createXRecentSearchCollectorForTesting({
+      attemptAuthorization,
+      bearerToken: TEST_BEARER_TOKEN,
+      fetch,
+      runtimeAuthorization,
+    });
+    runtime.stop({ requestId: randomUUID(), occurredAt: ACQUIRED_AT });
+
+    await expect(collector.collectRaw({ query: "stop race" })).rejects.toMatchObject({
+      code: "RUNTIME_AUTHORIZATION_FAILED",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("invokes fetch while the allowed runtime boundary event is still write-locked", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "rsi-x-dispatch-lock-"));
+    const path = join(directory, "runtime.sqlite");
+    const query = "locked dispatch";
+    const attemptAuthorization = testAttemptAuthorization();
+    const runtime = SqliteRuntimeController.open(
+      { path, openedAt: ACQUIRED_AT, processInstanceId: randomUUID() },
+      { clock: () => ACQUIRED_AT, monotonicClock: () => 1_000 },
+    );
+    try {
+      runtime.transition({
+        expectedMode: "STOPPED",
+        expectedRevision: 1,
+        occurredAt: ACQUIRED_AT,
+        requestId: randomUUID(),
+        targetMode: "RESEARCH",
+      });
+      const fingerprint = prepareRecentSearchRequest({ query }).fingerprint;
+      const runtimeAuthorization = runtime.requestBoundaryAuthorization({
+        actionId: xRecentSearchRuntimeActionId(attemptAuthorization.binding.attemptId, fingerprint),
+        authorizationId: randomUUID(),
+        boundary: "research_collection",
+      });
+      let headVisibleAtFetch: number | undefined;
+      const fetch = vi.fn<XRecentSearchFetch>(async () => {
+        const observer = new DatabaseSync(path, { readOnly: true });
+        try {
+          headVisibleAtFetch = (
+            observer
+              .prepare("SELECT head_sequence FROM rsi_event_store_metadata WHERE singleton = 1")
+              .get() as { head_sequence: number }
+          ).head_sequence;
+        } finally {
+          observer.close();
+        }
+        return jsonResponse();
+      });
+      const collector = createXRecentSearchCollectorForTesting({
+        attemptAuthorization,
+        bearerToken: TEST_BEARER_TOKEN,
+        fetch,
+        now: FIXED_CLOCK,
+        runtimeAuthorization,
+      });
+
+      const raw = await collector.collectRaw({ query });
+      raw.destroy();
+      expect(fetch).toHaveBeenCalledOnce();
+      // Startup STOP + RESEARCH transition are committed. The allowed boundary
+      // event is appended but deliberately uncommitted when fetch is invoked.
+      expect(headVisibleAtFetch).toBe(2);
+      expect(runtime.getSnapshot().auditHead.sequence).toBe(3);
+    } finally {
+      runtime.close();
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("drains a launched response before reporting a post-dispatch runtime COMMIT failure", async () => {
+    const query = "commit failure after dispatch";
+    const attemptAuthorization = testAttemptAuthorization();
+    const { authorization: runtimeAuthorization, runtime } = testRuntimeAuthorizationFixture(
+      attemptAuthorization,
+      query,
+    );
+    let resolveResponse: ((response: Response) => void) | undefined;
+    const fetch = vi.fn<XRecentSearchFetch>(() => {
+      const response = new Promise<Response>((resolve) => {
+        resolveResponse = resolve;
+      });
+      // Closing the active runtime connection rolls back its boundary event;
+      // withExclusiveTransaction then fails COMMIT after fetch has launched.
+      runtime.close();
+      return response;
+    });
+    const collector = createXRecentSearchCollectorForTesting({
+      attemptAuthorization,
+      bearerToken: TEST_BEARER_TOKEN,
+      fetch,
+      now: FIXED_CLOCK,
+      runtimeAuthorization,
+    });
+
+    const collection = collector.collectRaw({ query });
+    let collectionSettled = false;
+    void collection.then(
+      () => {
+        collectionSettled = true;
+      },
+      () => {
+        collectionSettled = true;
+      },
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(resolveResponse).toBeTypeOf("function");
+    expect(collectionSettled).toBe(false);
+
+    resolveResponse?.(jsonResponse());
+    await expect(collection).rejects.toMatchObject({ code: "RUNTIME_AUTHORIZATION_FAILED" });
+    expect(collectionSettled).toBe(true);
+  });
+
   it("rejects underfunded or wrong-operation attempt authorizations", () => {
     expect(() =>
       createXRecentSearchCollector({
         attemptAuthorization: testAttemptAuthorization({ reservedAtomic: "1" }),
         bearerToken: TEST_BEARER_TOKEN,
-      }),
+      } as never),
     ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
     expect(() =>
       createXRecentSearchCollector({
@@ -154,7 +347,7 @@ describe("closed and pinned requests", () => {
           sourcePlane: "canonical_chain",
         }),
         bearerToken: TEST_BEARER_TOKEN,
-      }),
+      } as never),
     ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
   });
 });
@@ -181,7 +374,7 @@ describe("network trust-boundary handling", () => {
     vi.stubGlobal("Uint8Array", TrackingUint8Array);
     let raw: Awaited<ReturnType<ReturnType<typeof createLiveCollector>["collectRaw"]>> | undefined;
     try {
-      const collector = createLiveCollector({
+      const collector = createLiveCollector("wipe transient buffers", {
         bearerToken: TEST_BEARER_TOKEN,
         fetch: async () =>
           new Response(stream as unknown as ConstructorParameters<typeof Response>[0], {
@@ -207,7 +400,7 @@ describe("network trust-boundary handling", () => {
   });
 
   it("rejects malformed JSON only at the explicit parse boundary", async () => {
-    const collector = createLiveCollector({
+    const collector = createLiveCollector("malformed", {
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () => jsonResponse("{not-json"),
       now: FIXED_CLOCK,
@@ -227,7 +420,7 @@ describe("network trust-boundary handling", () => {
         controller.close();
       },
     });
-    const collector = createLiveCollector({
+    const collector = createLiveCollector("oversized", {
       bearerToken: TEST_BEARER_TOKEN,
       maxResponseBytes: 16,
       fetch: async () =>
@@ -244,7 +437,7 @@ describe("network trust-boundary handling", () => {
     ["shorter", "{}", "3"],
     ["longer", "{}", "1"],
   ])("rejects a body %s than its declared Content-Length", async (_label, body, declared) => {
-    const collector = createLiveCollector({
+    const collector = createLiveCollector("length mismatch", {
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () =>
         new Response(body, {
@@ -260,7 +453,7 @@ describe("network trust-boundary handling", () => {
   });
 
   it("requests identity encoding and rejects a compressed response before length comparison", async () => {
-    const collector = createLiveCollector({
+    const collector = createLiveCollector("compressed response", {
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async (request: Request) => {
         expect(request.headers.get("accept-encoding")).toBe("identity");
@@ -280,7 +473,7 @@ describe("network trust-boundary handling", () => {
   });
 
   it("rejects non-allowlisted JSON-like content types", async () => {
-    const collector = createLiveCollector({
+    const collector = createLiveCollector("wrong type", {
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () =>
         new Response(validResponseBytes(), {
@@ -293,7 +486,7 @@ describe("network trust-boundary handling", () => {
   });
 
   it("refuses redirects and non-200 statuses without consuming their bodies", async () => {
-    const redirectCollector = createLiveCollector({
+    const redirectCollector = createLiveCollector("redirect", {
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () =>
         new Response(null, { status: 302, headers: { location: "https://example.invalid" } }),
@@ -302,18 +495,95 @@ describe("network trust-boundary handling", () => {
       code: "REDIRECT_REFUSED",
     });
 
-    const statusCollector = createLiveCollector({
+    const statusFetch = vi.fn<XRecentSearchFetch>(
+      async () =>
+        new Response(TEST_BEARER_TOKEN, {
+          status: 429,
+          headers: {
+            "x-rate-limit-limit": "450",
+            "x-rate-limit-remaining": "0",
+            "x-rate-limit-reset": "1787685600",
+          },
+        }),
+    );
+    const statusCollector = createLiveCollector("rate limit", {
       bearerToken: TEST_BEARER_TOKEN,
-      fetch: async () => new Response(TEST_BEARER_TOKEN, { status: 429 }),
+      fetch: statusFetch,
     });
     await expect(statusCollector.collectRaw({ query: "rate limit" })).rejects.toMatchObject({
       code: "HTTP_STATUS",
-      details: { status: 429 },
+      details: {
+        status: 429,
+        rateLimit: { limit: 450, remaining: 0, resetAtUnixSeconds: 1787685600 },
+      },
     });
+    expect(statusFetch).toHaveBeenCalledOnce();
+  });
+
+  it("captures only strictly parsed rate-limit receipt metadata", async () => {
+    const collector = createLiveCollector("rate metadata", {
+      bearerToken: TEST_BEARER_TOKEN,
+      fetch: async () =>
+        jsonResponse(undefined, {
+          headers: {
+            "x-rate-limit-limit": "450",
+            "x-rate-limit-remaining": "449",
+            "x-rate-limit-reset": "1787685600",
+          },
+        }),
+    });
+
+    const raw = await collector.collectRaw({ query: "rate metadata" });
+    expect(raw.metadata.rateLimit).toEqual({
+      limit: 450,
+      remaining: 449,
+      resetAtUnixSeconds: 1787685600,
+    });
+    expect(Object.isFrozen(raw.metadata.rateLimit)).toBe(true);
+    const serialized = JSON.stringify(raw);
+    expect(serialized).not.toContain("x-rate-limit-");
+  });
+
+  it.each([
+    { "x-rate-limit-limit": "450" },
+    {
+      "x-rate-limit-limit": "450",
+      "x-rate-limit-remaining": "451",
+      "x-rate-limit-reset": "1787685600",
+    },
+    {
+      "x-rate-limit-limit": "450, 450",
+      "x-rate-limit-remaining": "449",
+      "x-rate-limit-reset": "1787685600",
+    },
+  ])("rejects incomplete or malformed rate-limit headers", async (headers) => {
+    const fetch = vi.fn<XRecentSearchFetch>(async () => jsonResponse(undefined, { headers }));
+    const collector = createLiveCollector("bad rate metadata", {
+      bearerToken: TEST_BEARER_TOKEN,
+      fetch,
+    });
+    await expect(collector.collectRaw({ query: "bad rate metadata" })).rejects.toMatchObject({
+      code: "INVALID_RATE_LIMIT_METADATA",
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("performs zero retries after a transient HTTP failure", async () => {
+    const fetch = vi.fn<XRecentSearchFetch>(async () => new Response(null, { status: 503 }));
+    const collector = createLiveCollector("no retries", {
+      bearerToken: TEST_BEARER_TOKEN,
+      fetch,
+    });
+
+    await expect(collector.collectRaw({ query: "no retries" })).rejects.toMatchObject({
+      code: "HTTP_STATUS",
+      details: { status: 503 },
+    });
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it("times out a transport that does not complete and redacts its eventual error", async () => {
-    const collector = createLiveCollector({
+    const collector = createLiveCollector("timeout", {
       bearerToken: TEST_BEARER_TOKEN,
       timeoutMs: 5,
       fetch: async (request: Request) =>
@@ -334,34 +604,40 @@ describe("network trust-boundary handling", () => {
   });
 
   it("supports caller abort without starting an already-aborted request", async () => {
-    const fetch = vi.fn<XRecentSearchFetch>();
-    const collector = createLiveCollector({ bearerToken: TEST_BEARER_TOKEN, fetch });
+    const fetch = vi.fn<XRecentSearchFetch>(async () => jsonResponse());
+    const collector = createLiveCollector("abort", { bearerToken: TEST_BEARER_TOKEN, fetch });
     const controller = new AbortController();
     controller.abort();
     await expect(
       collector.collectRaw({ query: "abort" }, { signal: controller.signal }),
     ).rejects.toMatchObject({ code: "ABORTED" });
     expect(fetch).not.toHaveBeenCalled();
+
+    const raw = await collector.collectRaw({ query: "abort" });
+    expect(fetch).toHaveBeenCalledOnce();
+    raw.destroy();
   });
 
-  it("permits exactly one network dispatch per reserved attempt", async () => {
+  it("permits exactly one runtime-authorized network dispatch per canary", async () => {
     const fetch = vi.fn<XRecentSearchFetch>(async () => jsonResponse());
-    const collector = createLiveCollector({ bearerToken: TEST_BEARER_TOKEN, fetch });
+    const collector = createLiveCollector("first authorized request", {
+      bearerToken: TEST_BEARER_TOKEN,
+      fetch,
+    });
 
     await collector.collectRaw({ query: "first authorized request" });
     await expect(
       collector.collectRaw({ query: "second unauthorized request" }),
-    ).rejects.toMatchObject({ code: "ATTEMPT_AUTHORIZATION_FAILED" });
+    ).rejects.toMatchObject({ code: "RUNTIME_AUTHORIZATION_FAILED" });
 
     expect(fetch).toHaveBeenCalledOnce();
   });
 
   it("fails closed when the clock moves backward during a request", async () => {
-    const instants = [new Date("2026-08-11T19:20:22.000Z"), new Date("2026-08-11T19:20:21.000Z")];
-    const collector = createLiveCollector({
+    const collector = createLiveCollector("clock regression", {
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () => jsonResponse(),
-      now: () => instants.shift() ?? new Date("2026-08-11T19:20:21.000Z"),
+      now: () => new Date("2026-08-25T19:20:21.000Z"),
     });
 
     await expect(collector.collectRaw({ query: "clock regression" })).rejects.toMatchObject({
@@ -370,7 +646,7 @@ describe("network trust-boundary handling", () => {
   });
 
   it("does not retain a transport error that contains the credential", async () => {
-    const collector = createLiveCollector({
+    const collector = createLiveCollector("failure", {
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () => {
         throw new Error(`request failed with Authorization: Bearer ${TEST_BEARER_TOKEN}`);
@@ -385,7 +661,7 @@ describe("network trust-boundary handling", () => {
 
   it("rejects credential material in query fields before it can enter a URL or cassette", async () => {
     const fetch = vi.fn<XRecentSearchFetch>();
-    const collector = createLiveCollector({
+    const collector = createLiveCollector("test query", {
       bearerToken: TEST_BEARER_TOKEN,
       fetch,
     });
@@ -396,7 +672,7 @@ describe("network trust-boundary handling", () => {
   });
 
   it("refuses to quarantine or record a body that echoes the Bearer Token", async () => {
-    const collector = createLiveCollector({
+    const collector = createLiveCollector("echo", {
       bearerToken: TEST_BEARER_TOKEN,
       fetch: async () => jsonResponse(JSON.stringify({ leaked: TEST_BEARER_TOKEN })),
     });

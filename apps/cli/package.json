@@ -6,17 +6,22 @@
   "scripts": {
     "ingestion": "tsx src/ingestion.ts",
     "operator": "tsx src/operator.ts",
+    "operator:x-canary": "tsx src/x-canary-operator.ts",
     "pipeline": "tsx src/pipeline.ts",
     "start": "tsx src/index.ts"
   },
   "dependencies": {
     "@rsi/checkpoints": "workspace:*",
+    "@rsi/capture-registry": "workspace:*",
+    "@rsi/credential-host": "workspace:*",
     "@rsi/domain": "workspace:*",
     "@rsi/ingestion": "workspace:*",
     "@rsi/operator": "workspace:*",
+    "@rsi/operations": "workspace:*",
     "@rsi/pipeline": "workspace:*",
     "@rsi/policy": "workspace:*",
     "@rsi/research-ledger": "workspace:*",
+    "@rsi/read-canary": "workspace:*",
     "@rsi/runtime": "workspace:*",
     "@rsi/store": "workspace:*",
     "@rsi/vault": "workspace:*",

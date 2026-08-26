@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
   },
   "dependencies": {
-    "@rsi/operations": "workspace:*"
+    "@rsi/operations": "workspace:*",
+    "@rsi/runtime": "workspace:*"
   },
   "scripts": {
     "test": "vitest run",

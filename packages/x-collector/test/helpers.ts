@@ -6,17 +6,21 @@ import {
   type ResearchOperation,
   type SourcePlane,
 } from "@rsi/operations";
+import { SqliteRuntimeController, type RuntimeBoundaryAuthorization } from "@rsi/runtime";
 import { afterAll } from "vitest";
 
-import { createXRecentSearchCollector, type XRecentSearchFetch } from "../src/index.js";
+import { prepareRecentSearchRequest, xRecentSearchRuntimeActionId } from "../src/index.js";
+import { createXRecentSearchCollectorForTesting, type XRecentSearchFetch } from "../src/testing.js";
 
 export const TEST_BEARER_TOKEN = "test-bearer-token-never-persist-0123456789";
-export const ACQUIRED_AT = "2026-08-11T19:20:21.123Z";
+export const ACQUIRED_AT = "2026-08-25T19:20:21.123Z";
 export const FIXED_CLOCK = (): Date => new Date(ACQUIRED_AT);
 const authorizationStores: SqliteOperationsStore[] = [];
+const runtimeControllers: SqliteRuntimeController[] = [];
 
 afterAll(() => {
   for (const store of authorizationStores.splice(0)) store.close();
+  for (const runtime of runtimeControllers.splice(0)) runtime.close();
 });
 
 export function testAttemptAuthorization(
@@ -26,47 +30,94 @@ export function testAttemptAuthorization(
     sourcePlane?: SourcePlane;
   }> = {},
 ): NetworkAttemptAuthorization {
-  const store = new SqliteOperationsStore({ path: ":memory:", stateKey: randomBytes(32) });
+  const store = new SqliteOperationsStore(
+    { path: ":memory:", stateKey: randomBytes(32) },
+    { clock: () => ACQUIRED_AT, monotonicClock: () => 1_000 },
+  );
   authorizationStores.push(store);
   const budgetId = randomUUID();
   const permit = SqliteOperationsStore.createAttemptPermit();
   store.createBudget({
     budgetId,
-    createdAt: "2026-08-11T19:00:00.000Z",
+    createdAt: "2026-08-25T19:00:00.000Z",
     currency: "USD_MICRO",
-    endsAt: "2026-08-11T21:00:00.000Z",
-    maxAtomic: "150000",
+    endsAt: "2026-08-25T21:00:00.000Z",
+    maxAtomic: "50000",
     maxAttempts: 1,
     profile: "canary",
-    startsAt: "2026-08-11T19:00:00.000Z",
+    startsAt: "2026-08-25T19:00:00.000Z",
   });
   store.reserveAttempt({
     attemptId: permit.attemptId,
-    authorizationExpiresAt: "2026-08-11T21:00:00.000Z",
+    authorizationExpiresAt: "2026-08-25T19:20:51.123Z",
     budgetId,
-    createdAt: "2026-08-11T19:00:00.000Z",
+    createdAt: "2026-08-25T19:00:00.000Z",
     idempotencyKey: `test:${permit.attemptId}`,
     lane: "official",
     operation: options.operation ?? "x.recent-search.v1",
     permitToken: permit.token,
-    reservedAtomic: options.reservedAtomic ?? "150000",
+    reservedAtomic: options.reservedAtomic ?? "50000",
     sessionId: randomUUID(),
     sourcePlane: options.sourcePlane ?? "social",
   });
   return store.createNetworkAttemptAuthorization(permit);
 }
 
+export function testRuntimeAuthorization(
+  attemptAuthorization: NetworkAttemptAuthorization,
+  query: string,
+): RuntimeBoundaryAuthorization<"research_collection"> {
+  return testRuntimeAuthorizationFixture(attemptAuthorization, query).authorization;
+}
+
+export function testRuntimeAuthorizationFixture(
+  attemptAuthorization: NetworkAttemptAuthorization,
+  query: string,
+): Readonly<{
+  authorization: RuntimeBoundaryAuthorization<"research_collection">;
+  runtime: SqliteRuntimeController;
+}> {
+  const runtime = SqliteRuntimeController.open(
+    {
+      path: ":memory:",
+      openedAt: ACQUIRED_AT,
+      processInstanceId: randomUUID(),
+    },
+    { clock: () => ACQUIRED_AT, monotonicClock: () => 1_000 },
+  );
+  runtimeControllers.push(runtime);
+  runtime.transition({
+    expectedMode: "STOPPED",
+    expectedRevision: 1,
+    occurredAt: ACQUIRED_AT,
+    requestId: randomUUID(),
+    targetMode: "RESEARCH",
+  });
+  const fingerprint = prepareRecentSearchRequest({ query }).fingerprint;
+  const authorization = runtime.requestBoundaryAuthorization({
+    actionId: xRecentSearchRuntimeActionId(attemptAuthorization.binding.attemptId, fingerprint),
+    authorizationId: randomUUID(),
+    boundary: "research_collection",
+  });
+  return Object.freeze({ authorization, runtime });
+}
+
+export function testLiveAuthorizations(query: string): Readonly<{
+  attemptAuthorization: NetworkAttemptAuthorization;
+  runtimeAuthorization: RuntimeBoundaryAuthorization<"research_collection">;
+}> {
+  const attemptAuthorization = testAttemptAuthorization();
+  return Object.freeze({
+    attemptAuthorization,
+    runtimeAuthorization: testRuntimeAuthorization(attemptAuthorization, query),
+  });
+}
+
 export function validResponseObject(): {
   data: Array<{
     id: string;
     text: string;
-    author_id: string;
-    created_at: string;
-    edit_history_post_ids: string[];
   }>;
-  includes: {
-    users: Array<{ id: string; name: string; username: string; created_at: string }>;
-  };
   meta: {
     result_count: number;
     newest_id: string;
@@ -79,34 +130,12 @@ export function validResponseObject(): {
       {
         id: "1900000000000000002",
         text: "A fictional second post for an offline fixture.",
-        author_id: "2244994945",
-        created_at: "2026-08-11T18:02:03.000Z",
-        edit_history_post_ids: ["1899999999999999999", "1900000000000000002"],
       },
       {
         id: "1900000000000000001",
         text: "A fictional first post for an offline fixture.",
-        author_id: "783214",
-        created_at: "2026-08-11T17:02:03Z",
-        edit_history_post_ids: ["1900000000000000001"],
       },
     ],
-    includes: {
-      users: [
-        {
-          id: "2244994945",
-          name: "Fictional Developer",
-          username: "fictional_dev",
-          created_at: "2013-12-14T04:35:55.000Z",
-        },
-        {
-          id: "783214",
-          name: "Fictional Account",
-          username: "fictional_x",
-          created_at: "2007-02-20T14:35:54Z",
-        },
-      ],
-    },
     meta: {
       result_count: 2,
       newest_id: "1900000000000000002",
@@ -131,10 +160,11 @@ export function jsonResponse(
 
 export async function quarantineObject(value: unknown) {
   const fetch: XRecentSearchFetch = async () => jsonResponse(JSON.stringify(value));
-  return createXRecentSearchCollector({
-    attemptAuthorization: testAttemptAuthorization(),
+  const authorizations = testLiveAuthorizations("fictional evidence");
+  return createXRecentSearchCollectorForTesting({
+    ...authorizations,
     bearerToken: TEST_BEARER_TOKEN,
     fetch,
     now: FIXED_CLOCK,
-  }).collectRaw({ query: "fictional evidence", maxResults: 10 });
+  }).collectRaw({ query: "fictional evidence" });
 }
