@@ -14,6 +14,9 @@ const FIXTURE_ENTRY = fileURLToPath(
   new URL("./fixtures/x-canary-operator-process-fixture.ts", import.meta.url),
 );
 const PRODUCTION_ENTRY = fileURLToPath(new URL("../src/x-canary-operator.ts", import.meta.url));
+const CLAIM_BACKFILL_ENTRY = fileURLToPath(
+  new URL("../src/x-canary-claim-backfill.ts", import.meta.url),
+);
 
 interface StartupReceipt {
   readonly executionEnabled: false;
@@ -55,6 +58,9 @@ function waitForLine(
 }
 
 function waitForExit(child: ChildProcessWithoutNullStreams): Promise<number | null> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(child.exitCode);
+  }
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("operator shutdown timed out")), 10_000);
     child.once("error", reject);
@@ -177,49 +183,105 @@ describe("Stage 1 CLI/operator process", () => {
     reopened.close();
   });
 
-  it("boots the production entry fail-closed without reading a secret value", async () => {
-    directory = await mkdtemp(join(tmpdir(), "rsi-x-canary-production-process-"));
-    const runtimePath = join(directory, "runtime.sqlite");
-    const researchPath = join(directory, "research.sqlite");
+  it("refuses an unreviewed production runtime before host startup", async () => {
     let stderr = "";
+    let stdout = "";
+    child = spawn(process.execPath, [TSX_CLI, PRODUCTION_ENTRY], {
+      cwd: ROOT,
+      env: { ...process.env, npm_config_user_agent: "pnpm/0.0.0" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+
+    expect(await waitForExit(child)).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toBe(
+      "RSI live canary startup refused because the exact production runtime is unavailable.\n",
+    );
+  });
+
+  it("redacts rejected production options before runtime or host startup", async () => {
+    let stderr = "";
+    let stdout = "";
+    const sensitiveOverride = "/Users/example/private/canary.sqlite";
+    child = spawn(process.execPath, [TSX_CLI, PRODUCTION_ENTRY, "--db", sensitiveOverride], {
+      cwd: ROOT,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+
+    expect(await waitForExit(child)).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("RSI X canary startup was refused.\n");
+    expect(stderr).not.toContain(sensitiveOverride);
+    expect(stderr).not.toContain(" at ");
+  });
+
+  it("refuses marker backfill on an unreviewed runtime without touching Keychain", async () => {
+    let stderr = "";
+    let stdout = "";
     child = spawn(
       process.execPath,
-      [
-        TSX_CLI,
-        PRODUCTION_ENTRY,
-        "--db",
-        runtimePath,
-        "--research-db",
-        researchPath,
-        "--port",
-        "0",
-      ],
-      { cwd: ROOT, env: process.env, stdio: ["pipe", "pipe", "pipe"] },
+      [TSX_CLI, CLAIM_BACKFILL_ENTRY, "--typed-plan-id-acknowledgement", "x-nft-market-pulse-v1"],
+      {
+        cwd: ROOT,
+        env: { ...process.env, npm_config_user_agent: "pnpm/0.0.0" },
+        stdio: ["pipe", "pipe", "pipe"],
+      },
     );
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    const startup = (await waitForLine(
-      child,
-      (value) =>
-        typeof value === "object" &&
-        value !== null &&
-        (value as { mode?: unknown }).mode === "stage1-x-read-canary",
-    )) as { origin: string; runtimeMode: string; financialAuthority: boolean };
-    expect(startup).toMatchObject({ financialAuthority: false, runtimeMode: "STOPPED" });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
 
-    const canary = await fetch(`${startup.origin}/api/read-canary`);
-    const body = (await canary.json()) as {
-      readCanary: { credentialStatus: string; status: string };
-    };
-    expect(canary.status).toBe(200);
-    expect(["configured", "missing", "unknown"]).toContain(body.readCanary.credentialStatus);
-    expect(body.readCanary.status).not.toBe("running");
+    expect(await waitForExit(child)).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toBe(
+      "RSI live canary startup refused because the exact production runtime is unavailable.\n",
+    );
+  });
 
-    const exited = waitForExit(child);
-    child.kill("SIGTERM");
-    expect(await exited).toBe(0);
-    expect(stderr).toBe("");
+  it("redacts rejected marker-backfill options before runtime or Keychain", async () => {
+    let stderr = "";
+    let stdout = "";
+    const sensitiveOverride = "/Users/example/private/receipt.sqlite";
+    child = spawn(process.execPath, [TSX_CLI, CLAIM_BACKFILL_ENTRY, "--db", sensitiveOverride], {
+      cwd: ROOT,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+
+    expect(await waitForExit(child)).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("RSI X one-shot marker backfill was refused.\n");
+    expect(stderr).not.toContain(sensitiveOverride);
+    expect(stderr).not.toContain(" at ");
   });
 });

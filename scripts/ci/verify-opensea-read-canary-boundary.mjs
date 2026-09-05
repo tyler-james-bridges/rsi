@@ -27,6 +27,11 @@ const CONTROLLER_SCHEMA_FILE = "packages/read-canary/src/opensea-schemas.ts";
 const CONTROLLER_CONSTANTS_FILE = "packages/read-canary/src/opensea-constants.ts";
 const CREDENTIAL_ENTRY_FILE = "packages/credential-host/src/opensea-trending.ts";
 const CREDENTIAL_FILE = "packages/credential-host/src/opensea-trending-keychain.ts";
+const ONE_SHOT_CLAIM_FILE = "packages/credential-host/src/one-shot-claim-keychain.ts";
+const ONE_SHOT_CLAIM_ENTRY_FILE = "packages/credential-host/src/one-shot-claim.ts";
+const PRODUCTION_CONFIG_FILE = "apps/cli/src/production-canary-config.ts";
+const PRODUCTION_RUNTIME_FILE = "apps/cli/src/production-runtime.ts";
+const OPERATOR_OPTIONS_FILE = "apps/cli/src/opensea-canary-operator-options.ts";
 const OPERATOR_HOST_FILE = "apps/cli/src/opensea-canary-operator-host.ts";
 const OPERATOR_HOST_CORE_FILE = "apps/cli/src/opensea-canary-operator-host-core.ts";
 const OPERATOR_SERVER_FILE = "apps/operator/src/opensea-server.ts";
@@ -43,6 +48,7 @@ const REVIEWED_DASHBOARD_JS_SHA256 =
 const REQUIRED_IMPORTS = Object.freeze([
   "@rsi/capture-registry",
   "@rsi/credential-host/opensea-trending",
+  "@rsi/credential-host/one-shot-claim",
   "@rsi/ingestion/capture-storage-recovery",
   "@rsi/ingestion/opensea-trending",
   "@rsi/operations",
@@ -68,6 +74,8 @@ const REVIEWED_PREFIXES = Object.freeze([
 const REVIEWED_EXACT_FILES = new Set([
   ENTRY,
   "apps/cli/src/opensea-canary-operator-options.ts",
+  PRODUCTION_CONFIG_FILE,
+  PRODUCTION_RUNTIME_FILE,
   OPERATOR_HOST_FILE,
   OPERATOR_HOST_CORE_FILE,
   "apps/operator/src/opensea.ts",
@@ -78,6 +86,8 @@ const REVIEWED_EXACT_FILES = new Set([
   "apps/operator/src/runtime-types.ts",
   CREDENTIAL_ENTRY_FILE,
   CREDENTIAL_FILE,
+  ONE_SHOT_CLAIM_ENTRY_FILE,
+  ONE_SHOT_CLAIM_FILE,
   CAPTURE_STORAGE_RECOVERY_FILE,
   INGESTION_FILE,
   CONTROLLER_FILE,
@@ -174,8 +184,10 @@ const SAFE_EXTERNAL_MODULES = new Set(["zod"]);
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 const REVIEWED_PROCESS_PROPERTIES = new Map([
   [ENTRY, new Set(["argv", "exitCode", "once", "stderr"])],
+  [PRODUCTION_RUNTIME_FILE, new Set(["env", "versions"])],
   [OPERATOR_HOST_CORE_FILE, new Set(["geteuid"])],
   [CREDENTIAL_FILE, new Set(["platform"])],
+  [ONE_SHOT_CLAIM_FILE, new Set(["platform"])],
   ["packages/capture-registry/src/sqlite-capture-registry.ts", new Set(["geteuid"])],
   ["packages/vault/src/snapshot-vault.ts", new Set(["geteuid"])],
 ]);
@@ -691,7 +703,10 @@ function classifySpecifier(specifier, relativeFile, names) {
       : `${specifier} capability beyond the exact loopback server surface`;
   }
   if (FORBIDDEN_PROCESS_MODULES.has(specifier)) {
-    if (specifier === "node:child_process" && relativeFile === CREDENTIAL_FILE) {
+    if (
+      specifier === "node:child_process" &&
+      (relativeFile === CREDENTIAL_FILE || relativeFile === ONE_SHOT_CLAIM_FILE)
+    ) {
       const imported = [...new Set(names)].sort();
       return imported.length === 1 && imported[0] === "execFile"
         ? undefined
@@ -747,7 +762,14 @@ function inspectGraph(root, packages) {
       violations.push(`${relativeFile} cannot be parsed: ${error.message}`);
       continue;
     }
-    for (const violation of analysis.violations) violations.push(`${relativeFile} ${violation}`);
+    for (const violation of analysis.violations) {
+      if (
+        relativeFile !== PRODUCTION_RUNTIME_FILE ||
+        violation !== "references ambient process.env"
+      ) {
+        violations.push(`${relativeFile} ${violation}`);
+      }
+    }
     const allowedProcess = REVIEWED_PROCESS_PROPERTIES.get(relativeFile);
     const unreviewedProcess = analysis.processProperties.filter(
       (property) => allowedProcess === undefined || !allowedProcess.has(property),
@@ -1020,10 +1042,11 @@ function verifyCollectorBoundary(root, graph, violations) {
       dispatch < attempt ||
       countMatches(collect, /runtimeCollectionAuthorization\.consumeAndDispatch\s*\(/gu) !== 1 ||
       countMatches(collect, /attemptAuthorization\.consume\s*\(\)/gu) !== 1 ||
-      countMatches(collect, /executeNetworkRequest\s*\(/gu) !== 1
+      countMatches(collect, /executeNetworkRequest\s*\(/gu) !== 1 ||
+      countMatches(collector, /fetchImplementation\s*\(\s*request\s*\)/gu) !== 1
     ) {
       violations.push(
-        `${COLLECTOR_FILE} must consume genuine runtime and operations authority exactly once before dispatch`,
+        `${COLLECTOR_FILE} must consume genuine runtime and operations authority exactly once before its only transport invocation`,
       );
     }
     const requestRequirements = [
@@ -1598,6 +1621,15 @@ function verifyCredentialAndOperatorBoundary(root, graph, violations) {
         `${OPERATOR_HOST_FILE} must expose only the option-free production Keychain starter`,
       );
     }
+    if (
+      !/from\s+"@rsi\/credential-host\/one-shot-claim"/u.test(host) ||
+      countMatches(host, /createDarwinOpenSeaOneShotClaimHost\s*\(\s*\)/gu) !== 1 ||
+      /createDarwin(?:X|BaseRpc)OneShotClaimHost\s*\(\s*\)/u.test(host)
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_FILE} must use only the option-free OpenSea one-shot claim host`,
+      );
+    }
   }
   if (core !== undefined) {
     const liveStart = core.indexOf("async #runWithKeychain(");
@@ -1622,6 +1654,9 @@ function verifyCredentialAndOperatorBoundary(root, graph, violations) {
       !/from\s+"@rsi\/ingestion\/capture-storage-recovery"/u.test(core) ||
       !/withSecrets\s*\(/u.test(core) ||
       !/withStorageSecrets\s*\(/u.test(core) ||
+      !/await\s+this\.claimHost\.claim\(\)\s*;[\s\S]{0,120}?return\s+this\.credentialHost\.withSecrets/u.test(
+        liveRecovery,
+      ) ||
       !/apiKey:\s*secrets\.apiKey/u.test(core) ||
       countMatches(core, /await\s+recoverCaptureStorage\s*\(/gu) !== 2 ||
       liveStorageRepair < 0 ||
@@ -1631,6 +1666,18 @@ function verifyCredentialAndOperatorBoundary(root, graph, violations) {
     ) {
       violations.push(
         `${OPERATOR_HOST_CORE_FILE} must repair capture storage before both live and restart canary recovery while isolating Keychain authority`,
+      );
+    }
+    if (
+      countMatches(core, /this\.claimHost\.claim\(\)/gu) !== 1 ||
+      countMatches(core, /this\.claimHost\.status\(\)/gu) !== 1 ||
+      /claimHost/u.test(storageRecovery) ||
+      !/projection\.lastReceipt\s*!==\s*null\s*&&\s*\(await\s+this\.claimHost\.status\(\)\)\s*!==\s*"present"/u.test(
+        core,
+      )
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_CORE_FILE} must claim before API-key access and require a value-free marker check for completed receipts`,
       );
     }
     const passiveProjectionStart = core.indexOf("getOpenSeaReadCanaryProjection():");
@@ -1720,6 +1767,87 @@ function verifyCredentialAndOperatorBoundary(root, graph, violations) {
   }
 }
 
+function verifyProductionLaunchBoundary(root, graph, violations) {
+  const options = requireSource(root, OPERATOR_OPTIONS_FILE, graph, violations);
+  const entry = requireSource(root, ENTRY, graph, violations);
+  const host = requireSource(root, OPERATOR_HOST_FILE, graph, violations);
+  requireSource(root, PRODUCTION_CONFIG_FILE, graph, violations);
+  requireSource(root, PRODUCTION_RUNTIME_FILE, graph, violations);
+
+  if (options !== undefined) {
+    if (
+      !/return\s+productionOpenSeaCanaryHostOptions\(\)/u.test(options) ||
+      !/argument\s*===\s*"--help"\s*\|\|\s*argument\s*===\s*"-h"/u.test(options) ||
+      !/throw\s+new\s+Error\("OpenSea canary production options are fixed"\)/u.test(options) ||
+      /["']--(?:db|research-db|port)["']/u.test(options) ||
+      /\b(?:cwd|env|homedir)\s*\(/u.test(options) ||
+      /\bprocess\b/u.test(options)
+    ) {
+      violations.push(
+        `${OPERATOR_OPTIONS_FILE} must reject all production path and port overrides`,
+      );
+    }
+  }
+
+  if (entry !== undefined) {
+    const parseOptions = entry.indexOf("parseOpenSeaCanaryOperatorOptions(process.argv.slice(2))");
+    const runtimeCheck = entry.indexOf("assertActiveProductionRuntime();");
+    const hostStart = entry.indexOf("await startOpenSeaCanaryOperator(options)");
+    const startupFailure = entry.indexOf(
+      "process.stderr.write(STARTUP_FAILURE_MESSAGE)",
+      hostStart,
+    );
+    if (
+      parseOptions < 0 ||
+      runtimeCheck < 0 ||
+      hostStart < 0 ||
+      parseOptions > runtimeCheck ||
+      runtimeCheck > hostStart ||
+      startupFailure < hostStart ||
+      countMatches(entry, /assertActiveProductionRuntime\s*\(\s*\)/gu) !== 1 ||
+      !/STARTUP_FAILURE_MESSAGE\s*=\s*"RSI OpenSea canary startup was refused\.\\n"\s+as\s+const/u.test(
+        entry,
+      ) ||
+      countMatches(entry, /process\.stderr\.write\(STARTUP_FAILURE_MESSAGE\)/gu) !== 2 ||
+      !/try\s*\{[\s\S]{0,300}?options\s*=\s*parseOpenSeaCanaryOperatorOptions\(process\.argv\.slice\(2\)\)[\s\S]{0,180}?catch\s*\{[\s\S]{0,100}?process\.stderr\.write\(STARTUP_FAILURE_MESSAGE\)[\s\S]{0,100}?process\.exitCode\s*=\s*1/u.test(
+        entry,
+      ) ||
+      !/try\s*\{[\s\S]{0,180}?const\s+operator\s*=\s*await\s+startOpenSeaCanaryOperator\(options\)[\s\S]{0,2600}?catch\s*\{[\s\S]{0,100}?process\.stderr\.write\(STARTUP_FAILURE_MESSAGE\)[\s\S]{0,100}?process\.exitCode\s*=\s*1/u.test(
+        entry,
+      ) ||
+      !/catch\s*\{[\s\S]{0,180}?process\.stderr\.write\(PRODUCTION_RUNTIME_FAILURE_MESSAGE\)[\s\S]{0,120}?process\.exitCode\s*=\s*1/u.test(
+        entry,
+      )
+    ) {
+      violations.push(
+        `${ENTRY} must sanitize option, runtime, and host startup failures before emitting output`,
+      );
+    }
+  }
+
+  if (host !== undefined) {
+    const runtimeCheck = host.indexOf("assertActiveProductionRuntime();");
+    const canonicalOptions = host.indexOf("productionOpenSeaCanaryHostOptions();");
+    const keychain = host.indexOf("new DarwinOpenSeaTrendingKeychain()");
+    const claimHost = host.indexOf("createDarwinOpenSeaOneShotClaimHost()");
+    const dispatch = host.indexOf("return startOpenSeaCanaryOperatorWithHost(");
+    if (
+      runtimeCheck < 0 ||
+      canonicalOptions < runtimeCheck ||
+      keychain < canonicalOptions ||
+      claimHost < canonicalOptions ||
+      dispatch < canonicalOptions ||
+      countMatches(host, /assertActiveProductionRuntime\s*\(\s*\)/gu) !== 1 ||
+      !/options\.databasePath\s*!==\s*productionOptions\.databasePath/u.test(host) ||
+      !/options\.port\s*!==\s*productionOptions\.port/u.test(host)
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_FILE} must reject injected production paths and ports before Keychain access`,
+      );
+    }
+  }
+}
+
 export function verifyOpenSeaReadCanaryBoundary(options = {}) {
   const root = realpathSync(options.root ?? DEFAULT_ROOT);
   const violations = [];
@@ -1743,6 +1871,7 @@ export function verifyOpenSeaReadCanaryBoundary(options = {}) {
   verifyControllerBoundary(root, graph, violations);
   verifyDashboardBoundary(root, graph, violations);
   verifyCredentialAndOperatorBoundary(root, graph, violations);
+  verifyProductionLaunchBoundary(root, graph, violations);
   const unique = [...new Set(violations)].sort();
   if (unique.length > 0) throw new OpenSeaReadCanaryVerificationFailure(unique);
   return Object.freeze({

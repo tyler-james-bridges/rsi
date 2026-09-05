@@ -10,12 +10,12 @@ import {
 } from "./common.js";
 
 /**
- * Contract reviewed against the official OpenSea API v2 OpenAPI description on 2026-08-25.
+ * Contract reviewed against the official OpenSea API v2 OpenAPI description on 2026-09-05.
  * Bump this version only after a deliberate review of an upstream contract change.
  */
 export const OPENSEA_TRENDING_CONTRACT_VERSION =
-  "opensea-api-v2-collections-trending.2026-08-25.one-day-base-ten-v1" as const;
-export const OPENSEA_TRENDING_CONTRACT_REVIEW_DATE = "2026-08-25" as const;
+  "opensea-api-v2-collections-trending.2026-09-05.one-day-base-ten-v1" as const;
+export const OPENSEA_TRENDING_CONTRACT_REVIEW_DATE = "2026-09-05" as const;
 export const OPENSEA_TRENDING_ORIGIN = "https://api.opensea.io" as const;
 export const OPENSEA_TRENDING_PATH = "/api/v2/collections/trending" as const;
 export const OPENSEA_TRENDING_QUERY = "timeframe=one_day&chains=base&limit=10" as const;
@@ -48,9 +48,11 @@ const ContractSchema = z.strictObject({
 });
 
 /**
- * Exact documented CollectionResponse wire shape. Text, URLs, usernames, feature flags, and the
- * pagination cursor are admitted only so the provider response can be validated; none cross the
- * trusted projection boundary.
+ * RSI's intentionally stricter acceptance policy over the documented CollectionResponse fields.
+ * OpenSea does not publish RSI's value, length, count, uniqueness, or Base-only-contract bounds.
+ * Text, URLs, usernames, feature flags, and the pagination cursor are admitted only so the
+ * provider response can be checked against that local policy; none cross the trusted projection
+ * boundary.
  */
 const CollectionResponseSchema = z.strictObject({
   banner_image_url: DiscardedUrlSchema.optional(),
@@ -134,8 +136,9 @@ export function prepareOpenSeaTrendingRequest(): Readonly<OpenSeaTrendingRequest
 }
 
 /**
- * Validate the exact reviewed wire response and return only collection identity. Provider text,
- * URLs, flags, and pagination material remain quarantined and are never included in the result.
+ * Validate the provider response against RSI's reviewed, intentionally stricter acceptance policy
+ * and return only collection identity. Provider text, URLs, flags, and pagination material remain
+ * quarantined and are never included in the result.
  */
 export function parseOpenSeaTrendingResponse(
   bytes: unknown,

@@ -1,5 +1,8 @@
 import { DarwinXReadCanaryKeychain } from "@rsi/credential-host";
+import { createDarwinXOneShotClaimHost } from "@rsi/credential-host/one-shot-claim";
 
+import { productionXCanaryHostOptions } from "./production-canary-config.js";
+import { assertActiveProductionRuntime } from "./production-runtime.js";
 import {
   startXCanaryOperatorWithHost,
   type RunningXCanaryOperator,
@@ -15,5 +18,18 @@ export type {
 export async function startXCanaryOperator(
   options: StartXCanaryOperatorOptions,
 ): Promise<RunningXCanaryOperator> {
-  return startXCanaryOperatorWithHost(options, new DarwinXReadCanaryKeychain());
+  assertActiveProductionRuntime();
+  const productionOptions = productionXCanaryHostOptions();
+  if (
+    options.databasePath !== productionOptions.databasePath ||
+    options.researchDatabasePath !== productionOptions.researchDatabasePath ||
+    options.port !== productionOptions.port
+  ) {
+    throw new TypeError("X canary production options are fixed");
+  }
+  return startXCanaryOperatorWithHost(
+    productionOptions,
+    new DarwinXReadCanaryKeychain(),
+    createDarwinXOneShotClaimHost(),
+  );
 }

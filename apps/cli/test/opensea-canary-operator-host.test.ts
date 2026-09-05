@@ -10,6 +10,11 @@ import {
   createDarwinOpenSeaTrendingKeychainForTesting,
   type OpenSeaTrendingCredentialCommandRequest,
 } from "@rsi/credential-host/opensea-trending-testing";
+import type { DarwinOneShotClaimHost } from "@rsi/credential-host/one-shot-claim";
+import {
+  createDarwinOneShotClaimHostForTesting,
+  type OneShotClaimCommandRequest,
+} from "@rsi/credential-host/one-shot-claim-testing";
 import { getOpenSeaReadCanaryPlan } from "@rsi/read-canary/opensea";
 import { SqliteRuntimeController } from "@rsi/runtime";
 import { SnapshotVault } from "@rsi/vault";
@@ -65,6 +70,24 @@ function credentialHost(requests: OpenSeaTrendingCredentialCommandRequest[]) {
   });
 }
 
+function claimHost(
+  requests?: OneShotClaimCommandRequest[],
+  exitCode: number | null = 0,
+): DarwinOneShotClaimHost {
+  return createDarwinOneShotClaimHostForTesting("openSea", {
+    executor: vi.fn(async (request) => {
+      requests?.push(request);
+      return {
+        exitCode,
+        stdout: new Uint8Array(),
+        stderr: new Uint8Array(),
+        timedOut: false,
+      };
+    }),
+    platform: "darwin",
+  });
+}
+
 function controlHeaders(origin: string): Record<string, string> {
   return {
     "content-type": "application/json",
@@ -109,6 +132,7 @@ describe("OpenSea canary operator host", () => {
 
     await expect(
       startOpenSeaCanaryOperatorForTesting({
+        claimHost: claimHost(),
         credentialHost: credentialHost(requests),
         databasePath: join(directory, "runtime.sqlite"),
         port: 0,
@@ -125,6 +149,7 @@ describe("OpenSea canary operator host", () => {
     const requests: OpenSeaTrendingCredentialCommandRequest[] = [];
 
     operator = await startOpenSeaCanaryOperatorForTesting({
+      claimHost: claimHost(),
       credentialHost: credentialHost(requests),
       databasePath: join(dataDirectory, "runtime.sqlite"),
       port: 0,
@@ -180,6 +205,7 @@ describe("OpenSea canary operator host", () => {
     });
     vi.stubGlobal("fetch", network);
     operator = await startOpenSeaCanaryOperatorForTesting({
+      claimHost: claimHost(),
       credentialHost: credentialHost(requests),
       databasePath: runtimePath,
       port: 0,
@@ -239,6 +265,7 @@ describe("OpenSea canary operator host", () => {
     });
 
     operator = await startOpenSeaCanaryOperatorForTesting({
+      claimHost: claimHost(),
       credentialHost: credentialHost(requests),
       databasePath: join(directory, "runtime.sqlite"),
       port: 0,
@@ -364,11 +391,71 @@ describe("OpenSea canary operator host", () => {
     expect(network).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["duplicate", 45],
+    ["unavailable", 1],
+  ] as const)(
+    "denies a %s permanent claim before API-key reads or egress",
+    async (_label, claimExitCode) => {
+      directory = await mkdtemp(join(tmpdir(), "rsi-opensea-host-claim-denial-"));
+      const credentialRequests: OpenSeaTrendingCredentialCommandRequest[] = [];
+      const claimRequests: OneShotClaimCommandRequest[] = [];
+      const nativeFetch = globalThis.fetch;
+      const network = vi.fn();
+      vi.stubGlobal("fetch", async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const url = input instanceof Request ? input.url : String(input);
+        if (new URL(url).hostname === "api.opensea.io") return network();
+        return nativeFetch(...args);
+      });
+      operator = await startOpenSeaCanaryOperatorForTesting({
+        claimHost: claimHost(claimRequests, claimExitCode),
+        credentialHost: credentialHost(credentialRequests),
+        databasePath: join(directory, "runtime.sqlite"),
+        port: 0,
+      });
+      const stopped = operator.runtime.getSnapshot();
+      const research = operator.runtime.transition({
+        expectedMode: stopped.mode,
+        expectedRevision: stopped.revision,
+        occurredAt: new Date().toISOString(),
+        requestId: randomUUID(),
+        targetMode: "RESEARCH",
+      });
+      const plan = getOpenSeaReadCanaryPlan();
+
+      const response = await fetch(`${operator.origin}/api/opensea-read-canary/run`, {
+        body: JSON.stringify({
+          schemaVersion: 1,
+          planId: plan.planId,
+          expectedRuntimeRevision: research.revision,
+          requestId: randomUUID(),
+          typedPlanIdAcknowledgement: plan.planId,
+          oneRequestAcknowledgement: true,
+          nonPaymentReadAcknowledgement: true,
+          ledgerReserveUsdMicrosAcknowledgement: plan.ledgerReserveUsdMicros,
+        }),
+        headers: controlHeaders(operator.origin),
+        method: "POST",
+      });
+
+      expect(response.status).toBe(500);
+      expect(claimRequests).toHaveLength(1);
+      expect(
+        credentialRequests.filter(
+          (request) => request.args[4] === SERVICES[0] && request.args.at(-1) === "-w",
+        ),
+      ).toEqual([]);
+      expect(network).not.toHaveBeenCalled();
+    },
+  );
+
   it("persists STOP before bounding a half-open local control request", async () => {
     directory = await mkdtemp(join(tmpdir(), "rsi-opensea-host-half-open-"));
     const runtimePath = join(directory, "runtime.sqlite");
     const requests: OpenSeaTrendingCredentialCommandRequest[] = [];
     operator = await startOpenSeaCanaryOperatorForTesting({
+      claimHost: claimHost(),
       credentialHost: credentialHost(requests),
       databasePath: runtimePath,
       port: 0,

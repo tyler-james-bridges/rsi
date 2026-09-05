@@ -9,6 +9,10 @@ import {
   type DarwinOpenSeaTrendingKeychain,
   type OpenSeaTrendingCredentialStatus,
 } from "@rsi/credential-host/opensea-trending";
+import {
+  isDarwinOneShotClaimHost,
+  type DarwinOneShotClaimHost,
+} from "@rsi/credential-host/one-shot-claim";
 import { recoverCaptureStorage } from "@rsi/ingestion/capture-storage-recovery";
 import {
   createRuntimeOperatorControls,
@@ -175,12 +179,16 @@ class KeychainOpenSeaReadCanaryProvider implements OperatorOpenSeaReadCanaryProv
 
   constructor(
     private readonly credentialHost: DarwinOpenSeaTrendingKeychain,
+    private readonly claimHost: DarwinOneShotClaimHost,
     private readonly eventStore: SqliteEventStore,
     private readonly paths: Readonly<OpenSeaCanaryOperatorPaths>,
     private readonly runtime: SqliteRuntimeController,
   ) {
     if (!isDarwinOpenSeaTrendingKeychain(credentialHost)) {
       throw new TypeError("An authentic OpenSea macOS Keychain boundary is required");
+    }
+    if (!isDarwinOneShotClaimHost(claimHost)) {
+      throw new TypeError("An authentic OpenSea one-shot claim boundary is required");
     }
   }
 
@@ -233,6 +241,12 @@ class KeychainOpenSeaReadCanaryProvider implements OperatorOpenSeaReadCanaryProv
 
   async initialize(): Promise<void> {
     await this.#recoverInterruptedIfPossible();
+    const projection = readOpenSeaReadCanaryProjection(this.eventStore, "unknown");
+    if (projection.lastReceipt !== null && (await this.claimHost.status()) !== "present") {
+      throw new OpenSeaReadCanaryConflictError(
+        "The completed OpenSea canary requires its permanent one-shot marker",
+      );
+    }
   }
 
   async #executeAfterRecovery(
@@ -259,6 +273,7 @@ class KeychainOpenSeaReadCanaryProvider implements OperatorOpenSeaReadCanaryProv
   async #runWithKeychain(
     command: Readonly<OpenSeaReadCanaryRunCommand>,
   ): Promise<Readonly<OpenSeaReadCanaryReceiptV1>> {
+    await this.claimHost.claim();
     return this.credentialHost.withSecrets(async (secrets) => {
       if (this.#closing) {
         throw new OpenSeaReadCanaryConflictError("The OpenSea canary provider is closing");
@@ -406,6 +421,7 @@ function requestedPaths(options: StartOpenSeaCanaryOperatorOptions): OpenSeaCana
 export async function startOpenSeaCanaryOperatorWithHost(
   options: StartOpenSeaCanaryOperatorOptions,
   credentialHost: DarwinOpenSeaTrendingKeychain,
+  claimHost: DarwinOneShotClaimHost,
 ): Promise<RunningOpenSeaCanaryOperator> {
   const requested = requestedPaths(options);
   const identities = await Promise.all([
@@ -424,6 +440,9 @@ export async function startOpenSeaCanaryOperatorWithHost(
   });
   if (!isDarwinOpenSeaTrendingKeychain(credentialHost)) {
     throw new TypeError("An authentic OpenSea macOS Keychain boundary is required");
+  }
+  if (!isDarwinOneShotClaimHost(claimHost)) {
+    throw new TypeError("An authentic OpenSea one-shot claim boundary is required");
   }
 
   const runtime = SqliteRuntimeController.open({
@@ -461,7 +480,13 @@ export async function startOpenSeaCanaryOperatorWithHost(
 
   try {
     eventStore = new SqliteEventStore(paths.eventStore);
-    canary = new KeychainOpenSeaReadCanaryProvider(credentialHost, eventStore, paths, runtime);
+    canary = new KeychainOpenSeaReadCanaryProvider(
+      credentialHost,
+      claimHost,
+      eventStore,
+      paths,
+      runtime,
+    );
     await canary.initialize();
     operator = await startOpenSeaOperatorServer(new OpenSeaRuntimeEventProvider(runtime), {
       port: options.port,

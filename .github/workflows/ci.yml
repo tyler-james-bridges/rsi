@@ -57,6 +57,9 @@ jobs:
       - name: Prove the OpenSea read canary has only its reviewed read authority
         run: pnpm ci:opensea
 
+      - name: Prove the Base RPC read canary has only its reviewed read authority
+        run: pnpm ci:base-rpc
+
       - name: Verify format, types, and tests
         run: pnpm check
 

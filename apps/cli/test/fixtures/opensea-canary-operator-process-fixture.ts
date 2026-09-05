@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import { createDarwinOpenSeaTrendingKeychainForTesting } from "@rsi/credential-host/opensea-trending-testing";
+import { createDarwinOneShotClaimHostForTesting } from "@rsi/credential-host/one-shot-claim-testing";
 
 import { startOpenSeaCanaryOperatorForTesting } from "../../src/opensea-canary-operator-host.testing.js";
 
@@ -84,6 +85,15 @@ globalThis.fetch = async (request): Promise<Response> => {
 };
 
 const operator = await startOpenSeaCanaryOperatorForTesting({
+  claimHost: createDarwinOneShotClaimHostForTesting("openSea", {
+    executor: async () => ({
+      exitCode: 0,
+      stdout: new Uint8Array(),
+      stderr: new Uint8Array(),
+      timedOut: false,
+    }),
+    platform: "darwin",
+  }),
   credentialHost,
   databasePath: runtimePath,
   port: 0,

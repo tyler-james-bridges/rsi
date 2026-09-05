@@ -143,6 +143,17 @@ quarantined synthetic contracts rather than live provider evidence. This work ha
 accessed, or used an OpenSea API key; whether the owner already has one is unknown. No OpenSea
 provider request has been made or authorized.
 
+The Base RPC canary is a third isolated Stage 1 path for exactly one `POST` to the fixed Alchemy
+Base Mainnet `/v2` endpoint. Its body is one exact JSON-RPC batch containing only `eth_chainId` and
+`eth_getBlockByNumber("finalized", false)`; the API key is carried only in the Authorization header.
+The collector has no URL, method, parameter, retry, redirect, fallback, payment, WebSocket, wallet,
+signer, or transaction input. A strict parser accepts only chain ID `8453` and a reviewed fresh
+block shape, labels the result `providerReportedFinalized`, and makes no independent finality claim.
+Encrypt-first ingestion keeps block identifiers in private authenticated storage and deletes the
+raw capture before the public content-free receipt. Its recovery production subpath has a statically
+collectorless, credentialless, egress-free dependency graph and cannot replay the request. This
+work has not read an Alchemy credential or sent a Base RPC request.
+
 The operator service binds to IPv4 loopback, serves fixed same-origin dashboard assets, and rejects
 foreign Host/Origin values. Stage 0 status and research routes validate exact content-free schemas
 instead of trying to sanitize arbitrary provider objects. Runtime controls accept only closed
@@ -152,8 +163,17 @@ separate compatibility surface. Providers must never place credentials or hostil
 operator response objects.
 
 Each optional read-canary operator adds only provider-specific closed status and run routes. It
-never sends the X query, OpenSea collection identifiers, or either credential to the browser. STOP
+never sends the X query, OpenSea collection identifiers, Base block identifiers, or any credential
+to the browser. STOP
 synchronously requests cancellation before the runtime persists `STOPPED`; a request already
 dispatched cannot be unsent, but a capture whose guarded completion loses to STOP is not published
-as accepted. The X and OpenSea production graphs are checked independently and remain signer-blind,
+as accepted. The X, OpenSea, and Base RPC production graphs are checked independently and remain signer-blind,
 with no policy approval, wallet, payment, transaction, adapter, deployment, or publication path.
+
+Production canary entrypoints use code-owned canonical state paths and a fixed loopback port; CLI
+arguments cannot select alternate databases or listeners to mint another singleton. A separate
+Keychain marker is claimed before a new provider credential is revealed and is never updated or
+deleted by RSI. Completed receipts require marker presence at startup. The historical X canary
+predates this marker, so its narrowly scoped migration command verifies the canonical receipt and
+exact typed plan acknowledgement before creating only the missing marker; it has no provider
+credential or transport path and remains an explicitly authorized operational action.

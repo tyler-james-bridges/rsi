@@ -27,6 +27,7 @@ const REQUIRED_PACKAGES = Object.freeze([
 
 const REVIEWED_WORKSPACE_IMPORTS = new Set([
   ...REQUIRED_PACKAGES,
+  "@rsi/credential-host/one-shot-claim",
   // These two signer-blind support surfaces are already part of the operator and
   // research-ledger implementation. The executable @rsi/domain root is denied.
   "@rsi/domain/proposals",
@@ -50,7 +51,9 @@ const ALLOWED_SOURCE_PREFIXES = Object.freeze([
 
 const EXACT_ALLOWED_SOURCE_FILES = new Set([
   ENTRY,
-  "apps/cli/src/operator-options.ts",
+  "apps/cli/src/production-canary-config.ts",
+  "apps/cli/src/production-runtime.ts",
+  "apps/cli/src/x-canary-operator-options.ts",
   "apps/cli/src/x-canary-operator-host.ts",
   "apps/cli/src/x-canary-operator-host-core.ts",
   "packages/domain/src/proposals.ts",
@@ -190,9 +193,11 @@ const SPECIAL_PLATFORM_IMPORTS = new Map([
 ]);
 const REVIEWED_PROCESS_PROPERTIES = new Map([
   ["apps/cli/src/x-canary-operator.ts", new Set(["argv", "exitCode", "once", "stderr"])],
+  ["apps/cli/src/production-runtime.ts", new Set(["env", "versions"])],
   ["apps/cli/src/x-canary-operator-host-core.ts", new Set(["geteuid"])],
   ["packages/capture-registry/src/sqlite-capture-registry.ts", new Set(["geteuid"])],
   ["packages/credential-host/src/x-read-canary-keychain.ts", new Set(["platform"])],
+  ["packages/credential-host/src/one-shot-claim-keychain.ts", new Set(["platform"])],
   ["packages/vault/src/snapshot-vault.ts", new Set(["geteuid"])],
 ]);
 const FORBIDDEN_NETWORK_MODULES = new Set([
@@ -319,7 +324,16 @@ const RUNTIME_CONTROLLER_FILE = "packages/runtime/src/sqlite-runtime-controller.
 const OPERATIONS_STORE_FILE = "packages/operations/src/sqlite-operations-store.ts";
 const KEYCHAIN_FILE = "packages/credential-host/src/x-read-canary-keychain.ts";
 const KEYCHAIN_INDEX_FILE = "packages/credential-host/src/index.ts";
+const ONE_SHOT_CLAIM_FILE = "packages/credential-host/src/one-shot-claim-keychain.ts";
+const ONE_SHOT_CLAIM_ENTRY_FILE = "packages/credential-host/src/one-shot-claim.ts";
 const OPERATOR_SERVER_FILE = "apps/operator/src/server.ts";
+const PRODUCTION_CONFIG_FILE = "apps/cli/src/production-canary-config.ts";
+const PRODUCTION_RUNTIME_FILE = "apps/cli/src/production-runtime.ts";
+const OPERATOR_OPTIONS_FILE = "apps/cli/src/x-canary-operator-options.ts";
+const CLAIM_BACKFILL_ENTRY_FILE = "apps/cli/src/x-canary-claim-backfill.ts";
+const CLAIM_BACKFILL_HOST_FILE = "apps/cli/src/x-canary-claim-backfill-host.ts";
+const CLAIM_BACKFILL_CORE_FILE = "apps/cli/src/x-canary-claim-backfill-core.ts";
+const CLAIM_BACKFILL_OPTIONS_FILE = "apps/cli/src/x-canary-claim-backfill-options.ts";
 const OPERATOR_HOST_FILE = "apps/cli/src/x-canary-operator-host.ts";
 const OPERATOR_HOST_CORE_FILE = "apps/cli/src/x-canary-operator-host-core.ts";
 const EXACT_X_ENDPOINT = "https://api.x.com/2/tweets/search/recent";
@@ -939,6 +953,12 @@ function classifyModuleSpecifier(specifier, relativeFile, names) {
     }
     return undefined;
   }
+  if (specifier === "node:child_process" && relativeFile === ONE_SHOT_CLAIM_FILE) {
+    const actualNames = [...new Set(names)].sort();
+    return actualNames.length === 1 && actualNames[0] === "execFile"
+      ? undefined
+      : "node:child_process imports must be exactly execFile";
+  }
   const special = SPECIAL_PLATFORM_IMPORTS.get(specifier);
   if (special !== undefined) {
     const actualNames = [...new Set(names)].sort();
@@ -1019,7 +1039,7 @@ function inspectGraph(root, packages) {
         `${relativeFile} references dynamic code: ${analysis.forbiddenDynamic.join(", ")}`,
       );
     }
-    if (analysis.forbiddenEnvironment.length > 0) {
+    if (analysis.forbiddenEnvironment.length > 0 && relativeFile !== PRODUCTION_RUNTIME_FILE) {
       violations.push(
         `${relativeFile} references an unapproved ambient credential source: ${analysis.forbiddenEnvironment.join(", ")}`,
       );
@@ -1721,6 +1741,92 @@ function verifyKeychainBoundary(root, graph, violations) {
   }
 }
 
+function verifyOneShotClaimBoundary(root, graph, violations) {
+  const entry = requireSource(root, ONE_SHOT_CLAIM_ENTRY_FILE, graph.files, violations);
+  const source = requireSource(root, ONE_SHOT_CLAIM_FILE, graph.files, violations);
+  if (entry !== undefined) {
+    const productionExports = [
+      "DarwinOneShotClaimHost",
+      "OneShotClaimHostError",
+      "OneShotClaimStatus",
+      "createDarwinBaseRpcOneShotClaimHost",
+      "createDarwinOpenSeaOneShotClaimHost",
+      "createDarwinXOneShotClaimHost",
+      "isDarwinOneShotClaimHost",
+    ];
+    if (
+      !hasExactNames(staticExportNames(entry), productionExports) ||
+      /ForTesting|TestingOptions|CommandExecutor|CommandRequest|CommandResult/u.test(entry) ||
+      countMatches(entry, /from\s+"\.\/one-shot-claim-keychain\.js"/gu) !== 1
+    ) {
+      violations.push(
+        `${ONE_SHOT_CLAIM_ENTRY_FILE} must keep claim-host injection behind its testing subpath`,
+      );
+    }
+  }
+  if (source === undefined) return;
+  const requirements = [
+    [/import\s*\{\s*execFile\s*\}\s*from\s*"node:child_process"/u, "exact execFile import"],
+    [/SECURITY\s*=\s*"\/usr\/bin\/security"\s+as\s+const/u, "fixed security executable"],
+    [/KEYCHAIN_ACCOUNT\s*=\s*"rsi-stage1-one-shot-claims"\s+as\s+const/u, "fixed account"],
+    [/MARKER_VALUE\s*=\s*"rsi-claimed-v1"\s+as\s+const/u, "fixed marker value"],
+    [/x:\s*"dev\.rsi\.canary\.one-shot\.x-nft-market-pulse-v1"/u, "fixed X marker service"],
+    [
+      /openSea:\s*"dev\.rsi\.canary\.one-shot\.opensea-base-trending-collections-v1"/u,
+      "fixed OpenSea marker service",
+    ],
+    [
+      /baseRpc:\s*"dev\.rsi\.canary\.one-shot\.base-mainnet-finalized-anchor-v1"/u,
+      "fixed Base RPC marker service",
+    ],
+    [/"add-generic-password"/u, "atomic create-only claim command"],
+    [/"find-generic-password"/u, "presence-only status command"],
+    [/DUPLICATE_ITEM_EXIT_CODE\s*=\s*45/u, "duplicate-item classification"],
+    [/ITEM_NOT_FOUND_EXIT_CODE\s*=\s*44/u, "missing-item classification"],
+    [/shell:\s*false/u, "shell-free execution"],
+  ];
+  for (const [pattern, label] of requirements) {
+    if (!pattern.test(source)) violations.push(`${ONE_SHOT_CLAIM_FILE} lacks ${label}`);
+  }
+  const claimCommand = namedFunctionSource(source, "command");
+  const statusCommand = namedFunctionSource(source, "statusCommand");
+  if (
+    claimCommand.length === 0 ||
+    !/"add-generic-password"[\s\S]{0,220}?"-a"[\s\S]{0,120}?KEYCHAIN_ACCOUNT[\s\S]{0,120}?"-s"[\s\S]{0,120}?SERVICES\[target\][\s\S]{0,120}?"-w"[\s\S]{0,120}?MARKER_VALUE/u.test(
+      claimCommand,
+    ) ||
+    statusCommand.length === 0 ||
+    !/"find-generic-password"[\s\S]{0,220}?"-a"[\s\S]{0,120}?KEYCHAIN_ACCOUNT[\s\S]{0,120}?"-s"[\s\S]{0,120}?SERVICES\[target\]/u.test(
+      statusCommand,
+    ) ||
+    /["']-w["']/u.test(statusCommand) ||
+    countMatches(source, /\bexecFile\s*\(/gu) !== 1 ||
+    countMatches(source, /["']add-generic-password["']/gu) !== 1 ||
+    countMatches(source, /["']find-generic-password["']/gu) !== 1 ||
+    /["'](?:-U|delete-generic-password|set-generic-password|reset-generic-password)["']/u.test(
+      source,
+    )
+  ) {
+    violations.push(
+      `${ONE_SHOT_CLAIM_FILE} must expose only create-once claims and value-free presence checks`,
+    );
+  }
+  for (const [factory, target] of [
+    ["createDarwinXOneShotClaimHost", "x"],
+    ["createDarwinOpenSeaOneShotClaimHost", "openSea"],
+    ["createDarwinBaseRpcOneShotClaimHost", "baseRpc"],
+  ]) {
+    const factorySource = namedFunctionSource(source, factory);
+    if (
+      factorySource.length === 0 ||
+      !/arguments\.length\s*!==\s*0/u.test(factorySource) ||
+      !new RegExp(`return\\s+productionHost\\("${target}"\\)`, "u").test(factorySource)
+    ) {
+      violations.push(`${ONE_SHOT_CLAIM_FILE} must keep ${factory} option-free and target-fixed`);
+    }
+  }
+}
+
 function verifyReadCanaryCompletionBoundary(root, graph, violations) {
   const controller = requireSource(root, READ_CANARY_CONTROLLER_FILE, graph.files, violations);
   const schemas = requireSource(root, READ_CANARY_SCHEMAS_FILE, graph.files, violations);
@@ -1934,6 +2040,297 @@ function verifyOperationsAttemptBoundary(root, graph, violations) {
   }
 }
 
+function verifyProductionLaunchBoundary(root, graph, violations) {
+  const config = requireSource(root, PRODUCTION_CONFIG_FILE, graph.files, violations);
+  const runtime = requireSource(root, PRODUCTION_RUNTIME_FILE, graph.files, violations);
+  const options = requireSource(root, OPERATOR_OPTIONS_FILE, graph.files, violations);
+  const entry = requireSource(root, ENTRY, graph.files, violations);
+  const host = requireSource(root, OPERATOR_HOST_FILE, graph.files, violations);
+
+  if (config !== undefined) {
+    const requirements = [
+      [/import\s+\{\s*resolve\s*\}\s+from\s+"node:path"/u, "reviewed path resolver"],
+      [
+        /CLI_PACKAGE_DIRECTORY\s*=\s*resolve\(import\.meta\.dirname,\s*"\.\."\)/u,
+        "module-anchored CLI directory",
+      ],
+      [
+        /PRODUCTION_DATA_DIRECTORY\s*=\s*resolve\(CLI_PACKAGE_DIRECTORY,\s*"\.local"\)/u,
+        "module-anchored data directory",
+      ],
+      [/PRODUCTION_CANARY_PORT\s*=\s*8_787\s+as\s+const/u, "fixed port 8787"],
+      [
+        /databasePath:\s*resolve\(PRODUCTION_DATA_DIRECTORY,\s*"rsi-runtime\.sqlite"\)/u,
+        "fixed X runtime database",
+      ],
+      [
+        /researchDatabasePath:\s*resolve\(PRODUCTION_DATA_DIRECTORY,\s*"rsi-research\.sqlite"\)/u,
+        "fixed X research database",
+      ],
+      [
+        /databasePath:\s*resolve\(PRODUCTION_DATA_DIRECTORY,\s*"rsi-opensea-canary-runtime\.sqlite"\)/u,
+        "fixed OpenSea runtime database",
+      ],
+    ];
+    for (const [pattern, label] of requirements) {
+      if (!pattern.test(config)) {
+        violations.push(`${PRODUCTION_CONFIG_FILE} lacks ${label}`);
+      }
+    }
+    if (/\b(?:cwd|env|homedir)\s*\(/u.test(config) || /\bprocess\b/u.test(config)) {
+      violations.push(
+        `${PRODUCTION_CONFIG_FILE} must derive production paths only from its module location`,
+      );
+    }
+  }
+
+  if (runtime !== undefined) {
+    const exactStart = runtime.indexOf("export function assertExactProductionRuntime(");
+    const activeStart = runtime.indexOf("export function assertActiveProductionRuntime(");
+    const exact =
+      exactStart < 0 || activeStart < 0 || activeStart <= exactStart
+        ? ""
+        : runtime.slice(exactStart, activeStart);
+    const active = activeStart < 0 ? "" : runtime.slice(activeStart);
+    const exactCode = exact.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/gu, "");
+    const requirements = [
+      [/PRODUCTION_NODE_VERSION\s*=\s*"24\.19\.0"\s+as\s+const/u, "exact Node pin"],
+      [/PRODUCTION_PNPM_VERSION\s*=\s*"11\.20\.0"\s+as\s+const/u, "exact pnpm pin"],
+      [/value\.nodeVersion\s*!==\s*PRODUCTION_NODE_VERSION/u, "pure Node identity comparison"],
+      [
+        /pnpmVersionFromUserAgent\(value\.packageManagerUserAgent\)\s*!==\s*PRODUCTION_PNPM_VERSION/u,
+        "pure pnpm identity comparison",
+      ],
+      [
+        /throw\s+new\s+Error\(PRODUCTION_RUNTIME_FAILURE_MESSAGE\.trim\(\)\)/u,
+        "sanitized fail-closed assertion",
+      ],
+    ];
+    for (const [pattern, label] of requirements) {
+      if (!pattern.test(runtime)) {
+        violations.push(`${PRODUCTION_RUNTIME_FILE} lacks ${label}`);
+      }
+    }
+    if (
+      exact.length === 0 ||
+      /\bprocess\b/u.test(exactCode) ||
+      active.length === 0 ||
+      !/nodeVersion:\s*process\.versions\.node/u.test(active) ||
+      !/packageManagerUserAgent:\s*process\.env\.npm_config_user_agent\s*\?\?\s*""/u.test(active) ||
+      !/assertExactProductionRuntime\s*\(\s*\{/u.test(active) ||
+      countMatches(runtime, /\bprocess\.versions\.node\b/gu) !== 1 ||
+      countMatches(runtime, /\bprocess\.env\.npm_config_user_agent\b/gu) !== 1
+    ) {
+      violations.push(
+        `${PRODUCTION_RUNTIME_FILE} must keep one exact ambient bridge into the pure runtime assertion`,
+      );
+    }
+  }
+
+  if (options !== undefined) {
+    if (
+      !/return\s+productionXCanaryHostOptions\(\)/u.test(options) ||
+      !/argument\s*===\s*"--help"\s*\|\|\s*argument\s*===\s*"-h"/u.test(options) ||
+      !/throw\s+new\s+Error\("X canary production options are fixed"\)/u.test(options) ||
+      /["']--(?:db|research-db|port)["']/u.test(options) ||
+      /\b(?:cwd|env|homedir)\s*\(/u.test(options) ||
+      /\bprocess\b/u.test(options)
+    ) {
+      violations.push(
+        `${OPERATOR_OPTIONS_FILE} must reject all production path and port overrides`,
+      );
+    }
+  }
+
+  if (entry !== undefined) {
+    const parseOptions = entry.indexOf("parseXCanaryOperatorOptions(process.argv.slice(2))");
+    const runtimeCheck = entry.indexOf("assertActiveProductionRuntime();");
+    const hostStart = entry.indexOf("await startXCanaryOperator(options)");
+    const startupFailure = entry.indexOf(
+      "process.stderr.write(STARTUP_FAILURE_MESSAGE)",
+      hostStart,
+    );
+    if (
+      parseOptions < 0 ||
+      runtimeCheck < 0 ||
+      hostStart < 0 ||
+      parseOptions > runtimeCheck ||
+      runtimeCheck > hostStart ||
+      startupFailure < hostStart ||
+      countMatches(entry, /assertActiveProductionRuntime\s*\(\s*\)/gu) !== 1 ||
+      !/STARTUP_FAILURE_MESSAGE\s*=\s*"RSI X canary startup was refused\.\\n"\s+as\s+const/u.test(
+        entry,
+      ) ||
+      countMatches(entry, /process\.stderr\.write\(STARTUP_FAILURE_MESSAGE\)/gu) !== 2 ||
+      !/try\s*\{[\s\S]{0,300}?options\s*=\s*parseXCanaryOperatorOptions\(process\.argv\.slice\(2\)\)[\s\S]{0,180}?catch\s*\{[\s\S]{0,100}?process\.stderr\.write\(STARTUP_FAILURE_MESSAGE\)[\s\S]{0,100}?process\.exitCode\s*=\s*1/u.test(
+        entry,
+      ) ||
+      !/try\s*\{[\s\S]{0,180}?const\s+operator\s*=\s*await\s+startXCanaryOperator\(options\)[\s\S]{0,2400}?catch\s*\{[\s\S]{0,100}?process\.stderr\.write\(STARTUP_FAILURE_MESSAGE\)[\s\S]{0,100}?process\.exitCode\s*=\s*1/u.test(
+        entry,
+      ) ||
+      !/catch\s*\{[\s\S]{0,180}?process\.stderr\.write\(PRODUCTION_RUNTIME_FAILURE_MESSAGE\)[\s\S]{0,120}?process\.exitCode\s*=\s*1/u.test(
+        entry,
+      ) ||
+      /\bpaths\s*:/u.test(entry)
+    ) {
+      violations.push(
+        `${ENTRY} must sanitize option, runtime, and host startup failures and keep startup output path-free`,
+      );
+    }
+  }
+
+  if (host !== undefined) {
+    const runtimeCheck = host.indexOf("assertActiveProductionRuntime();");
+    const canonicalOptions = host.indexOf("productionXCanaryHostOptions();");
+    const keychain = host.indexOf("new DarwinXReadCanaryKeychain()");
+    const claimHost = host.indexOf("createDarwinXOneShotClaimHost()");
+    const dispatch = host.indexOf("return startXCanaryOperatorWithHost(");
+    if (
+      runtimeCheck < 0 ||
+      canonicalOptions < runtimeCheck ||
+      keychain < canonicalOptions ||
+      claimHost < canonicalOptions ||
+      dispatch < canonicalOptions ||
+      countMatches(host, /assertActiveProductionRuntime\s*\(\s*\)/gu) !== 1 ||
+      !/options\.databasePath\s*!==\s*productionOptions\.databasePath/u.test(host) ||
+      !/options\.researchDatabasePath\s*!==\s*productionOptions\.researchDatabasePath/u.test(
+        host,
+      ) ||
+      !/options\.port\s*!==\s*productionOptions\.port/u.test(host)
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_FILE} must reject injected production paths and ports before Keychain access`,
+      );
+    }
+  }
+}
+
+function verifyXClaimBackfillBoundary(root, violations) {
+  const source = (relativeFile) => {
+    const path = resolveSourceFile(join(root, relativeFile));
+    if (path === undefined) {
+      violations.push(`required reviewed source ${relativeFile} is missing`);
+      return undefined;
+    }
+    return readFileSync(path, "utf8");
+  };
+  const entry = source(CLAIM_BACKFILL_ENTRY_FILE);
+  const host = source(CLAIM_BACKFILL_HOST_FILE);
+  const core = source(CLAIM_BACKFILL_CORE_FILE);
+  const options = source(CLAIM_BACKFILL_OPTIONS_FILE);
+  const config = source(PRODUCTION_CONFIG_FILE);
+
+  if (config !== undefined) {
+    if (
+      !/function\s+productionXCanaryEventStorePath\s*\(\s*\)[\s\S]{0,180}?return\s+resolve\(PRODUCTION_DATA_DIRECTORY,\s*"rsi-x-canary-events\.sqlite"\)/u.test(
+        config,
+      )
+    ) {
+      violations.push(
+        `${PRODUCTION_CONFIG_FILE} must own the canonical X receipt-store path for marker backfill`,
+      );
+    }
+  }
+  if (options !== undefined) {
+    if (
+      !/ACKNOWLEDGEMENT_FLAG\s*=\s*"--typed-plan-id-acknowledgement"\s+as\s+const/u.test(options) ||
+      !/normalized\[1\]\s*!==\s*X_READ_CANARY_PLAN_ID/u.test(options) ||
+      !/return\s+X_READ_CANARY_PLAN_ID/u.test(options) ||
+      /["']--(?:db|research-db|port)["']/u.test(options) ||
+      /\b(?:cwd|env|homedir)\s*\(/u.test(options)
+    ) {
+      violations.push(
+        `${CLAIM_BACKFILL_OPTIONS_FILE} must require only the exact published X plan acknowledgement`,
+      );
+    }
+  }
+  if (core !== undefined) {
+    const projection = core.indexOf('readXReadCanaryProjection(eventStore, "unknown")');
+    const claim = core.indexOf("await claimHost.claim();");
+    if (
+      projection < 0 ||
+      claim < projection ||
+      countMatches(core, /claimHost\.claim\s*\(\s*\)/gu) !== 1 ||
+      !/projection\.status\s*!==\s*"completed"/u.test(core) ||
+      !/projection\.lastReceipt\s*===\s*null/u.test(core) ||
+      !/projection\.lastReceipt\.planId\s*!==\s*X_READ_CANARY_PLAN_ID/u.test(core) ||
+      !/typedPlanIdAcknowledgement\s*!==\s*X_READ_CANARY_PLAN_ID/u.test(core) ||
+      /\b(?:fetch|withSecrets|bearerToken|apiKey|XReadCanaryController)\b/u.test(core)
+    ) {
+      violations.push(
+        `${CLAIM_BACKFILL_CORE_FILE} must validate the canonical completed receipt before its only marker claim`,
+      );
+    }
+  }
+  if (host !== undefined) {
+    const runtime = host.indexOf("assertActiveProductionRuntime();");
+    const path = host.indexOf("productionXCanaryEventStorePath();");
+    const inspect = host.indexOf("lstat(dirname(eventStorePath)");
+    const open = host.indexOf("new SqliteEventStore(eventStorePath)");
+    const invoke = host.indexOf("backfillXCanaryClaimWithHost(");
+    if (
+      runtime < 0 ||
+      path < runtime ||
+      inspect < path ||
+      open < inspect ||
+      invoke < open ||
+      countMatches(host, /createDarwinXOneShotClaimHost\s*\(\s*\)/gu) !== 1 ||
+      !/OWNER_ONLY_DIRECTORY_MODE\s*=\s*0o700n/u.test(host) ||
+      !/directoryEntry\.uid\s*!==\s*EFFECTIVE_USER_ID/u.test(host) ||
+      !/eventStoreEntry\.uid\s*!==\s*EFFECTIVE_USER_ID/u.test(host) ||
+      !/eventStore\.close\(\)/u.test(host) ||
+      /\b(?:fetch|withSecrets|bearerToken|apiKey|DarwinXReadCanaryKeychain)\b/u.test(host)
+    ) {
+      violations.push(
+        `${CLAIM_BACKFILL_HOST_FILE} must use only the canonical owner-controlled receipt store and fixed X marker host`,
+      );
+    }
+  }
+  if (entry !== undefined) {
+    const parse = entry.indexOf("parseXCanaryClaimBackfillAcknowledgement(process.argv.slice(2))");
+    const runtime = entry.indexOf("assertActiveProductionRuntime();");
+    const invoke = entry.indexOf("backfillXCanaryClaim(acknowledgement)");
+    if (
+      parse < 0 ||
+      runtime < 0 ||
+      runtime < parse ||
+      invoke < runtime ||
+      countMatches(entry, /assertActiveProductionRuntime\s*\(\s*\)/gu) !== 1 ||
+      !/process\.stderr\.write\(PRODUCTION_RUNTIME_FAILURE_MESSAGE\)/u.test(entry) ||
+      !/BACKFILL_FAILURE_MESSAGE\s*=\s*"RSI X one-shot marker backfill was refused\.\\n"\s+as\s+const/u.test(
+        entry,
+      ) ||
+      countMatches(entry, /process\.stderr\.write\(BACKFILL_FAILURE_MESSAGE\)/gu) !== 2 ||
+      !/try\s*\{[\s\S]{0,300}?acknowledgement\s*=\s*parseXCanaryClaimBackfillAcknowledgement\(process\.argv\.slice\(2\)\)[\s\S]{0,180}?catch\s*\{[\s\S]{0,100}?process\.stderr\.write\(BACKFILL_FAILURE_MESSAGE\)[\s\S]{0,100}?process\.exitCode\s*=\s*1/u.test(
+        entry,
+      ) ||
+      !/try\s*\{[\s\S]{0,180}?await\s+backfillXCanaryClaim\(acknowledgement\)[\s\S]{0,500}?catch\s*\{[\s\S]{0,100}?process\.stderr\.write\(BACKFILL_FAILURE_MESSAGE\)[\s\S]{0,100}?process\.exitCode\s*=\s*1/u.test(
+        entry,
+      ) ||
+      /\b(?:fetch|withSecrets|bearerToken|apiKey)\b/u.test(entry)
+    ) {
+      violations.push(
+        `${CLAIM_BACKFILL_ENTRY_FILE} must fail closed before marker backfill and emit only sanitized status`,
+      );
+    }
+  }
+
+  try {
+    const rootPackage = readJson(join(root, "package.json"), "package.json");
+    const cliPackage = readJson(join(root, "apps/cli/package.json"), "apps/cli/package.json");
+    if (
+      rootPackage.scripts?.["operator:x-canary-backfill-claim"] !==
+        "pnpm --filter @rsi/cli run operator:x-canary-backfill-claim --" ||
+      cliPackage.scripts?.["operator:x-canary-backfill-claim"] !==
+        "node ../../scripts/ci/assert-runtime.mjs && tsx src/x-canary-claim-backfill.ts"
+    ) {
+      violations.push("X marker backfill scripts must retain the exact runtime preflight");
+    }
+  } catch (error) {
+    violations.push(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function verifyOperatorHostBoundary(root, graph, violations) {
   const host = requireSource(root, OPERATOR_HOST_FILE, graph.files, violations);
   const core = requireSource(root, OPERATOR_HOST_CORE_FILE, graph.files, violations);
@@ -1949,12 +2346,12 @@ function verifyOperatorHostBoundary(root, graph, violations) {
       );
     }
     if (
-      !/export\s+async\s+function\s+startXCanaryOperatorWithHost\s*\([\s\S]{0,500}?options\s*:\s*StartXCanaryOperatorOptions\s*,[\s\S]{0,500}?credentialHost\s*:\s*DarwinXReadCanaryKeychain/u.test(
+      !/export\s+async\s+function\s+startXCanaryOperatorWithHost\s*\([\s\S]{0,500}?options\s*:\s*StartXCanaryOperatorOptions\s*,[\s\S]{0,500}?credentialHost\s*:\s*DarwinXReadCanaryKeychain\s*,[\s\S]{0,300}?claimHost\s*:\s*DarwinOneShotClaimHost/u.test(
         core,
       )
     ) {
       violations.push(
-        `${OPERATOR_HOST_CORE_FILE} must keep credential injection in its private two-argument host function`,
+        `${OPERATOR_HOST_CORE_FILE} must keep credential and claim injection in its private three-argument host function`,
       );
     }
     const optionsStart = core.search(
@@ -2005,6 +2402,9 @@ function verifyOperatorHostBoundary(root, graph, violations) {
       !/return\s+this\.credentialHost\.withSecrets\s*\(\s*async\s*\(\s*secrets\s*\)\s*=>\s*\{/u.test(
         live,
       ) ||
+      !/await\s+this\.claimHost\.claim\(\)\s*;[\s\S]{0,120}?return\s+this\.credentialHost\.withSecrets/u.test(
+        live,
+      ) ||
       !/await\s+this\.credentialHost\.withStorageSecrets\s*\(\s*async\s*\(\s*secrets\s*\)\s*=>\s*\{/u.test(
         recovery,
       ) ||
@@ -2026,6 +2426,18 @@ function verifyOperatorHostBoundary(root, graph, violations) {
     ) {
       violations.push(
         `${OPERATOR_HOST_CORE_FILE} must bind the live and recovery paths only to their exact Keychain secrets`,
+      );
+    }
+    if (
+      countMatches(core, /this\.claimHost\.claim\(\)/gu) !== 1 ||
+      countMatches(core, /this\.claimHost\.status\(\)/gu) !== 1 ||
+      /claimHost/u.test(recovery) ||
+      !/projection\.lastReceipt\s*!==\s*null\s*&&\s*\(await\s+this\.claimHost\.status\(\)\)\s*!==\s*"present"/u.test(
+        core,
+      )
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_CORE_FILE} must claim before live credentials and require a presence-only marker for completed receipts`,
       );
     }
 
@@ -2052,11 +2464,15 @@ function verifyOperatorHostBoundary(root, graph, violations) {
       [/\bDarwinXReadCanaryKeychain\b/u, "production Darwin Keychain binding"],
       [/new\s+DarwinXReadCanaryKeychain\s*\(\s*\)/u, "option-free production Keychain"],
       [
+        /createDarwinXOneShotClaimHost\s*\(\s*\)/u,
+        "option-free target-fixed production claim host",
+      ],
+      [
         /export\s+async\s+function\s+startXCanaryOperator\s*\(\s*options\s*:\s*StartXCanaryOperatorOptions\s*,?\s*\)\s*:\s*Promise<RunningXCanaryOperator>/u,
         "one-argument production starter",
       ],
       [
-        /startXCanaryOperatorWithHost\s*\(\s*options\s*,\s*(?:credentialHost|keychain|new\s+DarwinXReadCanaryKeychain\s*\(\s*\))\s*\)/u,
+        /startXCanaryOperatorWithHost\s*\(\s*(?:options|productionOptions)\s*,\s*(?:credentialHost|keychain|new\s+DarwinXReadCanaryKeychain\s*\(\s*\))\s*,\s*(?:claimHost|createDarwinXOneShotClaimHost\s*\(\s*\))\s*,?\s*\)/u,
         "private host dispatch",
       ],
     ];
@@ -2139,8 +2555,11 @@ export function verifyStage1ReadCanaryBoundary(options = {}) {
   verifyFetchBoundary(root, graph, violations);
   verifyXContract(root, graph, violations);
   verifyKeychainBoundary(root, graph, violations);
+  verifyOneShotClaimBoundary(root, graph, violations);
   verifyReadCanaryCompletionBoundary(root, graph, violations);
   verifyOperationsAttemptBoundary(root, graph, violations);
+  verifyProductionLaunchBoundary(root, graph, violations);
+  verifyXClaimBackfillBoundary(root, violations);
   verifyOperatorHostBoundary(root, graph, violations);
   verifyOriginAndBrowserBoundary(root, graph, violations);
 

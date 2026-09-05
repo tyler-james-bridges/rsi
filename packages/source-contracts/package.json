@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./base-rpc-anchor": "./src/base-rpc-anchor.ts",
     "./legacy-opensea-fixtures": "./src/opensea.ts",
     "./opensea-trending": "./src/opensea-trending.ts"
   },
@@ -17,6 +18,7 @@
     "zod": "^4.4.3"
   },
   "engines": {
-    "node": "24.x"
+    "node": "24.19.0",
+    "pnpm": "11.20.0"
   }
 }

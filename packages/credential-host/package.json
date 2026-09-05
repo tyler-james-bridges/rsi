@@ -7,13 +7,18 @@
     ".": "./src/index.ts",
     "./testing": "./src/testing.ts",
     "./opensea-trending": "./src/opensea-trending.ts",
-    "./opensea-trending-testing": "./src/opensea-trending-testing.ts"
+    "./opensea-trending-testing": "./src/opensea-trending-testing.ts",
+    "./base-rpc": "./src/base-rpc.ts",
+    "./base-rpc-testing": "./src/base-rpc-testing.ts",
+    "./one-shot-claim": "./src/one-shot-claim.ts",
+    "./one-shot-claim-testing": "./src/one-shot-claim-testing.ts"
   },
   "scripts": {
     "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "engines": {
-    "node": "24.x"
+    "node": "24.19.0",
+    "pnpm": "11.20.0"
   }
 }

@@ -14,6 +14,9 @@ const TSX_CLI = fileURLToPath(new URL("../../../node_modules/tsx/dist/cli.mjs", 
 const FIXTURE_ENTRY = fileURLToPath(
   new URL("./fixtures/opensea-canary-operator-process-fixture.ts", import.meta.url),
 );
+const PRODUCTION_ENTRY = fileURLToPath(
+  new URL("../src/opensea-canary-operator.ts", import.meta.url),
+);
 
 function waitForLine(
   child: ChildProcessWithoutNullStreams,
@@ -50,6 +53,9 @@ function waitForLine(
 }
 
 function waitForExit(child: ChildProcessWithoutNullStreams): Promise<number | null> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(child.exitCode);
+  }
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("OpenSea shutdown timed out")), 10_000);
     child.once("error", reject);
@@ -207,5 +213,54 @@ describe("OpenSea canary CLI process", () => {
       type: "runtime.stop.enforced.v1",
     });
     reopened.close();
+  });
+
+  it("refuses an unreviewed production runtime before host startup", async () => {
+    let stderr = "";
+    let stdout = "";
+    child = spawn(process.execPath, [TSX_CLI, PRODUCTION_ENTRY], {
+      cwd: ROOT,
+      env: { ...process.env, npm_config_user_agent: "pnpm/0.0.0" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+
+    expect(await waitForExit(child)).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toBe(
+      "RSI live canary startup refused because the exact production runtime is unavailable.\n",
+    );
+  });
+
+  it("redacts rejected production options before runtime or host startup", async () => {
+    let stderr = "";
+    let stdout = "";
+    const sensitiveOverride = "/Users/example/private/opensea.sqlite";
+    child = spawn(process.execPath, [TSX_CLI, PRODUCTION_ENTRY, "--db", sensitiveOverride], {
+      cwd: ROOT,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+
+    expect(await waitForExit(child)).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("RSI OpenSea canary startup was refused.\n");
+    expect(stderr).not.toContain(sensitiveOverride);
+    expect(stderr).not.toContain(" at ");
   });
 });

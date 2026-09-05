@@ -84,6 +84,45 @@ test("accepts the reviewed production OpenSea READ_CANARY graph", () => {
   assert.equal(result.status, "pass");
 });
 
+test("pins OpenSea production options and both pre-Keychain runtime guards", () => {
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-options.ts",
+      'if (argument === "--help" || argument === "-h") return null;',
+      'if (argument === "--port") return productionOpenSeaCanaryHostOptions();\n    if (argument === "--help" || argument === "-h") return null;',
+    );
+    expectFailure(root, /must reject all production path and port overrides/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator.ts",
+      "    assertActiveProductionRuntime();\n    runtimeVerified = true;",
+      "    runtimeVerified = true;",
+    );
+    expectFailure(root, /sanitize option, runtime, and host startup failures/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator.ts",
+      "    } catch {\n      process.stderr.write(STARTUP_FAILURE_MESSAGE);",
+      "    } catch (error) {\n      throw error;",
+    );
+    expectFailure(root, /sanitize option, runtime, and host startup failures/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host.ts",
+      "    options.port !== productionOptions.port",
+      "    false",
+    );
+    expectFailure(root, /reject injected production paths and ports before Keychain access/u);
+  });
+});
+
 test("rejects request, chain, retry, fetch-count, and payment mutations", () => {
   withFixture((root) => {
     replace(
@@ -342,6 +381,15 @@ test("pins genuine runtime and operations one-shot authorization before the only
       "\nvoid ({} as { reserveAttempt(): void }).reserveAttempt();\n",
     );
     expectFailure(root, /reserve exactly one OpenSea attempt/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "packages/opensea-collector/src/collector.ts",
+      "const fetchPromise = Promise.resolve(fetchImplementation(request));",
+      "const fetchPromise = Promise.resolve(fetchImplementation(request));\n    void fetchImplementation(request);",
+    );
+    expectFailure(root, /only transport invocation/u);
   });
 });
 
@@ -638,5 +686,41 @@ test("pins singleton, published plan ID, and production-only operator credential
       "\nvoid process.env.OPENSEA_API_KEY;\n",
     );
     expectFailure(root, /ambient process\.env/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host-core.ts",
+      "    await this.claimHost.claim();\n",
+      "    void this.claimHost;\n",
+    );
+    expectFailure(root, /claim before API-key access and require a value-free marker check/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host-core.ts",
+      '(await this.claimHost.status()) !== "present"',
+      '"missing" !== "present"',
+    );
+    expectFailure(root, /claim before API-key access and require a value-free marker check/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host.ts",
+      "    createDarwinOpenSeaOneShotClaimHost(),",
+      "    createDarwinXOneShotClaimHost(),",
+    );
+    expectFailure(root, /only the option-free OpenSea one-shot claim host/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "packages/credential-host/src/one-shot-claim-keychain.ts",
+      '      "add-generic-password",\n',
+      '      "add-generic-password",\n      "-U",\n',
+    );
+    expectFailure(root, /only create-once claims and value-free presence checks/u);
   });
 });

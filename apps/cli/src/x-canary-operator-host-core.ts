@@ -9,6 +9,10 @@ import {
   type DarwinXReadCanaryKeychain,
   type XReadCanaryCredentialStatus,
 } from "@rsi/credential-host";
+import {
+  isDarwinOneShotClaimHost,
+  type DarwinOneShotClaimHost,
+} from "@rsi/credential-host/one-shot-claim";
 import { recoverCaptureStorage } from "@rsi/ingestion";
 import {
   createRuntimeOperatorControls,
@@ -208,12 +212,16 @@ class KeychainReadCanaryProvider implements OperatorReadCanaryProvider {
 
   constructor(
     private readonly credentialHost: DarwinXReadCanaryKeychain,
+    private readonly claimHost: DarwinOneShotClaimHost,
     private readonly eventStore: SqliteEventStore,
     private readonly paths: Readonly<XCanaryOperatorPaths>,
     private readonly runtime: SqliteRuntimeController,
   ) {
     if (!isDarwinXReadCanaryKeychain(credentialHost)) {
       throw new TypeError("An authentic macOS Keychain boundary is required");
+    }
+    if (!isDarwinOneShotClaimHost(claimHost)) {
+      throw new TypeError("An authentic X one-shot claim boundary is required");
     }
   }
 
@@ -262,6 +270,12 @@ class KeychainReadCanaryProvider implements OperatorReadCanaryProvider {
 
   async initialize(): Promise<void> {
     await this.#recoverInterruptedIfPossible();
+    const projection = readXReadCanaryProjection(this.eventStore, "unknown");
+    if (projection.lastReceipt !== null && (await this.claimHost.status()) !== "present") {
+      throw new XReadCanaryConflictError(
+        "The completed X canary requires its permanent one-shot marker",
+      );
+    }
   }
 
   async #executeAfterRecovery(
@@ -288,6 +302,7 @@ class KeychainReadCanaryProvider implements OperatorReadCanaryProvider {
   async #runWithKeychain(
     command: Readonly<XReadCanaryRunCommand>,
   ): Promise<Readonly<XReadCanaryReceiptV1>> {
+    await this.claimHost.claim();
     return this.credentialHost.withSecrets(async (secrets) => {
       if (this.#closing) {
         throw new XReadCanaryConflictError("The X read canary provider is closing");
@@ -437,6 +452,7 @@ function requestedPaths(options: StartXCanaryOperatorOptions): XCanaryOperatorPa
 export async function startXCanaryOperatorWithHost(
   options: StartXCanaryOperatorOptions,
   credentialHost: DarwinXReadCanaryKeychain,
+  claimHost: DarwinOneShotClaimHost,
 ): Promise<RunningXCanaryOperator> {
   const requested = requestedPaths(options);
   const identities = await Promise.all([
@@ -457,6 +473,9 @@ export async function startXCanaryOperatorWithHost(
   });
   if (!isDarwinXReadCanaryKeychain(credentialHost)) {
     throw new TypeError("An authentic macOS Keychain boundary is required");
+  }
+  if (!isDarwinOneShotClaimHost(claimHost)) {
+    throw new TypeError("An authentic X one-shot claim boundary is required");
   }
 
   const runtime = SqliteRuntimeController.open({
@@ -500,7 +519,7 @@ export async function startXCanaryOperatorWithHost(
   try {
     research = SqliteResearchLedger.open(paths.research);
     eventStore = new SqliteEventStore(paths.eventStore);
-    canary = new KeychainReadCanaryProvider(credentialHost, eventStore, paths, runtime);
+    canary = new KeychainReadCanaryProvider(credentialHost, claimHost, eventStore, paths, runtime);
     await canary.initialize();
     const provider = new RuntimeOperatorSnapshotProvider(runtime, research);
     operator = await startOperatorServer(provider, {

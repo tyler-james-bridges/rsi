@@ -1,49 +1,24 @@
-export interface OpenSeaCanaryOperatorOptions {
-  readonly databasePath: string;
-  readonly port: number;
-}
-
-const DEFAULT_DATABASE_PATH = ".local/rsi-opensea-canary-runtime.sqlite";
+import {
+  productionOpenSeaCanaryHostOptions,
+  type ProductionOpenSeaCanaryHostOptions,
+} from "./production-canary-config.js";
 
 export function openSeaCanaryOperatorUsage(): string {
   return [
-    "Usage: pnpm operator:opensea-canary [--db PATH] [--port PORT]",
+    "Usage: pnpm operator:opensea-canary",
     "",
-    "Starts RSI's loopback-only OpenSea Base trending read canary.",
-    "Every process boot begins STOPPED; this command cannot pay, sign, order, or transact.",
+    "Starts RSI's loopback-only OpenSea Base trending read canary on its fixed port.",
+    "Runtime paths and port are code-owned; this command cannot pay, sign, order, or transact.",
   ].join("\n");
 }
 
 export function parseOpenSeaCanaryOperatorOptions(
   args: readonly string[],
-): OpenSeaCanaryOperatorOptions | null {
-  let databasePath = DEFAULT_DATABASE_PATH;
-  let port = 8_787;
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index];
+): Readonly<ProductionOpenSeaCanaryHostOptions> | null {
+  for (const argument of args) {
     if (argument === "--") continue;
     if (argument === "--help" || argument === "-h") return null;
-    if (argument === "--db") {
-      const value = args[index + 1];
-      if (value === undefined || value.length === 0) throw new Error("--db requires a path");
-      databasePath = value;
-      index += 1;
-      continue;
-    }
-    if (argument === "--port") {
-      const value = args[index + 1];
-      if (value === undefined || !/^\d{1,5}$/.test(value)) {
-        throw new Error("--port requires an integer from 0 through 65535");
-      }
-      port = Number(value);
-      if (port > 65_535) throw new Error("--port requires an integer from 0 through 65535");
-      index += 1;
-      continue;
-    }
-    throw new Error(`unknown argument: ${argument}`);
+    throw new Error("OpenSea canary production options are fixed");
   }
-  if (databasePath === ":memory:") {
-    throw new Error("The OpenSea canary requires durable storage");
-  }
-  return Object.freeze({ databasePath, port });
+  return productionOpenSeaCanaryHostOptions();
 }

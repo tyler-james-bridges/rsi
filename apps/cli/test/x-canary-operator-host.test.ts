@@ -10,6 +10,11 @@ import {
   type CredentialCommandExecutor,
   type CredentialCommandRequest,
 } from "@rsi/credential-host/testing";
+import type { DarwinOneShotClaimHost } from "@rsi/credential-host/one-shot-claim";
+import {
+  createDarwinOneShotClaimHostForTesting,
+  type OneShotClaimCommandRequest,
+} from "@rsi/credential-host/one-shot-claim-testing";
 import {
   X_READ_CANARY_PLAN_ID,
   X_READ_CANARY_PROVIDER_ID,
@@ -68,6 +73,24 @@ function credentialHost(requests?: CredentialCommandRequest[]): DarwinXReadCanar
   return createDarwinXReadCanaryKeychainForTesting({ executor, platform: "darwin" });
 }
 
+function claimHost(
+  requests?: OneShotClaimCommandRequest[],
+  exitCode: number | null = 0,
+): DarwinOneShotClaimHost {
+  return createDarwinOneShotClaimHostForTesting("x", {
+    executor: vi.fn(async (request) => {
+      requests?.push(request);
+      return {
+        exitCode,
+        stdout: new Uint8Array(),
+        stderr: new Uint8Array(),
+        timedOut: false,
+      };
+    }),
+    platform: "darwin",
+  });
+}
+
 function controlHeaders(origin: string): Record<string, string> {
   return {
     "content-type": "application/json",
@@ -91,6 +114,7 @@ describe("Stage 1 X canary operator host", () => {
 
     await expect(
       startXCanaryOperatorForTesting({
+        claimHost: claimHost(),
         credentialHost: credentialHost(requests),
         databasePath: join(directory, "runtime.sqlite"),
         port: 0,
@@ -106,6 +130,7 @@ describe("Stage 1 X canary operator host", () => {
     const dataDirectory = join(directory, "stage1");
 
     operator = await startXCanaryOperatorForTesting({
+      claimHost: claimHost(),
       credentialHost: credentialHost(),
       databasePath: join(dataDirectory, "runtime.sqlite"),
       port: 0,
@@ -139,6 +164,7 @@ describe("Stage 1 X canary operator host", () => {
       return nativeFetch(...args);
     });
     operator = await startXCanaryOperatorForTesting({
+      claimHost: claimHost(),
       credentialHost: credentialHost(),
       databasePath: join(directory, "runtime.sqlite"),
       port: 0,
@@ -214,6 +240,64 @@ describe("Stage 1 X canary operator host", () => {
     expect(repeat.status).toBe(409);
     expect(network).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["duplicate", 45],
+    ["unavailable", 1],
+  ] as const)(
+    "denies a %s permanent claim before provider credential reads or egress",
+    async (_label, claimExitCode) => {
+      directory = await mkdtemp(join(tmpdir(), "rsi-x-canary-host-claim-denial-"));
+      const credentialRequests: CredentialCommandRequest[] = [];
+      const claimRequests: OneShotClaimCommandRequest[] = [];
+      const network = vi.fn(async () => new Response(null, { status: 500 }));
+      const nativeFetch = globalThis.fetch;
+      vi.stubGlobal("fetch", async (...args: Parameters<typeof fetch>) => {
+        const [input] = args;
+        const url = input instanceof Request ? input.url : String(input);
+        if (new URL(url).hostname === "api.x.com") return network();
+        return nativeFetch(...args);
+      });
+      operator = await startXCanaryOperatorForTesting({
+        claimHost: claimHost(claimRequests, claimExitCode),
+        credentialHost: credentialHost(credentialRequests),
+        databasePath: join(directory, "runtime.sqlite"),
+        port: 0,
+        researchDatabasePath: join(directory, "research.sqlite"),
+      });
+      const stopped = operator.runtime.getSnapshot();
+      const research = operator.runtime.transition({
+        expectedMode: stopped.mode,
+        expectedRevision: stopped.revision,
+        occurredAt: new Date().toISOString(),
+        requestId: randomUUID(),
+        targetMode: "RESEARCH",
+      });
+
+      const response = await fetch(`${operator.origin}/api/read-canary/run`, {
+        body: JSON.stringify({
+          schemaVersion: 1,
+          planId: X_READ_CANARY_PLAN_ID,
+          expectedRuntimeRevision: research.revision,
+          requestId: randomUUID(),
+          typedPlanIdAcknowledgement: X_READ_CANARY_PLAN_ID,
+          oneRequestAcknowledgement: true,
+          maximumChargeUsdMicrosAcknowledgement: "50000",
+        }),
+        headers: controlHeaders(operator.origin),
+        method: "POST",
+      });
+
+      expect(response.status).toBe(500);
+      expect(claimRequests).toHaveLength(1);
+      expect(
+        credentialRequests.filter(
+          (request) => request.args[4] === SERVICES[0] && request.args.at(-1) === "-w",
+        ),
+      ).toEqual([]);
+      expect(network).not.toHaveBeenCalled();
+    },
+  );
 
   it("automatically finishes a durable result after process restart without another X request", async () => {
     directory = await mkdtemp(join(tmpdir(), "rsi-x-canary-host-recovery-"));
@@ -355,14 +439,40 @@ describe("Stage 1 X canary operator host", () => {
     await vault.close();
 
     network.mockClear();
+    const missingMarkerRequests: OneShotClaimCommandRequest[] = [];
+    const missingMarkerCredentials: CredentialCommandRequest[] = [];
+    await expect(
+      startXCanaryOperatorForTesting({
+        claimHost: claimHost(missingMarkerRequests, 44),
+        credentialHost: credentialHost(missingMarkerCredentials),
+        databasePath: runtimePath,
+        port: 0,
+        researchDatabasePath: researchPath,
+      }),
+    ).rejects.toThrow("completed X canary requires its permanent one-shot marker");
+    expect(missingMarkerRequests).toHaveLength(1);
+    expect(missingMarkerRequests[0]!.args[0]).toBe("find-generic-password");
+    expect(missingMarkerRequests[0]!.args).not.toContain("-w");
+    expect(
+      missingMarkerCredentials.filter(
+        (request) => request.args[4] === SERVICES[0] && request.args.at(-1) === "-w",
+      ),
+    ).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
+
     const credentialRequests: CredentialCommandRequest[] = [];
+    const claimRequests: OneShotClaimCommandRequest[] = [];
     operator = await startXCanaryOperatorForTesting({
+      claimHost: claimHost(claimRequests),
       credentialHost: credentialHost(credentialRequests),
       databasePath: runtimePath,
       port: 0,
       researchDatabasePath: researchPath,
     });
     expect(network).not.toHaveBeenCalled();
+    expect(claimRequests).toHaveLength(1);
+    expect(claimRequests[0]!.args[0]).toBe("find-generic-password");
+    expect(claimRequests[0]!.args).not.toContain("-w");
     expect(
       credentialRequests
         .filter((request) => request.args.at(-1) === "-w")
@@ -392,8 +502,22 @@ describe("Stage 1 X canary operator host", () => {
     const projection = await response.json();
     const secondResponse = await fetch(`${operator.origin}/api/read-canary`);
     expect(secondResponse.status).toBe(200);
+    const existingReceiptResponse = await fetch(`${operator.origin}/api/read-canary/run`, {
+      body: JSON.stringify({
+        schemaVersion: 1,
+        planId: X_READ_CANARY_PLAN_ID,
+        expectedRuntimeRevision: operator.runtime.getSnapshot().revision,
+        requestId: canaryRequestId,
+        typedPlanIdAcknowledgement: X_READ_CANARY_PLAN_ID,
+        oneRequestAcknowledgement: true,
+        maximumChargeUsdMicrosAcknowledgement: "50000",
+      }),
+      headers: controlHeaders(operator.origin),
+      method: "POST",
+    });
 
     expect(response.status).toBe(200);
+    expect(existingReceiptResponse.status).toBe(200);
     expect(projection).toMatchObject({
       readCanary: {
         lastReceipt: { outcome: "accepted", postCount: 1 },
@@ -401,6 +525,7 @@ describe("Stage 1 X canary operator host", () => {
       },
     });
     expect(network).not.toHaveBeenCalled();
+    expect(claimRequests).toHaveLength(1);
     expect(JSON.stringify(projection)).not.toContain("RECOVERY RAW POST TEXT");
     expect(
       credentialRequests

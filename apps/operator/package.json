@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./base-rpc": "./src/base-rpc.ts",
     "./opensea": "./src/opensea.ts"
   },
   "dependencies": {

@@ -6,6 +6,7 @@ import {
   createDarwinXReadCanaryKeychainForTesting,
   type CredentialCommandRequest,
 } from "@rsi/credential-host/testing";
+import { createDarwinOneShotClaimHostForTesting } from "@rsi/credential-host/one-shot-claim-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 let directory: string | undefined;
@@ -39,6 +40,10 @@ describe("Stage 1 X canary data-directory ownership", () => {
 
     await expect(
       startXCanaryOperatorForTesting({
+        claimHost: createDarwinOneShotClaimHostForTesting("x", {
+          executor: vi.fn(),
+          platform: "darwin",
+        }),
         credentialHost,
         databasePath: join(directory, "runtime.sqlite"),
         port: 0,
