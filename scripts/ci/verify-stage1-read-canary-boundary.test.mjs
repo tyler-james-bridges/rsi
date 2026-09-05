@@ -914,7 +914,49 @@ export const XReadCanaryResultEventPayloadSchema = z.strictObject({
     "default-src 'none'; connect-src 'self'; script-src 'self'; style-src 'self'; " +
     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
+const CONTROL_BODY_TIMEOUT_MS = 5_000;
+function createOperatorServer(): any {
+  const server: any = {};
+  server.headersTimeout = CONTROL_BODY_TIMEOUT_MS;
+  server.requestTimeout = CONTROL_BODY_TIMEOUT_MS;
+  server.keepAliveTimeout = 1_000;
+  server.maxHeadersCount = 32;
+  server.maxRequestsPerSocket = 25;
+  server.on("upgrade", (_request: unknown, socket: any) => socket.destroy());
+  return server;
+}
+export async function startOperatorServer(): Promise<any> {
+  const server = createOperatorServer();
+  return {
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error === undefined ? resolve() : reject(error)));
+        server.closeAllConnections();
+      });
+    },
+  };
+}
 `,
+  );
+  for (const relativeFile of [
+    "apps/cli/src/canary-operator-startup-cleanup.ts",
+    "apps/cli/src/operator-options.ts",
+    "apps/cli/src/operator.ts",
+    "apps/cli/src/profile-service-lock-core.ts",
+    "apps/cli/src/profile-service-lock.ts",
+    "apps/cli/src/production-canary-operator-facade.ts",
+    "apps/cli/src/x-canary-operator-host-core.ts",
+    "apps/cli/src/x-canary-operator-host.ts",
+  ]) {
+    write(root, relativeFile, readFileSync(join(REPOSITORY_ROOT, relativeFile), "utf8"));
+  }
+  write(
+    root,
+    "apps/cli/src/x-canary-operator.ts",
+    `${REQUIRED_PACKAGES.map((name) => `import "@rsi/${name}";`).join("\n")}\n${readFileSync(
+      join(REPOSITORY_ROOT, "apps/cli/src/x-canary-operator.ts"),
+      "utf8",
+    )}`,
   );
   return root;
 }
@@ -987,21 +1029,21 @@ test("pins the production runtime, paths, port, parser, and pre-Keychain guards"
     },
     {
       path: "apps/cli/src/x-canary-operator.ts",
-      from: 'console.log(JSON.stringify({ mode: "stage1-x-read-canary", origin: operator.origin }));',
-      to: 'console.log(JSON.stringify({ mode: "stage1-x-read-canary", origin: operator.origin, paths: operator.paths }));',
+      from: "          origin: operator.origin,",
+      to: "          origin: operator.origin,\n          paths: operator.paths,",
       failure: /keep startup output path-free/u,
     },
     {
       path: "apps/cli/src/x-canary-operator.ts",
-      from: "    } catch {\n      process.stderr.write(STARTUP_FAILURE_MESSAGE);",
-      to: "    } catch (error) {\n      throw error;",
-      failure: /sanitize option, runtime, and host startup failures/u,
+      from: "      await closeOperator().catch(() => undefined);",
+      to: "      void closeOperator();",
+      failure: /latch early signals|sanitize option, runtime, and host startup failures/u,
     },
     {
       path: "apps/cli/src/x-canary-operator-host.ts",
       from: "    options.port !== productionOptions.port",
       to: "    false",
-      failure: /reject injected production paths and ports before Keychain access/u,
+      failure: /validate fixed options, acquire the shared lock before Keychain/u,
     },
   ];
   for (const mutation of mutations) {
@@ -1012,19 +1054,386 @@ test("pins the production runtime, paths, port, parser, and pre-Keychain guards"
   }
 });
 
+test("pins the shared fail-closed profile lease and blocks disconnected core bypasses", () => {
+  const mutations = [
+    {
+      path: "apps/cli/src/profile-service-lock.ts",
+      from: '"../.local/rsi-runtime.sqlite"',
+      to: '"../.local/alternate-runtime.sqlite"',
+      failure: /module-anchored, option-free shared production lock/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: 'SHARED_CANARY_SCOPE_ID = "stage1-canary"',
+      to: 'SHARED_CANARY_SCOPE_ID = "x-canary"',
+      failure: /one shared scope/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: "constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_RDWR",
+      to: "constants.O_CREAT | constants.O_NOFOLLOW | constants.O_RDWR",
+      failure: /atomic no-follow open|atomically acquire once/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: '    throw new ProfileServiceLockError("contended");',
+      to: '    await unlink(path);\n    throw new ProfileServiceLockError("contended");',
+      failure: /without stale takeover or forced deletion/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: "      await resource.close();\n      await lock.release();",
+      to: "      await lock.release();\n      await resource.close();",
+      failure: /retain the lock unless the complete wrapped shutdown succeeds/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: "    await directoryHandle.sync();",
+      to: "    void directoryHandle;",
+      failure: /persist the owned artifact and directory before returning/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: "    if (artifactMustRemain) {",
+      to: "    if (false) {",
+      failure: /persist the owned artifact and directory before returning/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: "      await this.#directoryHandle.sync();",
+      to: "      void this.#directoryHandle;",
+      failure: /directory-durable after unlink/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: "      } catch {\n        throw durabilityFailure();\n      }",
+      to: "      } catch (error) {\n        throw error;\n      }",
+      failure: /directory-durable after unlink/u,
+    },
+    {
+      path: "apps/cli/src/canary-operator-startup-cleanup.ts",
+      from: "  if (startupError instanceof IncompleteCanaryCleanupError) throw startupError;",
+      to: "  void startupError;",
+      failure: /retain the shared lock when startup cleanup is uncertain/u,
+    },
+    {
+      path: "apps/cli/src/production-canary-operator-facade.ts",
+      from: "    getSnapshot: (): Readonly<RuntimeSnapshotV1> => operator.runtime.getSnapshot(),",
+      to: `    getSnapshot: (): Readonly<RuntimeSnapshotV1> => operator.runtime.getSnapshot(),
+    stop: () => operator.runtime.stop(),`,
+      failure: /only a frozen runtime getSnapshot facade/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host.ts",
+      from: "    return createProductionCanaryOperatorFacade(bindProfileServiceLock(operator, profileLock));",
+      to: "    return bindProfileServiceLock(operator, profileLock) as never;",
+      failure: /wrap the result in the read-only facade/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host.ts",
+      from: "        await operator.close();",
+      to: "        void operator;",
+      failure: /prove post-start cleanup before releasing its lock/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "  await assertCanaryProfileLockForDatabasePath(profileLock, options.databasePath);",
+      to: "  void profileLock;",
+      failure: /assert its authentic lease before storage/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "      hostClosing = true;",
+      to: "      hostClosing = false;",
+      failure: /synchronously close provider admission and runtime control/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "      canary?.beginClosing();",
+      to: "      void canary;",
+      failure: /synchronously close provider admission/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: `        () => {
+          runtime?.stop({ occurredAt: new Date().toISOString(), requestId: randomUUID() });
+        },
+        () => operator?.close(),`,
+      to: `        () => operator?.close(),
+        () => {
+          runtime?.stop({ occurredAt: new Date().toISOString(), requestId: randomUUID() });
+        },`,
+      failure: /synchronously close provider admission and runtime control/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "            runtime?.close();",
+      to: "            queueMicrotask(() => runtime?.close());",
+      failure: /synchronously STOP-and-close runtime/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "      assertHostOpen();\n      return controls.executeRuntimeControl(command);",
+      to: "      return controls.executeRuntimeControl(command);",
+      failure: /synchronously close provider admission and runtime control/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "      this.#awaitActiveWork(activeStatus),",
+      to: "      Promise.resolve(),",
+      failure: /single-flight and drain status work/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "      entry.nlink !== 1n ||",
+      to: "      false ||",
+      failure: /owner-owned, single-link database files/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "      entry.uid !== EFFECTIVE_USER_ID",
+      to: "      false",
+      failure: /owner-owned, single-link database files/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-claim-backfill-host.ts",
+      from: "    await closeCanaryResourceSet([() => eventStore?.close()]);\n    await profileLock.release();",
+      to: "    await profileLock.release();\n    await closeCanaryResourceSet([() => eventStore?.close()]);",
+      failure: /retain it unless every store cleanup succeeds/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-claim-backfill-host.ts",
+      from: "      eventStoreEntry.nlink !== 1n ||",
+      to: "      false ||",
+      failure: /single-link owner-owned event store/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator.ts",
+      from: "      shutdownRequested = true;",
+      to: "      shutdownRequested = false;",
+      failure: /latch early signals/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator.ts",
+      from: '      process.off("SIGTERM", handleSignal);',
+      to: "      void handleSignal;",
+      failure: /latch early signals/u,
+    },
+    {
+      path: "apps/cli/src/operator-options.ts",
+      from: 'DEFAULT_DATABASE_PATH = ".local/stage0/rsi-runtime.sqlite"',
+      to: 'DEFAULT_DATABASE_PATH = ".local/rsi-runtime.sqlite"',
+      failure: /confine defaults and every Stage 1-directory descendant/u,
+    },
+    {
+      path: "apps/cli/src/operator-options.ts",
+      from: "isAtOrBelow(productionRoot, candidate) && !isAtOrBelow(permittedStage0Root, candidate)",
+      to: "isAtOrBelow(productionRoot, candidate) && false",
+      failure: /every Stage 1-directory descendant/u,
+    },
+    {
+      path: "apps/cli/src/operator-options.ts",
+      from: "return resolve(await realpath(existingAncestor), ...unresolvedSegments);",
+      to: "return resolve(path);",
+      failure: /dedicated Stage 0 subtree/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: `  assertStage0StorageIsolation(
+    requestedDatabasePath,
+    requestedResearchDatabasePath,
+    requestedProductionDataDirectory,
+  );`,
+      to: "  void requestedProductionDataDirectory;",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "    hostClosing = true;",
+      to: "    hostClosing = false;",
+      failure: /synchronously gate runtime control and persist STOP/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "    if (closePromise !== null) return closePromise;",
+      to: "    if (false) return closePromise!;",
+      failure: /share one close promise/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: `    closePromise = (async (): Promise<void> => {
+      const failures: unknown[] = [];
+      const activeRuntime = runtime;
+      if (activeRuntime !== undefined) {
+        try {
+          activeRuntime.stop({ occurredAt: new Date().toISOString(), requestId: randomUUID() });`,
+      to: `    closePromise = (async (): Promise<void> => {
+      const failures: unknown[] = [];
+      const activeRuntime = runtime;
+      if (activeRuntime !== undefined) {
+        try {
+          activeRuntime.getSnapshot();`,
+      failure: /synchronously gate runtime control and persist STOP/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "          activeRuntime.close();",
+      to: "          queueMicrotask(() => activeRuntime.close());",
+      failure: /synchronously STOP-and-close runtime/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: `    shutdownRequested = true;
+    hostClosing = true;`,
+      to: `    shutdownRequested = true;
+    hostClosing = false;`,
+      failure: /install and latch shutdown before mutable startup/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: `  process.once("SIGINT", handleSignal);
+  process.once("SIGTERM", handleSignal);`,
+      to: `  void handleSignal;
+  process.once("SIGTERM", handleSignal);`,
+      failure: /install and latch shutdown before mutable startup/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "entry.isSymbolicLink() || !entry.isFile() || entry.nlink !== 1n",
+      to: "entry.isSymbolicLink() || !entry.isFile()",
+      failure: /reject hard-linked databases/u,
+    },
+  ];
+  for (const mutation of mutations) {
+    withFixture((root) => {
+      replace(root, mutation.path, mutation.from, mutation.to);
+      expectFailure(root, mutation.failure);
+    });
+  }
+
+  withFixture((root) => {
+    write(
+      root,
+      "apps/cli/src/disconnected-canary-bypass.ts",
+      'import { startXCanaryOperatorWithHost } from "./x-canary-operator-host-core.js";\nvoid startXCanaryOperatorWithHost;\n',
+    );
+    expectFailure(root, /private host-core authority startXCanaryOperatorWithHost/u);
+  });
+
+  withFixture((root) => {
+    write(
+      root,
+      "packages/runtime/src/disconnected-canary-bypass.ts",
+      'import { startXCanaryOperatorWithHost } from "../../../apps/cli/src/x-canary-operator-host-core.js";\nvoid startXCanaryOperatorWithHost;\n',
+    );
+    expectFailure(root, /private host-core authority startXCanaryOperatorWithHost/u);
+  });
+
+  withFixture((root) => {
+    const manifestPath = join(root, "apps/cli/package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.scripts.bypass = "tsx src/x-canary-operator-host.testing.ts";
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    expectFailure(root, /script bypass exposes a private host-core or test-only lock bypass/u);
+  });
+
+  withFixture((root) => {
+    const manifestPath = join(root, "packages/runtime/package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.scripts = {
+      ...manifest.scripts,
+      bypass: "tsx ../../apps/cli/src/profile-service-lock.testing.ts",
+    };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    expectFailure(root, /script bypass exposes a private host-core or test-only lock bypass/u);
+  });
+
+  withFixture((root) => {
+    write(
+      root,
+      "scripts/run-canary.mjs",
+      'import { startXCanaryOperatorWithHost } from "../apps/cli/src/x-canary-operator-host-core.js";\nvoid startXCanaryOperatorWithHost;\n',
+    );
+    const manifestPath = join(root, "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.scripts.bypass = "node scripts/run-canary.mjs";
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    expectFailure(root, /private host-core authority startXCanaryOperatorWithHost/u);
+  });
+});
+
+test("pins X operator slow-client bounds and forced connection shutdown", () => {
+  const mutations = [
+    {
+      from: "  server.requestTimeout = CONTROL_BODY_TIMEOUT_MS;",
+      to: "  server.requestTimeout = 0;",
+    },
+    {
+      from: "        server.closeAllConnections();",
+      to: "        void server;",
+    },
+    {
+      from: '  server.on("upgrade", (_request: unknown, socket: any) => socket.destroy());',
+      to: "  void server;",
+    },
+  ];
+  for (const mutation of mutations) {
+    withFixture((root) => {
+      replace(root, "apps/operator/src/server.ts", mutation.from, mutation.to);
+      expectFailure(root, /bound slow clients, reject upgrades, and force-close/u);
+    });
+  }
+});
+
 test("pins permanent one-shot claims and the receipt-verified X marker backfill", () => {
   const mutations = [
     {
       path: "apps/cli/src/x-canary-operator-host-core.ts",
       from: "    await this.claimHost.claim();\n",
       to: "    void this.claimHost;\n",
-      failure: /claim before live credentials and require a presence-only marker/u,
+      failure: /own the marker immediately after claim/u,
     },
     {
       path: "apps/cli/src/x-canary-operator-host-core.ts",
-      from: '(await this.claimHost.status()) !== "present"',
-      to: '"missing" !== "present"',
-      failure: /claim before live credentials and require a presence-only marker/u,
+      from: 'runtime.mode !== "RESEARCH"',
+      to: "false",
+      failure: /reject stale runtime state before admission and claim/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "runtimeBeforeClaim.revision !== command.expectedRuntimeRevision",
+      to: "false",
+      failure: /reject stale runtime state before admission and claim/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "this.#abortEpoch !== abortEpoch",
+      to: "false",
+      failure: /carry the abort epoch/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "    this.#ownedCanaryClaim = true;",
+      to: "    this.#ownedCanaryClaim = false;",
+      failure: /own the marker immediately after claim/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "runtimeAfterClaim.revision !== command.expectedRuntimeRevision",
+      to: "false",
+      failure: /recheck closing\/runtime before live credentials/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: 'projection.lastReceipt === null && claimStatus === "present"',
+      to: "false",
+      failure: /exact agreement between durable X receipt state/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: 'projection.lastReceipt !== null && claimStatus !== "present"',
+      to: "false",
+      failure: /exact agreement between durable X receipt state/u,
     },
     {
       path: "packages/credential-host/src/one-shot-claim-keychain.ts",
@@ -1761,7 +2170,7 @@ export const injectedCollectorFactory = createXRecentSearchCollectorForTesting;
     replace(
       root,
       "apps/cli/src/x-canary-operator-host-core.ts",
-      "    (EFFECTIVE_USER_ID === null || parentEntry.uid !== EFFECTIVE_USER_ID)\n",
+      "    EFFECTIVE_USER_ID === null ||\n    parentEntry.uid !== EFFECTIVE_USER_ID\n",
       "    false\n",
     );
     expectFailure(root, /owner-owned mode-0700 data directory/u);
@@ -1822,8 +2231,8 @@ export const injectedCollectorFactory = createXRecentSearchCollectorForTesting;
     replace(
       root,
       "apps/cli/src/x-canary-operator-host-core.ts",
-      `  const runtime = SqliteRuntimeController.open({\n    openedAt: "2026-01-01T00:00:00.000Z",\n    path: options.databasePath,\n    processInstanceId: "00000000-0000-4000-8000-000000000000",\n  });`,
-      `  const runtime = SqliteRuntimeController.open({\n    openedAt: "2026-01-01T00:00:00.000Z",\n    path: options.databasePath,\n    processInstanceId: "00000000-0000-4000-8000-000000000000",\n  }, { clock: () => "2026-01-01T00:00:00.000Z" });`,
+      `        processInstanceId: randomUUID(),\n      }),`,
+      `        processInstanceId: randomUUID(),\n      }, { clock: () => "2026-01-01T00:00:00.000Z" }),`,
     );
     expectFailure(root, /runtime and operations clocks production-owned/u);
   });
@@ -1831,8 +2240,8 @@ export const injectedCollectorFactory = createXRecentSearchCollectorForTesting;
     replace(
       root,
       "apps/cli/src/x-canary-operator-host-core.ts",
-      `        stateKey: secrets.operationsStateKey,\n      });`,
-      `        stateKey: secrets.operationsStateKey,\n      }, { monotonicClock: () => 0 });`,
+      `              stateKey: secrets.operationsStateKey,\n            }),`,
+      `              stateKey: secrets.operationsStateKey,\n            }, { monotonicClock: () => 0 }),`,
     );
     expectFailure(root, /runtime and operations clocks production-owned/u);
   });

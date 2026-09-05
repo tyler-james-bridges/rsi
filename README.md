@@ -108,7 +108,7 @@ curl http://127.0.0.1:8787/api/summary
 curl 'http://127.0.0.1:8787/api/events?limit=20'
 ```
 
-The operator service binds to IPv4 loopback and has no network authentication. Do not expose it to a network. Every launch begins in persisted `STOPPED`; the dashboard can enter research, enter proposal-only mode, de-escalate, or STOP, but it has no financial authority. Runtime authority and typed research use separate gitignored databases at `.local/rsi-runtime.sqlite` and `.local/rsi-research.sqlite`. Stop it with `Ctrl-C`, which persists STOP before closing.
+The operator service binds to IPv4 loopback and has no network authentication. Do not expose it to a network. Every launch begins in persisted `STOPPED`; the dashboard can enter research, enter proposal-only mode, de-escalate, or STOP, but it has no financial authority. Its development-only runtime and research databases live under `.local/stage0/`; the command refuses canonical Stage 1 storage namespaces before creating or opening a path. Stop it with `Ctrl-C`, which persists STOP before closing.
 
 The production-shaped Stage 1 host is `pnpm operator:x-canary`. It also boots `STOPPED` and cannot
 sign, pay, trade, publish, or paginate. Its local data directory must be owner-only (`0700`), which

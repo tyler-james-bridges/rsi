@@ -2,6 +2,9 @@
 
 Status: **active single-machine contract**
 
+Operator steps, fixed Keychain identities, and the independent authorization boundaries are in the
+[Stage 1 commissioning runbook](./commissioning-runbook.md).
+
 RSI is built and operated on the computer already available to the owner. **No additional
 physical hardware is required.** A second computer, removable media, custom signing ceremony,
 hardware wallet, and hardware security key are not launch gates.
@@ -71,6 +74,9 @@ reduces available authority; it does not create a hardware-purchase requirement.
   research and execution wallets are separate software accounts with only expendable balances.
 - Keep one durable authorization writer. Activation limits default to zero or unset, and policy,
   allowlists, caps, logs, tests, and emergency controls are outside the self-improvement loop.
+- X, OpenSea, Base RPC, and the X marker backfill share one owner-only Stage 1 profile lock acquired
+  before storage, recovery, or Keychain access. Stage 0 development state remains isolated under
+  `.local/stage0/` and cannot open canonical Stage 1 storage.
 - The Stage 0 runtime persists fail-closed `STOPPED`, checks a revision-bound one-shot permit
   before collection or proposal persistence, and records denied attempts. Every future approval,
   payment, signing, execution, and broadcast component must integrate the same STOP boundary and
@@ -91,6 +97,17 @@ Releases use normal reviewed Git commits, green CI, dependency and secret scans,
 inventory, and ordinary GitHub tags/releases. Custom release keys and signing ceremonies are not
 required. Loss of an optional signing key starts a clearly recorded new lineage; it does not require
 an offline physical copy.
+
+Graceful Stage 1 `SIGINT`/`SIGTERM` shutdown releases the shared profile lock only after the full
+operator close. Abrupt process termination such as `SIGKILL` leaves the artifact fail-closed while
+the OS remains running. After a host crash or power loss, any retained artifact receives the same
+treatment: it is never auto-deleted or judged stale from its contents. Manual removal requires
+first proving that no RSI process remains.
+The implementation synchronizes the lock file and containing directory before startup continues;
+its `SIGKILL` regression validates live-OS behavior and does not claim to simulate power loss.
+Restart the Mac if that proof is uncertain, then remove only the exact
+`apps/cli/.local/.rsi-stage1-canary.lock` file according to the
+[commissioning runbook](./commissioning-runbook.md).
 
 ## Standards order
 

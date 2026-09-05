@@ -36,36 +36,58 @@ if (requested) {
 
   if (runtimeVerified) {
     let operator: Awaited<ReturnType<typeof startBaseRpcCanaryOperator>> | undefined;
+    let closePromise: Promise<void> | null = null;
+    let shutdownRequested = false;
+    const closeOperator = (): Promise<void> => {
+      if (operator === undefined) return Promise.resolve();
+      closePromise ??= operator.close();
+      return closePromise;
+    };
+    const removeSignalHandlers = (): void => {
+      process.off("SIGINT", handleSignal);
+      process.off("SIGTERM", handleSignal);
+    };
+    const handleSignal = (): void => {
+      shutdownRequested = true;
+      if (operator === undefined) return;
+      void closeOperator()
+        .catch(() => {
+          process.stderr.write("RSI failed to persist STOP cleanly during Base RPC shutdown.\n");
+          process.exitCode = 1;
+        })
+        .finally(removeSignalHandlers);
+    };
+    process.once("SIGINT", handleSignal);
+    process.once("SIGTERM", handleSignal);
     try {
       operator = await startBaseRpcCanaryOperator();
       const running = operator;
-      const snapshot = running.runtime.getSnapshot();
-      const startupLine = `${JSON.stringify({
-        mode: "stage1-base-rpc-read-canary",
-        runtimeMode: snapshot.mode,
-        executionEnabled: false,
-        financialAuthority: false,
-        paymentCapability: false,
-        credentialBoundary: "macos-keychain",
-        provider: "alchemy-base-mainnet",
-        chain: "base-mainnet",
-        origin: running.origin,
-      })}\n`;
-
-      let closing = false;
-      const handleSignal = (): void => {
-        if (closing) return;
-        closing = true;
-        void running.close().catch(() => {
-          process.stderr.write("RSI failed to persist STOP cleanly during Base RPC shutdown.\n");
-          process.exitCode = 1;
-        });
-      };
-      process.once("SIGINT", handleSignal);
-      process.once("SIGTERM", handleSignal);
-      process.stdout.write(startupLine);
+      if (shutdownRequested) {
+        await closeOperator();
+        removeSignalHandlers();
+      } else {
+        const snapshot = running.runtime.getSnapshot();
+        const startupLine = `${JSON.stringify({
+          mode: "stage1-base-rpc-read-canary",
+          runtimeMode: snapshot.mode,
+          executionEnabled: false,
+          financialAuthority: false,
+          paymentCapability: false,
+          credentialBoundary: "macos-keychain",
+          provider: "alchemy-base-mainnet",
+          chain: "base-mainnet",
+          origin: running.origin,
+        })}\n`;
+        if (shutdownRequested) {
+          await closeOperator();
+          removeSignalHandlers();
+        } else {
+          process.stdout.write(startupLine);
+        }
+      }
     } catch {
-      await operator?.close().catch(() => undefined);
+      await closeOperator().catch(() => undefined);
+      removeSignalHandlers();
       process.stderr.write(STARTUP_FAILURE_MESSAGE);
       process.exitCode = 1;
     }

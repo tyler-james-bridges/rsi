@@ -740,6 +740,9 @@ export function createOpenSeaOperatorServer(
   server.headersTimeout = CONTROL_BODY_TIMEOUT_MS;
   server.requestTimeout = CONTROL_BODY_TIMEOUT_MS;
   server.keepAliveTimeout = 1_000;
+  server.maxHeadersCount = 32;
+  server.maxRequestsPerSocket = 25;
+  server.on("upgrade", (_request, socket) => socket.destroy());
 
   server.on("clientError", (_error, socket) => {
     const encoded = JSON.stringify({

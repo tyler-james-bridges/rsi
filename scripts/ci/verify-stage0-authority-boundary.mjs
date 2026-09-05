@@ -83,6 +83,7 @@ const SPECIAL_PLATFORM_IMPORTS = new Map([
     Object.freeze({
       files: new Map([
         ["apps/cli/src/operator.ts", Object.freeze(["lstat", "mkdir", "realpath", "stat"])],
+        ["apps/cli/src/operator-options.ts", Object.freeze(["realpath"])],
       ]),
     }),
   ],

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { chmod, mkdtemp, readdir, rm } from "node:fs/promises";
+import { chmod, link, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,12 +17,22 @@ import {
 import {
   BASE_RPC_READ_CANARY_METHOD_SET_ACKNOWLEDGEMENT,
   getBaseRpcReadCanaryPlan,
+  readBaseRpcReadCanaryProjection,
 } from "@rsi/read-canary/base-rpc";
+import { SqliteRuntimeController } from "@rsi/runtime";
+import { SqliteEventStore } from "@rsi/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { startBaseRpcCanaryOperatorForTesting } from "../src/base-rpc-canary-operator-host.testing.js";
+import {
+  pauseNextSnapshotCapture,
+  probeRuntimeMutationAfterFinalStop,
+} from "./canary-host-shutdown-test-helpers.js";
+import {
+  startBaseRpcCanaryOperatorForTesting,
+  type RunningBaseRpcCanaryOperatorForTesting,
+} from "../src/base-rpc-canary-operator-host.testing.js";
+import { PROFILE_SERVICE_LOCK_ERROR_MESSAGES } from "../src/profile-service-lock.testing.js";
 import * as productionHost from "../src/base-rpc-canary-operator-host.js";
-import type { RunningBaseRpcCanaryOperator } from "../src/base-rpc-canary-operator-host.js";
 
 const API_KEY = "offline-alchemy-key-for-base-rpc-host-test";
 const BODY =
@@ -41,11 +51,12 @@ const VALUES = Object.freeze([
 ] as const);
 
 let directory: string | undefined;
-let operator: RunningBaseRpcCanaryOperator | undefined;
+let operator: RunningBaseRpcCanaryOperatorForTesting | undefined;
 
 afterEach(async () => {
   vi.unstubAllGlobals();
   await operator?.close().catch(() => undefined);
+  vi.restoreAllMocks();
   operator = undefined;
   if (directory !== undefined) await rm(directory, { recursive: true, force: true });
   directory = undefined;
@@ -224,11 +235,35 @@ describe("Base RPC canary operator host", () => {
         databasePath: join(directory, "runtime.sqlite"),
         port: 0,
       }),
-    ).rejects.toThrow("Base RPC canary data directories must be owner-only (mode 0700)");
+    ).rejects.toThrow(PROFILE_SERVICE_LOCK_ERROR_MESSAGES.unsafe);
     expect(credentials).toEqual([]);
     expect(claims).toEqual([]);
     expect(network).not.toHaveBeenCalled();
     expect(await readdir(directory)).toEqual([]);
+  });
+
+  it("rejects a hard-linked runtime database before credential, claim, or network access", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-base-rpc-host-hardlink-"));
+    const sourcePath = join(directory, "linked-source.sqlite");
+    const runtimePath = join(directory, "runtime.sqlite");
+    await writeFile(sourcePath, "offline hard-link fixture");
+    await link(sourcePath, runtimePath);
+    expect((await stat(runtimePath, { bigint: true })).nlink).toBe(2n);
+    const credentials: BaseRpcCredentialCommandRequest[] = [];
+    const claims: OneShotClaimCommandRequest[] = [];
+    const network = installNetwork();
+
+    await expect(
+      startBaseRpcCanaryOperatorForTesting({
+        claimHost: claimHost(claims),
+        credentialHost: credentialHost(credentials),
+        databasePath: runtimePath,
+        port: 0,
+      }),
+    ).rejects.toThrow("Base RPC canary SQLite paths must be regular files");
+    expect(credentials).toEqual([]);
+    expect(claims).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
   });
 
   it("boots with storage-only recovery, claims immediately before API reveal, and egresses once", async () => {
@@ -533,6 +568,262 @@ describe("Base RPC canary operator host", () => {
     ).toEqual([]);
     expect(network).not.toHaveBeenCalled();
     expect(operator.runtime.getSnapshot().mode).toBe("PROPOSE_ONLY");
+  });
+
+  it("blocks late runtime control while draining an active Base RPC request and persists final STOP", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-base-rpc-host-close-race-"));
+    const runtimePath = join(directory, "runtime.sqlite");
+    const nativeFetch = globalThis.fetch;
+    const network = vi.fn(
+      async () =>
+        new Response(JSON.stringify(validResponse()), {
+          status: 200,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        }),
+    );
+    vi.stubGlobal("fetch", async (...args: Parameters<typeof fetch>) => {
+      const input = args[0];
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "https://base-mainnet.g.alchemy.com/v2") return network();
+      return nativeFetch(...args);
+    });
+    const running = await startBaseRpcCanaryOperatorForTesting({
+      claimHost: claimHost(),
+      credentialHost: credentialHost([]),
+      databasePath: runtimePath,
+      port: 0,
+    });
+    operator = running;
+    const stopped = running.runtime.getSnapshot();
+    const research = running.runtime.transition({
+      expectedMode: stopped.mode,
+      expectedRevision: stopped.revision,
+      occurredAt: new Date().toISOString(),
+      requestId: randomUUID(),
+      targetMode: "RESEARCH",
+    });
+    const capture = pauseNextSnapshotCapture();
+    const runPromise = fetch(`${running.origin}/api/base-rpc-read-canary/run`, {
+      body: JSON.stringify(command(research.revision)),
+      headers: controlHeaders(running.origin),
+      method: "POST",
+    });
+    const observedRun = runPromise.catch(() => undefined);
+    await capture.started;
+
+    const finalStopProbe = probeRuntimeMutationAfterFinalStop(running.runtime);
+    const closePromise = running.close();
+    let closeSettled = false;
+    void closePromise.then(
+      () => {
+        closeSettled = true;
+      },
+      () => {
+        closeSettled = true;
+      },
+    );
+    const stoppedDuringClose = running.runtime.getSnapshot();
+    const lateControlRequestId = randomUUID();
+    try {
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+      expect(stoppedDuringClose.mode).toBe("STOPPED");
+      const lateStatus = await fetch(`${running.origin}/api/control`, {
+        body: JSON.stringify({
+          action: "runtime-enter-research",
+          expectedMode: "STOPPED",
+          expectedRevision: stoppedDuringClose.revision,
+          requestId: lateControlRequestId,
+        }),
+        headers: controlHeaders(running.origin),
+        method: "POST",
+        signal: AbortSignal.timeout(1_000),
+      }).then(
+        (response) => response.status,
+        () => "rejected" as const,
+      );
+      expect(lateStatus).not.toBe(200);
+    } finally {
+      capture.release();
+    }
+    await observedRun;
+    await closePromise;
+    expect(await finalStopProbe.attempt).toBe("rejected");
+    capture.restore();
+    finalStopProbe.restore();
+    operator = undefined;
+    expect(network).toHaveBeenCalledOnce();
+
+    const canaryStore = new SqliteEventStore(running.paths.eventStore);
+    const projection = readBaseRpcReadCanaryProjection(canaryStore, "unknown");
+    expect(projection.status).not.toBe("completed");
+    expect(projection.lastReceipt?.outcome).not.toBe("accepted");
+    expect(
+      projection.status === "interrupted" ||
+        (projection.status === "failed" &&
+          projection.lastReceipt?.outcome === "rejected" &&
+          projection.lastReceipt.failureCode === "RUNTIME_DENIED"),
+    ).toBe(true);
+    canaryStore.close();
+
+    const reopened = SqliteRuntimeController.open({
+      openedAt: new Date().toISOString(),
+      path: runtimePath,
+      processInstanceId: randomUUID(),
+    });
+    const audit = reopened.listAudit();
+    expect(reopened.getSnapshot().mode).toBe("STOPPED");
+    expect(audit.at(-2)).toMatchObject({
+      payload: { cause: "operator", to: "STOPPED" },
+      type: "runtime.stop.enforced.v1",
+    });
+    expect(JSON.stringify(audit)).not.toContain(lateControlRequestId);
+    expect(JSON.stringify(audit)).not.toContain(finalStopProbe.requestId);
+    reopened.close();
+  });
+
+  it("keeps shutdown and the profile lock pending until active credential status settles", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-base-rpc-host-status-close-"));
+    const runtimePath = join(directory, "runtime.sqlite");
+    const lockPath = join(directory, ".rsi-stage1-canary.lock");
+    let notifyStatusStarted!: () => void;
+    const statusStarted = new Promise<void>((resolve) => {
+      notifyStatusStarted = resolve;
+    });
+    let releaseStatus!: () => void;
+    const statusRelease = new Promise<void>((resolve) => {
+      releaseStatus = resolve;
+    });
+    let held = false;
+    const delayedCredentialHost = createDarwinBaseRpcKeychainForTesting({
+      platform: "darwin",
+      executor: vi.fn(async (request) => {
+        const service = request.args[4];
+        const index = SERVICES.indexOf(service as (typeof SERVICES)[number]);
+        const reveal = request.args.at(-1) === "-w";
+        if (!held && service === SERVICES[0] && !reveal) {
+          held = true;
+          notifyStatusStarted();
+          await statusRelease;
+        }
+        return {
+          exitCode: index < 0 ? 44 : 0,
+          stdout: new TextEncoder().encode(reveal ? `${VALUES[index]!}\n` : "present\n"),
+          stderr: new Uint8Array(),
+          timedOut: false,
+        };
+      }),
+    });
+    const running = await startBaseRpcCanaryOperatorForTesting({
+      claimHost: claimHost(),
+      credentialHost: delayedCredentialHost,
+      databasePath: runtimePath,
+      port: 0,
+    });
+    operator = running;
+    const statusAbort = new AbortController();
+    const observedStatus = fetch(
+      `${running.origin}/api/base-rpc-read-canary/refresh-credential-status`,
+      {
+        headers: {
+          origin: running.origin,
+          "sec-fetch-site": "same-origin",
+          "x-rsi-operator-request": "1",
+        },
+        method: "POST",
+        signal: statusAbort.signal,
+      },
+    ).catch(() => undefined);
+    await statusStarted;
+
+    const closePromise = running.close();
+    let closeSettled = false;
+    void closePromise.then(
+      () => {
+        closeSettled = true;
+      },
+      () => {
+        closeSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+      expect((await stat(lockPath)).isFile()).toBe(true);
+    } finally {
+      releaseStatus();
+    }
+    await closePromise;
+    statusAbort.abort();
+    await observedStatus;
+    operator = undefined;
+    await expect(stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("denies an admitted canary body that completes after host shutdown begins", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-base-rpc-host-admitted-body-close-"));
+    const runtimePath = join(directory, "runtime.sqlite");
+    const credentialRequests: BaseRpcCredentialCommandRequest[] = [];
+    const claimRequests: OneShotClaimCommandRequest[] = [];
+    const network = vi.fn();
+    vi.stubGlobal("fetch", network);
+    const running = await startBaseRpcCanaryOperatorForTesting({
+      claimHost: claimHost(claimRequests),
+      credentialHost: credentialHost(credentialRequests),
+      databasePath: runtimePath,
+      port: 0,
+    });
+    operator = running;
+    const stopped = running.runtime.getSnapshot();
+    const research = running.runtime.transition({
+      expectedMode: stopped.mode,
+      expectedRevision: stopped.revision,
+      occurredAt: new Date().toISOString(),
+      requestId: randomUUID(),
+      targetMode: "RESEARCH",
+    });
+    const body = JSON.stringify(command(research.revision));
+    const port = Number(new URL(running.origin).port);
+    const socket = createConnection({ host: "127.0.0.1", port });
+    socket.on("error", () => undefined);
+    await once(socket, "connect");
+    socket.write(
+      [
+        "POST /api/base-rpc-read-canary/run HTTP/1.1",
+        `Host: 127.0.0.1:${port}`,
+        `Origin: ${running.origin}`,
+        "Sec-Fetch-Site: same-origin",
+        "X-RSI-Operator-Request: 1",
+        "Content-Type: application/json",
+        `Content-Length: ${Buffer.byteLength(body)}`,
+        "",
+        body.slice(0, -1),
+      ].join("\r\n"),
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+
+    const closePromise = running.close();
+    socket.end(body.slice(-1));
+    await closePromise;
+    operator = undefined;
+    socket.destroy();
+
+    expect(claimRequests.filter((request) => request.args[0] === "add-generic-password")).toEqual(
+      [],
+    );
+    expect(
+      credentialRequests.filter(
+        (request) => request.args[4] === SERVICES[0] && request.args.at(-1) === "-w",
+      ),
+    ).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
+    const reopened = SqliteRuntimeController.open({
+      openedAt: new Date().toISOString(),
+      path: runtimePath,
+      processInstanceId: randomUUID(),
+    });
+    expect(reopened.getSnapshot().mode).toBe("STOPPED");
+    reopened.close();
   });
 
   it("refuses a present marker without durable canary events", async () => {

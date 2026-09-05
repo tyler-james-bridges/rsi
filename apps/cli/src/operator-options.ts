@@ -1,11 +1,61 @@
+import { realpath } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+
 export interface OperatorOptions {
   readonly databasePath: string;
   readonly port: number;
   readonly researchDatabasePath: string;
 }
 
-const DEFAULT_DATABASE_PATH = ".local/rsi-runtime.sqlite";
-const DEFAULT_RESEARCH_DATABASE_PATH = ".local/rsi-research.sqlite";
+function isMissingPath(error: unknown): boolean {
+  return (
+    error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+function isAtOrBelow(root: string, candidate: string): boolean {
+  const offset = relative(root, candidate);
+  return (
+    offset === "" || (offset !== ".." && !offset.startsWith(`..${sep}`) && !isAbsolute(offset))
+  );
+}
+
+/** Resolves the nearest existing ancestor without creating any part of the requested path. */
+export async function resolveProspectiveStoragePath(path: string): Promise<string> {
+  if (path === ":memory:") return path;
+  let existingAncestor = resolve(path);
+  const unresolvedSegments: string[] = [];
+  for (;;) {
+    try {
+      return resolve(await realpath(existingAncestor), ...unresolvedSegments);
+    } catch (error) {
+      if (!isMissingPath(error)) throw error;
+      const parent = dirname(existingAncestor);
+      if (parent === existingAncestor) throw error;
+      unresolvedSegments.unshift(basename(existingAncestor));
+      existingAncestor = parent;
+    }
+  }
+}
+
+export function assertStage0StorageIsolation(
+  databasePath: string,
+  researchDatabasePath: string,
+  productionDataDirectory: string,
+): void {
+  const productionRoot = resolve(productionDataDirectory);
+  const permittedStage0Root = join(productionRoot, "stage0");
+  for (const path of [databasePath, researchDatabasePath]) {
+    if (path === ":memory:") continue;
+    const candidate = resolve(path);
+    if (isAtOrBelow(productionRoot, candidate) && !isAtOrBelow(permittedStage0Root, candidate)) {
+      throw new TypeError("The Stage 0 operator cannot open Stage 1 production storage");
+    }
+  }
+}
+
+const DEFAULT_DATABASE_PATH = ".local/stage0/rsi-runtime.sqlite";
+const DEFAULT_RESEARCH_DATABASE_PATH = ".local/stage0/rsi-research.sqlite";
 
 export function operatorUsage(): string {
   return [

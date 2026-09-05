@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { chmod, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { chmod, link, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,14 +15,25 @@ import {
   createDarwinOneShotClaimHostForTesting,
   type OneShotClaimCommandRequest,
 } from "@rsi/credential-host/one-shot-claim-testing";
-import { getOpenSeaReadCanaryPlan } from "@rsi/read-canary/opensea";
+import {
+  getOpenSeaReadCanaryPlan,
+  readOpenSeaReadCanaryProjection,
+} from "@rsi/read-canary/opensea";
 import { SqliteRuntimeController } from "@rsi/runtime";
+import { SqliteEventStore } from "@rsi/store";
 import { SnapshotVault } from "@rsi/vault";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { startOpenSeaCanaryOperatorForTesting } from "../src/opensea-canary-operator-host.testing.js";
+import {
+  pauseNextSnapshotCapture,
+  probeRuntimeMutationAfterFinalStop,
+} from "./canary-host-shutdown-test-helpers.js";
+import { PROFILE_SERVICE_LOCK_ERROR_MESSAGES } from "../src/profile-service-lock.testing.js";
+import {
+  startOpenSeaCanaryOperatorForTesting,
+  type RunningOpenSeaCanaryOperatorForTesting,
+} from "../src/opensea-canary-operator-host.testing.js";
 import * as productionHost from "../src/opensea-canary-operator-host.js";
-import type { RunningOpenSeaCanaryOperator } from "../src/opensea-canary-operator-host.js";
 
 const TEST_API_KEY = "offline-opensea-key-for-host-test";
 const HOSTILE_SLUG = "fictional-hostile-collection";
@@ -42,11 +53,12 @@ const VALUES = Object.freeze([
 ] as const);
 
 let directory: string | undefined;
-let operator: RunningOpenSeaCanaryOperator | undefined;
+let operator: RunningOpenSeaCanaryOperatorForTesting | undefined;
 
 afterEach(async () => {
   vi.unstubAllGlobals();
   await operator?.close().catch(() => undefined);
+  vi.restoreAllMocks();
   operator = undefined;
   if (directory !== undefined) await rm(directory, { recursive: true, force: true });
   directory = undefined;
@@ -72,13 +84,14 @@ function credentialHost(requests: OpenSeaTrendingCredentialCommandRequest[]) {
 
 function claimHost(
   requests?: OneShotClaimCommandRequest[],
-  exitCode: number | null = 0,
+  claimExitCode: number | null = 0,
+  statusExitCode: number | null = 44,
 ): DarwinOneShotClaimHost {
   return createDarwinOneShotClaimHostForTesting("openSea", {
     executor: vi.fn(async (request) => {
       requests?.push(request);
       return {
-        exitCode,
+        exitCode: request.args[0] === "add-generic-password" ? claimExitCode : statusExitCode,
         stdout: new Uint8Array(),
         stderr: new Uint8Array(),
         timedOut: false,
@@ -95,6 +108,18 @@ function controlHeaders(origin: string): Record<string, string> {
     "sec-fetch-site": "same-origin",
     "x-rsi-operator-request": "1",
   };
+}
+
+function routeOpenSeaProviderRequests(
+  network: (...args: Parameters<typeof fetch>) => unknown,
+): void {
+  const nativeFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", async (...args: Parameters<typeof fetch>) => {
+    const input = args[0];
+    const url = input instanceof Request ? input.url : String(input);
+    if (new URL(url).hostname === "api.opensea.io") return (await network(...args)) as Response;
+    return nativeFetch(...args);
+  });
 }
 
 function validOpenSeaResponse(): Record<string, unknown> {
@@ -137,10 +162,35 @@ describe("OpenSea canary operator host", () => {
         databasePath: join(directory, "runtime.sqlite"),
         port: 0,
       }),
-    ).rejects.toThrow("OpenSea canary data directories must be owner-only (mode 0700)");
+    ).rejects.toThrow(PROFILE_SERVICE_LOCK_ERROR_MESSAGES.unsafe);
     expect(requests).toEqual([]);
     expect(network).not.toHaveBeenCalled();
     expect(await readdir(directory)).toEqual([]);
+  });
+
+  it("rejects a hard-linked runtime database before credential, claim, or network access", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-opensea-host-hardlink-"));
+    const sourcePath = join(directory, "linked-source.sqlite");
+    const runtimePath = join(directory, "runtime.sqlite");
+    await writeFile(sourcePath, "offline hard-link fixture");
+    await link(sourcePath, runtimePath);
+    expect((await stat(runtimePath, { bigint: true })).nlink).toBe(2n);
+    const credentialRequests: OpenSeaTrendingCredentialCommandRequest[] = [];
+    const claimRequests: OneShotClaimCommandRequest[] = [];
+    const network = vi.fn();
+    vi.stubGlobal("fetch", network);
+
+    await expect(
+      startOpenSeaCanaryOperatorForTesting({
+        claimHost: claimHost(claimRequests),
+        credentialHost: credentialHost(credentialRequests),
+        databasePath: runtimePath,
+        port: 0,
+      }),
+    ).rejects.toThrow("OpenSea canary SQLite paths must be regular files");
+    expect(credentialRequests).toEqual([]);
+    expect(claimRequests).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
   });
 
   it("creates an absent data directory with owner-only permissions", async () => {
@@ -440,7 +490,9 @@ describe("OpenSea canary operator host", () => {
       });
 
       expect(response.status).toBe(500);
-      expect(claimRequests).toHaveLength(1);
+      expect(
+        claimRequests.filter((request) => request.args[0] === "add-generic-password"),
+      ).toHaveLength(1);
       expect(
         credentialRequests.filter(
           (request) => request.args[4] === SERVICES[0] && request.args.at(-1) === "-w",
@@ -449,6 +501,507 @@ describe("OpenSea canary operator host", () => {
       expect(network).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects STOPPED and stale-revision runs before a permanent claim", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-opensea-host-runtime-preflight-"));
+    const credentialRequests: OpenSeaTrendingCredentialCommandRequest[] = [];
+    const claimRequests: OneShotClaimCommandRequest[] = [];
+    const network = vi.fn();
+    routeOpenSeaProviderRequests(network);
+    operator = await startOpenSeaCanaryOperatorForTesting({
+      claimHost: claimHost(claimRequests),
+      credentialHost: credentialHost(credentialRequests),
+      databasePath: join(directory, "runtime.sqlite"),
+      port: 0,
+    });
+    const plan = getOpenSeaReadCanaryPlan();
+    const stopped = operator.runtime.getSnapshot();
+    const run = (expectedRuntimeRevision: number): Promise<Response> =>
+      fetch(`${operator!.origin}/api/opensea-read-canary/run`, {
+        body: JSON.stringify({
+          schemaVersion: 1,
+          planId: plan.planId,
+          expectedRuntimeRevision,
+          requestId: randomUUID(),
+          typedPlanIdAcknowledgement: plan.planId,
+          oneRequestAcknowledgement: true,
+          nonPaymentReadAcknowledgement: true,
+          ledgerReserveUsdMicrosAcknowledgement: plan.ledgerReserveUsdMicros,
+        }),
+        headers: controlHeaders(operator!.origin),
+        method: "POST",
+      });
+    expect((await run(stopped.revision)).status).toBe(409);
+    operator.runtime.transition({
+      expectedMode: stopped.mode,
+      expectedRevision: stopped.revision,
+      occurredAt: new Date().toISOString(),
+      requestId: randomUUID(),
+      targetMode: "RESEARCH",
+    });
+    expect((await run(stopped.revision)).status).toBe(409);
+    expect(claimRequests.filter((request) => request.args[0] === "add-generic-password")).toEqual(
+      [],
+    );
+    expect(
+      credentialRequests.filter(
+        (request) => request.args[4] === SERVICES[0] && request.args.at(-1) === "-w",
+      ),
+    ).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it("stops a delayed permanent claim before any API-key reveal or egress", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-opensea-host-claim-stop-"));
+    const credentialRequests: OpenSeaTrendingCredentialCommandRequest[] = [];
+    const claimRequests: OneShotClaimCommandRequest[] = [];
+    const network = vi.fn();
+    routeOpenSeaProviderRequests(network);
+    let notifyClaimStarted!: () => void;
+    const claimStarted = new Promise<void>((resolve) => {
+      notifyClaimStarted = resolve;
+    });
+    let releaseClaim!: () => void;
+    const claimRelease = new Promise<void>((resolve) => {
+      releaseClaim = resolve;
+    });
+    const delayedClaimHost = createDarwinOneShotClaimHostForTesting("openSea", {
+      executor: vi.fn(async (request) => {
+        claimRequests.push(request);
+        if (request.args[0] === "add-generic-password") {
+          notifyClaimStarted();
+          await claimRelease;
+          return {
+            exitCode: 0,
+            stdout: new Uint8Array(),
+            stderr: new Uint8Array(),
+            timedOut: false,
+          };
+        }
+        return {
+          exitCode: 44,
+          stdout: new Uint8Array(),
+          stderr: new Uint8Array(),
+          timedOut: false,
+        };
+      }),
+      platform: "darwin",
+    });
+    operator = await startOpenSeaCanaryOperatorForTesting({
+      claimHost: delayedClaimHost,
+      credentialHost: credentialHost(credentialRequests),
+      databasePath: join(directory, "runtime.sqlite"),
+      port: 0,
+    });
+    const stopped = operator.runtime.getSnapshot();
+    const research = operator.runtime.transition({
+      expectedMode: stopped.mode,
+      expectedRevision: stopped.revision,
+      occurredAt: new Date().toISOString(),
+      requestId: randomUUID(),
+      targetMode: "RESEARCH",
+    });
+    const plan = getOpenSeaReadCanaryPlan();
+    const run = fetch(`${operator.origin}/api/opensea-read-canary/run`, {
+      body: JSON.stringify({
+        schemaVersion: 1,
+        planId: plan.planId,
+        expectedRuntimeRevision: research.revision,
+        requestId: randomUUID(),
+        typedPlanIdAcknowledgement: plan.planId,
+        oneRequestAcknowledgement: true,
+        nonPaymentReadAcknowledgement: true,
+        ledgerReserveUsdMicrosAcknowledgement: plan.ledgerReserveUsdMicros,
+      }),
+      headers: controlHeaders(operator.origin),
+      method: "POST",
+    });
+    const observedRun = run.then(
+      (response) => response.status,
+      () => "rejected" as const,
+    );
+    await claimStarted;
+    const stopResponse = await fetch(`${operator.origin}/api/control`, {
+      body: JSON.stringify({
+        action: "runtime-stop",
+        requestId: randomUUID(),
+      }),
+      headers: controlHeaders(operator.origin),
+      method: "POST",
+    });
+    try {
+      expect(stopResponse.status).toBe(200);
+    } finally {
+      releaseClaim();
+    }
+    expect(await observedRun).not.toBe(200);
+    expect(
+      credentialRequests.filter(
+        (request) => request.args[4] === SERVICES[0] && request.args.at(-1) === "-w",
+      ),
+    ).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it("refuses a present marker without a durable receipt before API-key access", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-opensea-host-orphan-marker-"));
+    const credentialRequests: OpenSeaTrendingCredentialCommandRequest[] = [];
+    const claimRequests: OneShotClaimCommandRequest[] = [];
+    const network = vi.fn();
+    routeOpenSeaProviderRequests(network);
+    await expect(
+      startOpenSeaCanaryOperatorForTesting({
+        claimHost: claimHost(claimRequests, 0, 0),
+        credentialHost: credentialHost(credentialRequests),
+        databasePath: join(directory, "runtime.sqlite"),
+        port: 0,
+      }),
+    ).rejects.toThrow("permanent OpenSea canary marker has no durable receipt");
+    expect(
+      credentialRequests.filter(
+        (request) => request.args[4] === SERVICES[0] && request.args.at(-1) === "-w",
+      ),
+    ).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it("keeps a successful claim owned when the following API-key reveal fails", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-opensea-host-post-claim-failure-"));
+    const credentialRequests: OpenSeaTrendingCredentialCommandRequest[] = [];
+    const claimRequests: OneShotClaimCommandRequest[] = [];
+    const network = vi.fn();
+    routeOpenSeaProviderRequests(network);
+    const failingCredentialHost = createDarwinOpenSeaTrendingKeychainForTesting({
+      platform: "darwin",
+      executor: vi.fn(async (request) => {
+        credentialRequests.push(request);
+        const service = request.args[4];
+        const index = SERVICES.indexOf(service as (typeof SERVICES)[number]);
+        const reveal = request.args.at(-1) === "-w";
+        const apiReveal = service === SERVICES[0] && reveal;
+        return {
+          exitCode: apiReveal ? 44 : index < 0 ? 44 : 0,
+          stdout: new TextEncoder().encode(reveal && !apiReveal ? `${VALUES[index]!}\n` : ""),
+          stderr: new Uint8Array(),
+          timedOut: false,
+        };
+      }),
+    });
+    operator = await startOpenSeaCanaryOperatorForTesting({
+      claimHost: claimHost(claimRequests),
+      credentialHost: failingCredentialHost,
+      databasePath: join(directory, "runtime.sqlite"),
+      port: 0,
+    });
+    const stopped = operator.runtime.getSnapshot();
+    const research = operator.runtime.transition({
+      expectedMode: stopped.mode,
+      expectedRevision: stopped.revision,
+      occurredAt: new Date().toISOString(),
+      requestId: randomUUID(),
+      targetMode: "RESEARCH",
+    });
+    const plan = getOpenSeaReadCanaryPlan();
+    const run = (): Promise<Response> =>
+      fetch(`${operator!.origin}/api/opensea-read-canary/run`, {
+        body: JSON.stringify({
+          schemaVersion: 1,
+          planId: plan.planId,
+          expectedRuntimeRevision: research.revision,
+          requestId: randomUUID(),
+          typedPlanIdAcknowledgement: plan.planId,
+          oneRequestAcknowledgement: true,
+          nonPaymentReadAcknowledgement: true,
+          ledgerReserveUsdMicrosAcknowledgement: plan.ledgerReserveUsdMicros,
+        }),
+        headers: controlHeaders(operator!.origin),
+        method: "POST",
+      });
+    expect((await run()).status).not.toBe(200);
+    expect((await run()).status).not.toBe(200);
+    expect(
+      claimRequests.filter((request) => request.args[0] === "add-generic-password"),
+    ).toHaveLength(1);
+    expect(
+      credentialRequests.filter(
+        (request) => request.args[4] === SERVICES[0] && request.args.at(-1) === "-w",
+      ),
+    ).toHaveLength(1);
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it("blocks late runtime control while draining an active OpenSea request and persists final STOP", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-opensea-host-close-race-"));
+    const runtimePath = join(directory, "runtime.sqlite");
+    const nativeFetch = globalThis.fetch;
+    const network = vi.fn(
+      async () =>
+        new Response(JSON.stringify(validOpenSeaResponse()), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "x-ratelimit-limit": "100",
+            "x-ratelimit-remaining": "99",
+            "x-ratelimit-reset": "1787685600",
+          },
+        }),
+    );
+    vi.stubGlobal("fetch", async (...args: Parameters<typeof fetch>) => {
+      const input = args[0];
+      const url = input instanceof Request ? input.url : String(input);
+      if (new URL(url).hostname === "api.opensea.io") return network();
+      return nativeFetch(...args);
+    });
+    const running = await startOpenSeaCanaryOperatorForTesting({
+      claimHost: claimHost(),
+      credentialHost: credentialHost([]),
+      databasePath: runtimePath,
+      port: 0,
+    });
+    operator = running;
+    const stopped = running.runtime.getSnapshot();
+    const research = running.runtime.transition({
+      expectedMode: stopped.mode,
+      expectedRevision: stopped.revision,
+      occurredAt: new Date().toISOString(),
+      requestId: randomUUID(),
+      targetMode: "RESEARCH",
+    });
+    const plan = getOpenSeaReadCanaryPlan();
+    const capture = pauseNextSnapshotCapture();
+    const runPromise = fetch(`${running.origin}/api/opensea-read-canary/run`, {
+      body: JSON.stringify({
+        schemaVersion: 1,
+        planId: plan.planId,
+        expectedRuntimeRevision: research.revision,
+        requestId: randomUUID(),
+        typedPlanIdAcknowledgement: plan.planId,
+        oneRequestAcknowledgement: true,
+        nonPaymentReadAcknowledgement: true,
+        ledgerReserveUsdMicrosAcknowledgement: plan.ledgerReserveUsdMicros,
+      }),
+      headers: controlHeaders(running.origin),
+      method: "POST",
+    });
+    const observedRun = runPromise.catch(() => undefined);
+    await capture.started;
+
+    const finalStopProbe = probeRuntimeMutationAfterFinalStop(running.runtime);
+    const closePromise = running.close();
+    let closeSettled = false;
+    void closePromise.then(
+      () => {
+        closeSettled = true;
+      },
+      () => {
+        closeSettled = true;
+      },
+    );
+    const stoppedDuringClose = running.runtime.getSnapshot();
+    const lateControlRequestId = randomUUID();
+    try {
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+      expect(stoppedDuringClose.mode).toBe("STOPPED");
+      const lateStatus = await fetch(`${running.origin}/api/control`, {
+        body: JSON.stringify({
+          action: "runtime-enter-research",
+          expectedMode: "STOPPED",
+          expectedRevision: stoppedDuringClose.revision,
+          requestId: lateControlRequestId,
+        }),
+        headers: controlHeaders(running.origin),
+        method: "POST",
+        signal: AbortSignal.timeout(1_000),
+      }).then(
+        (response) => response.status,
+        () => "rejected" as const,
+      );
+      expect(lateStatus).not.toBe(200);
+    } finally {
+      capture.release();
+    }
+    await observedRun;
+    await closePromise;
+    expect(await finalStopProbe.attempt).toBe("rejected");
+    capture.restore();
+    finalStopProbe.restore();
+    operator = undefined;
+    expect(network).toHaveBeenCalledOnce();
+
+    const canaryStore = new SqliteEventStore(running.paths.eventStore);
+    const projection = readOpenSeaReadCanaryProjection(canaryStore, "unknown");
+    expect(projection.status).not.toBe("completed");
+    expect(projection.lastReceipt?.outcome).not.toBe("accepted");
+    expect(
+      projection.status === "interrupted" ||
+        (projection.status === "failed" &&
+          projection.lastReceipt?.outcome === "rejected" &&
+          projection.lastReceipt.failureCode === "RUNTIME_DENIED"),
+    ).toBe(true);
+    canaryStore.close();
+
+    const reopened = SqliteRuntimeController.open({
+      openedAt: new Date().toISOString(),
+      path: runtimePath,
+      processInstanceId: randomUUID(),
+    });
+    const audit = reopened.listAudit();
+    expect(reopened.getSnapshot().mode).toBe("STOPPED");
+    expect(audit.at(-2)).toMatchObject({
+      payload: { cause: "operator", to: "STOPPED" },
+      type: "runtime.stop.enforced.v1",
+    });
+    expect(JSON.stringify(audit)).not.toContain(lateControlRequestId);
+    expect(JSON.stringify(audit)).not.toContain(finalStopProbe.requestId);
+    reopened.close();
+  });
+
+  it("keeps shutdown and the profile lock pending until active credential status settles", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-opensea-host-status-close-"));
+    const runtimePath = join(directory, "runtime.sqlite");
+    const lockPath = join(directory, ".rsi-stage1-canary.lock");
+    let notifyStatusStarted!: () => void;
+    const statusStarted = new Promise<void>((resolve) => {
+      notifyStatusStarted = resolve;
+    });
+    let releaseStatus!: () => void;
+    const statusRelease = new Promise<void>((resolve) => {
+      releaseStatus = resolve;
+    });
+    let held = false;
+    const delayedCredentialHost = createDarwinOpenSeaTrendingKeychainForTesting({
+      platform: "darwin",
+      executor: vi.fn(async (request) => {
+        const service = request.args[4];
+        const index = SERVICES.indexOf(service as (typeof SERVICES)[number]);
+        const reveal = request.args.at(-1) === "-w";
+        if (!held && service === SERVICES[0] && !reveal) {
+          held = true;
+          notifyStatusStarted();
+          await statusRelease;
+        }
+        return {
+          exitCode: index < 0 ? 44 : 0,
+          stdout: new TextEncoder().encode(reveal ? `${VALUES[index]!}\n` : "present\n"),
+          stderr: new Uint8Array(),
+          timedOut: false,
+        };
+      }),
+    });
+    const running = await startOpenSeaCanaryOperatorForTesting({
+      claimHost: claimHost(),
+      credentialHost: delayedCredentialHost,
+      databasePath: runtimePath,
+      port: 0,
+    });
+    operator = running;
+    const statusAbort = new AbortController();
+    const observedStatus = fetch(
+      `${running.origin}/api/opensea-read-canary/refresh-credential-status`,
+      { headers: controlHeaders(running.origin), method: "POST", signal: statusAbort.signal },
+    ).catch(() => undefined);
+    await statusStarted;
+
+    const closePromise = running.close();
+    let closeSettled = false;
+    void closePromise.then(
+      () => {
+        closeSettled = true;
+      },
+      () => {
+        closeSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+      expect((await stat(lockPath)).isFile()).toBe(true);
+    } finally {
+      releaseStatus();
+    }
+    await closePromise;
+    statusAbort.abort();
+    await observedStatus;
+    operator = undefined;
+    await expect(stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("denies an admitted canary body that completes after host shutdown begins", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-opensea-host-admitted-body-close-"));
+    const runtimePath = join(directory, "runtime.sqlite");
+    const credentialRequests: OpenSeaTrendingCredentialCommandRequest[] = [];
+    const claimRequests: OneShotClaimCommandRequest[] = [];
+    const network = vi.fn();
+    vi.stubGlobal("fetch", network);
+    const running = await startOpenSeaCanaryOperatorForTesting({
+      claimHost: claimHost(claimRequests),
+      credentialHost: credentialHost(credentialRequests),
+      databasePath: runtimePath,
+      port: 0,
+    });
+    operator = running;
+    const stopped = running.runtime.getSnapshot();
+    const research = running.runtime.transition({
+      expectedMode: stopped.mode,
+      expectedRevision: stopped.revision,
+      occurredAt: new Date().toISOString(),
+      requestId: randomUUID(),
+      targetMode: "RESEARCH",
+    });
+    const plan = getOpenSeaReadCanaryPlan();
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      planId: plan.planId,
+      expectedRuntimeRevision: research.revision,
+      requestId: randomUUID(),
+      typedPlanIdAcknowledgement: plan.planId,
+      oneRequestAcknowledgement: true,
+      nonPaymentReadAcknowledgement: true,
+      ledgerReserveUsdMicrosAcknowledgement: plan.ledgerReserveUsdMicros,
+    });
+    const port = Number(new URL(running.origin).port);
+    const socket = createConnection({ host: "127.0.0.1", port });
+    socket.on("error", () => undefined);
+    await once(socket, "connect");
+    socket.write(
+      [
+        "POST /api/opensea-read-canary/run HTTP/1.1",
+        `Host: 127.0.0.1:${port}`,
+        `Origin: ${running.origin}`,
+        "Sec-Fetch-Site: same-origin",
+        "X-RSI-Operator-Request: 1",
+        "Content-Type: application/json",
+        `Content-Length: ${Buffer.byteLength(body)}`,
+        "",
+        body.slice(0, -1),
+      ].join("\r\n"),
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+
+    const closePromise = running.close();
+    socket.end(body.slice(-1));
+    await closePromise;
+    operator = undefined;
+    socket.destroy();
+
+    expect(claimRequests.filter((request) => request.args[0] === "add-generic-password")).toEqual(
+      [],
+    );
+    expect(
+      credentialRequests.filter(
+        (request) => request.args[4] === SERVICES[0] && request.args.at(-1) === "-w",
+      ),
+    ).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
+    const reopened = SqliteRuntimeController.open({
+      openedAt: new Date().toISOString(),
+      path: runtimePath,
+      processInstanceId: randomUUID(),
+    });
+    expect(reopened.getSnapshot().mode).toBe("STOPPED");
+    reopened.close();
+  });
 
   it("persists STOP before bounding a half-open local control request", async () => {
     directory = await mkdtemp(join(tmpdir(), "rsi-opensea-host-half-open-"));

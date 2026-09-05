@@ -84,14 +84,20 @@ globalThis.fetch = async (request): Promise<Response> => {
   );
 };
 
+let markerPresent = false;
 const operator = await startOpenSeaCanaryOperatorForTesting({
   claimHost: createDarwinOneShotClaimHostForTesting("openSea", {
-    executor: async () => ({
-      exitCode: 0,
-      stdout: new Uint8Array(),
-      stderr: new Uint8Array(),
-      timedOut: false,
-    }),
+    executor: async (request) => {
+      const claiming = request.args[0] === "add-generic-password";
+      const exitCode = claiming ? (markerPresent ? 45 : 0) : markerPresent ? 0 : 44;
+      if (claiming && exitCode === 0) markerPresent = true;
+      return {
+        exitCode,
+        stdout: new Uint8Array(),
+        stderr: new Uint8Array(),
+        timedOut: false,
+      };
+    },
     platform: "darwin",
   }),
   credentialHost,

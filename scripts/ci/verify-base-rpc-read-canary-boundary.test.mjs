@@ -498,7 +498,7 @@ test("requires the Base permanent marker before credential reveal and forbids ma
       "    await this.claimHost.claim();",
       "    void this.claimHost;",
     );
-    expectFailure(root, /recheck exact runtime\/revision immediately before marker claim/u);
+    expectFailure(root, /own the marker immediately after claim/u);
   });
   withFixture((root) => {
     replace(
@@ -533,10 +533,37 @@ test("pins pre-claim and post-claim runtime revision checks plus marker-storage 
     replace(
       root,
       "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      'runtime.mode !== "RESEARCH"',
+      "false",
+    );
+    expectFailure(root, /reject stale runtime state before admission and claim/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/base-rpc-canary-operator-host-core.ts",
       'runtimeBeforeClaim.mode !== "RESEARCH"',
       "false",
     );
-    expectFailure(root, /recheck exact runtime\/revision immediately before marker claim/u);
+    expectFailure(root, /reject stale runtime state before admission and claim/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      "this.#abortEpoch !== abortEpoch",
+      "false",
+    );
+    expectFailure(root, /carry the abort epoch/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      "    this.#ownedCanaryClaim = true;",
+      "    this.#ownedCanaryClaim = false;",
+    );
+    expectFailure(root, /own the marker immediately after claim/u);
   });
   withFixture((root) => {
     replace(
@@ -545,7 +572,7 @@ test("pins pre-claim and post-claim runtime revision checks plus marker-storage 
       "runtimeAfterClaim.revision !== command.expectedRuntimeRevision",
       "false",
     );
-    expectFailure(root, /recheck exact runtime\/revision immediately before marker claim/u);
+    expectFailure(root, /recheck closing\/runtime before provider credentials/u);
   });
   withFixture((root) => {
     replace(
@@ -608,6 +635,128 @@ test("pins exact production runtime, canonical storage, fixed port, and redacted
       "    runtimeVerified = true;",
     );
     expectFailure(root, /options then exact runtime guard before host start/u);
+  });
+});
+
+test("pins the Base profile lease, cleanup decision, and shutdown ordering", () => {
+  const mutations = [
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host.ts",
+      from: "  const profileLock = await acquireProductionCanaryProfileLock();",
+      to: "  const profileLock = { release: async () => undefined } as never;",
+      failure: /acquire the shared lock before Keychain/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host.ts",
+      from: "    return rethrowCanaryStartupFailureAfterProfileLockDecision(",
+      to: "    return Promise.reject(",
+      failure: /prove post-start cleanup before releasing its lock/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host.ts",
+      from: "    return createProductionCanaryOperatorFacade(bindProfileServiceLock(operator, profileLock));",
+      to: "    return bindProfileServiceLock(operator, profileLock) as never;",
+      failure: /wrap the result in the read-only facade/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host.ts",
+      from: "        await operator.close();",
+      to: "        void operator;",
+      failure: /prove post-start cleanup before releasing its lock/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      from: "  await assertCanaryProfileLockForDatabasePath(profileLock, options.databasePath);",
+      to: "  void profileLock;",
+      failure: /assert its authentic lease before storage/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      from: "    eventStore = acquireCanaryResource(() => new SqliteEventStore(paths.eventStore));",
+      to: "    eventStore = new SqliteEventStore(paths.eventStore);",
+      failure: /retaining the lock across uncertain cleanup/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      from: "      hostClosing = true;",
+      to: "      hostClosing = false;",
+      failure: /synchronously close provider admission and runtime control/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      from: "      canary?.beginClosing();",
+      to: "      void canary;",
+      failure: /synchronously close provider admission/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      from: `        () => {
+          runtime?.stop({ occurredAt: new Date().toISOString(), requestId: randomUUID() });
+        },
+        () => operator?.close(),`,
+      to: `        () => operator?.close(),
+        () => {
+          runtime?.stop({ occurredAt: new Date().toISOString(), requestId: randomUUID() });
+        },`,
+      failure: /synchronously close provider admission and runtime control/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      from: "            runtime?.close();",
+      to: "            queueMicrotask(() => runtime?.close());",
+      failure: /synchronously STOP-and-close runtime/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      from: "      assertHostOpen();\n      return controls.executeRuntimeControl(command);",
+      to: "      return controls.executeRuntimeControl(command);",
+      failure: /synchronously close provider admission and runtime control/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      from: "      this.#awaitActiveWork(activeStatus),",
+      to: "      Promise.resolve(),",
+      failure: /single-flight and drain status work/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      from: "      entry.nlink !== 1n ||",
+      to: "      false ||",
+      failure: /owner-owned, single-link database files/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      from: "      entry.uid !== EFFECTIVE_USER_ID",
+      to: "      false",
+      failure: /owner-owned, single-link database files/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator.ts",
+      from: "      shutdownRequested = true;",
+      to: "      shutdownRequested = false;",
+      failure: /latch early signals/u,
+    },
+    {
+      path: "apps/cli/src/base-rpc-canary-operator.ts",
+      from: '      process.off("SIGTERM", handleSignal);',
+      to: "      void handleSignal;",
+      failure: /latch early signals/u,
+    },
+  ];
+  for (const mutation of mutations) {
+    withFixture((root) => {
+      replace(root, mutation.path, mutation.from, mutation.to);
+      expectFailure(root, mutation.failure);
+    });
+  }
+
+  withFixture((root) => {
+    append(
+      root,
+      "apps/cli/src/disconnected-base-bypass.ts",
+      'import { startBaseRpcCanaryOperatorWithHost } from "./base-rpc-canary-operator-host-core.js";\nvoid startBaseRpcCanaryOperatorWithHost;\n',
+    );
+    expectFailure(root, /private host-core authority startBaseRpcCanaryOperatorWithHost/u);
   });
 });
 

@@ -51,6 +51,10 @@ const ALLOWED_SOURCE_PREFIXES = Object.freeze([
 
 const EXACT_ALLOWED_SOURCE_FILES = new Set([
   ENTRY,
+  "apps/cli/src/canary-operator-startup-cleanup.ts",
+  "apps/cli/src/profile-service-lock-core.ts",
+  "apps/cli/src/profile-service-lock.ts",
+  "apps/cli/src/production-canary-operator-facade.ts",
   "apps/cli/src/production-canary-config.ts",
   "apps/cli/src/production-runtime.ts",
   "apps/cli/src/x-canary-operator-options.ts",
@@ -88,6 +92,7 @@ const SAFE_PLATFORM_MODULES = new Set([
   "node:util",
 ]);
 const REVIEWED_CRYPTO_IMPORTS = new Map([
+  ["apps/cli/src/profile-service-lock-core.ts", Object.freeze(["randomUUID", "timingSafeEqual"])],
   ["apps/cli/src/x-canary-operator-host-core.ts", Object.freeze(["randomUUID"])],
   [
     "packages/capture-registry/src/crypto.ts",
@@ -131,6 +136,14 @@ const REVIEWED_CRYPTO_IMPORTS = new Map([
   ["packages/x-collector/src/hash.ts", Object.freeze(["createHash"])],
 ]);
 const REVIEWED_FS_IMPORTS = new Map([
+  [
+    "node:fs\0apps/cli/src/profile-service-lock-core.ts",
+    Object.freeze(["BigIntStats", "constants"]),
+  ],
+  [
+    "node:fs/promises\0apps/cli/src/profile-service-lock-core.ts",
+    Object.freeze(["FileHandle", "lstat", "mkdir", "open", "realpath", "unlink"]),
+  ],
   [
     "node:fs\0packages/capture-registry/src/sqlite-capture-registry.ts",
     Object.freeze([
@@ -192,7 +205,8 @@ const SPECIAL_PLATFORM_IMPORTS = new Map([
   ],
 ]);
 const REVIEWED_PROCESS_PROPERTIES = new Map([
-  ["apps/cli/src/x-canary-operator.ts", new Set(["argv", "exitCode", "once", "stderr"])],
+  ["apps/cli/src/x-canary-operator.ts", new Set(["argv", "exitCode", "off", "once", "stderr"])],
+  ["apps/cli/src/profile-service-lock-core.ts", new Set(["geteuid"])],
   ["apps/cli/src/production-runtime.ts", new Set(["env", "versions"])],
   ["apps/cli/src/x-canary-operator-host-core.ts", new Set(["geteuid"])],
   ["packages/capture-registry/src/sqlite-capture-registry.ts", new Set(["geteuid"])],
@@ -336,6 +350,12 @@ const CLAIM_BACKFILL_CORE_FILE = "apps/cli/src/x-canary-claim-backfill-core.ts";
 const CLAIM_BACKFILL_OPTIONS_FILE = "apps/cli/src/x-canary-claim-backfill-options.ts";
 const OPERATOR_HOST_FILE = "apps/cli/src/x-canary-operator-host.ts";
 const OPERATOR_HOST_CORE_FILE = "apps/cli/src/x-canary-operator-host-core.ts";
+const CANARY_STARTUP_CLEANUP_FILE = "apps/cli/src/canary-operator-startup-cleanup.ts";
+const PROFILE_LOCK_FILE = "apps/cli/src/profile-service-lock.ts";
+const PROFILE_LOCK_CORE_FILE = "apps/cli/src/profile-service-lock-core.ts";
+const PRODUCTION_FACADE_FILE = "apps/cli/src/production-canary-operator-facade.ts";
+const STAGE0_OPERATOR_FILE = "apps/cli/src/operator.ts";
+const STAGE0_OPTIONS_FILE = "apps/cli/src/operator-options.ts";
 const EXACT_X_ENDPOINT = "https://api.x.com/2/tweets/search/recent";
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 
@@ -1250,10 +1270,11 @@ function hasExactNames(actual, expected) {
 }
 
 function namedFunctionSource(source, name) {
-  const start = source.search(new RegExp(`\\bfunction\\s+${name}\\s*\\(`, "u"));
+  const start = source.search(new RegExp(`\\bfunction\\s+${name}(?:<[^>{}\\n]+>)?\\s*\\(`, "u"));
   if (start < 0) return "";
-  const next = source.indexOf("\nfunction ", start + name.length + 1);
-  return source.slice(start, next < 0 ? source.length : next);
+  const tail = source.slice(start + 1);
+  const next = tail.search(/\n(?:export\s+)?(?:async\s+)?function\s+/u);
+  return source.slice(start, next < 0 ? source.length : start + 1 + next);
 }
 
 function namedClassMethodSource(source, name) {
@@ -2040,12 +2061,811 @@ function verifyOperationsAttemptBoundary(root, graph, violations) {
   }
 }
 
+function sourceWithoutComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/gu, "");
+}
+
+function recursivelyListFirstPartySources(root, directory, violations, sources = []) {
+  if (!existsSync(directory)) return sources;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isSymbolicLink()) {
+      violations.push(
+        `${canonicalRelative(root, path)} is an unreviewed symbolic link in first-party source`,
+      );
+    } else if (entry.isDirectory()) {
+      recursivelyListFirstPartySources(root, path, violations, sources);
+    } else if (entry.isFile() && SOURCE_EXTENSIONS.includes(extname(entry.name))) {
+      sources.push(path);
+    }
+  }
+  return sources;
+}
+
+function verifyNoDisconnectedHostCoreBypass(root, violations) {
+  const restrictions = [
+    {
+      identifier: "startXCanaryOperatorWithHost",
+      modulePattern: /x-canary-operator-host-core/u,
+      allowed: new Set([
+        "apps/cli/src/x-canary-operator-host-core.ts",
+        "apps/cli/src/x-canary-operator-host.testing.ts",
+        "apps/cli/src/x-canary-operator-host.ts",
+      ]),
+    },
+    {
+      identifier: "startOpenSeaCanaryOperatorWithHost",
+      modulePattern: /opensea-canary-operator-host-core/u,
+      allowed: new Set([
+        "apps/cli/src/opensea-canary-operator-host-core.ts",
+        "apps/cli/src/opensea-canary-operator-host.testing.ts",
+        "apps/cli/src/opensea-canary-operator-host.ts",
+      ]),
+    },
+    {
+      identifier: "startBaseRpcCanaryOperatorWithHost",
+      modulePattern: /base-rpc-canary-operator-host-core/u,
+      allowed: new Set([
+        "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+        "apps/cli/src/base-rpc-canary-operator-host.testing.ts",
+        "apps/cli/src/base-rpc-canary-operator-host.ts",
+      ]),
+    },
+    {
+      identifier: "backfillXCanaryClaimWithHost",
+      modulePattern: /x-canary-claim-backfill-core/u,
+      allowed: new Set([
+        "apps/cli/src/x-canary-claim-backfill-core.ts",
+        "apps/cli/src/x-canary-claim-backfill-host.ts",
+      ]),
+    },
+    {
+      identifier: "acquireProfileServiceLock",
+      modulePattern: /profile-service-lock-core/u,
+      allowed: new Set([
+        "apps/cli/src/profile-service-lock-core.ts",
+        "apps/cli/src/profile-service-lock.testing.ts",
+        "apps/cli/src/profile-service-lock.ts",
+        "apps/cli/src/x-canary-operator-host-core.ts",
+        "apps/cli/src/opensea-canary-operator-host-core.ts",
+        "apps/cli/src/base-rpc-canary-operator-host-core.ts",
+      ]),
+    },
+    {
+      identifier: "acquireCanaryProfileLockForDatabasePathForTesting",
+      modulePattern: /profile-service-lock\.testing/u,
+      allowed: new Set([
+        "apps/cli/src/profile-service-lock.testing.ts",
+        "apps/cli/src/x-canary-operator-host.testing.ts",
+        "apps/cli/src/opensea-canary-operator-host.testing.ts",
+        "apps/cli/src/base-rpc-canary-operator-host.testing.ts",
+      ]),
+    },
+  ];
+  const sourceRoots = [];
+  const manifestFiles = ["package.json"];
+  const manifestReferencedSources = new Set();
+  for (const workspaceParent of ["apps", "packages"]) {
+    const parent = join(root, workspaceParent);
+    if (!existsSync(parent)) continue;
+    for (const entry of readdirSync(parent, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+      const packageRoot = join(parent, entry.name);
+      const sourceRoot = join(packageRoot, "src");
+      if (existsSync(sourceRoot)) sourceRoots.push(sourceRoot);
+      const manifest = join(packageRoot, "package.json");
+      if (existsSync(manifest)) manifestFiles.push(canonicalRelative(root, manifest));
+    }
+  }
+
+  const forbiddenScriptTarget =
+    /(?:canary-operator-host-core|canary-operator-host\.testing|x-canary-claim-backfill-core|profile-service-lock(?:-core|\.testing))/u;
+  const localScriptTarget =
+    /(?:^|[\s;&|()])(["']?)((?:\.\.?\/|(?:src|scripts|tools)\/)[^"';&|()\s]+\.(?:[cm]?[jt]s|tsx))\1/gu;
+  for (const manifestFile of manifestFiles) {
+    const path = join(root, manifestFile);
+    if (!existsSync(path)) continue;
+    try {
+      const manifest = readJson(path, manifestFile);
+      for (const [name, command] of Object.entries(manifest.scripts ?? {})) {
+        if (typeof command !== "string") continue;
+        if (forbiddenScriptTarget.test(command)) {
+          violations.push(
+            `${manifestFile} script ${name} exposes a private host-core or test-only lock bypass`,
+          );
+        }
+        for (const match of command.matchAll(localScriptTarget)) {
+          const candidate = resolve(dirname(path), match[2]);
+          const offset = relative(root, candidate);
+          if (
+            offset !== "" &&
+            offset !== ".." &&
+            !offset.startsWith(`..${sep}`) &&
+            !isAbsolute(offset) &&
+            existsSync(candidate) &&
+            statSync(candidate).isFile() &&
+            SOURCE_EXTENSIONS.includes(extname(candidate))
+          ) {
+            manifestReferencedSources.add(candidate);
+          }
+        }
+      }
+    } catch (error) {
+      violations.push(
+        `${manifestFile} cannot be checked for private host-core scripts: ${error.message}`,
+      );
+    }
+  }
+
+  const scriptsRoot = join(root, "scripts");
+  if (existsSync(scriptsRoot)) sourceRoots.push(scriptsRoot);
+  const allSources = new Set(manifestReferencedSources);
+  for (const sourceRoot of sourceRoots) {
+    for (const path of recursivelyListFirstPartySources(root, sourceRoot, violations)) {
+      allSources.add(path);
+    }
+  }
+  for (const path of allSources) {
+    const relativeFile = canonicalRelative(root, path);
+    let analysis;
+    try {
+      analysis = analyzeSource(parseSource(path));
+    } catch (error) {
+      violations.push(
+        `${relativeFile} cannot be checked for disconnected private authority: ${error.message}`,
+      );
+      continue;
+    }
+    const importedModules = analysis.imports
+      .map((dependency) => dependency.specifier)
+      .filter((specifier) => typeof specifier === "string");
+    for (const restriction of restrictions) {
+      if (
+        (analysis.identifiers.has(restriction.identifier) ||
+          importedModules.some((specifier) => restriction.modulePattern.test(specifier))) &&
+        !restriction.allowed.has(relativeFile)
+      ) {
+        violations.push(
+          `${relativeFile} reaches private host-core authority ${restriction.identifier} outside its reviewed production/testing wrappers`,
+        );
+      }
+    }
+  }
+}
+
+function verifyCanaryStartupCleanupBoundary(root, graph, violations) {
+  const source = requireSource(root, CANARY_STARTUP_CLEANUP_FILE, graph.files, violations);
+  if (source === undefined) return;
+
+  const expectedExports = [
+    "CanaryStartupProfileLock",
+    "IncompleteCanaryCleanupError",
+    "IncompleteCanaryOperatorStartupCleanupError",
+    "IncompleteCanaryResourceAcquisitionError",
+    "IncompleteCanaryResourceCleanupError",
+    "acquireCanaryResource",
+    "acquireCanaryResourceAsync",
+    "closeCanaryResourceSet",
+    "rethrowCanaryStartupFailureAfterCleanup",
+    "rethrowCanaryStartupFailureAfterProfileLockDecision",
+  ];
+  const acquireResource = namedFunctionSource(source, "acquireCanaryResource");
+  const acquireResourceAsync = namedFunctionSource(source, "acquireCanaryResourceAsync");
+  const resourceCleanup = namedFunctionSource(source, "closeCanaryResourceSet");
+  const cleanup = namedFunctionSource(source, "rethrowCanaryStartupFailureAfterCleanup");
+  const lockDecision = namedFunctionSource(
+    source,
+    "rethrowCanaryStartupFailureAfterProfileLockDecision",
+  );
+  const uncertain = lockDecision.indexOf("startupError instanceof IncompleteCanaryCleanupError");
+  const release = lockDecision.indexOf("await profileLock.release()", uncertain);
+  const releaseFailure = lockDecision.indexOf("catch (releaseError)", release);
+  const originalFailure = lockDecision.lastIndexOf("throw startupError");
+
+  if (
+    !hasExactNames(staticExportNames(source), expectedExports) ||
+    !/class\s+IncompleteCanaryCleanupError\s+extends\s+AggregateError/u.test(source) ||
+    !/class\s+IncompleteCanaryOperatorStartupCleanupError\s+extends\s+IncompleteCanaryCleanupError/u.test(
+      source,
+    ) ||
+    !/class\s+IncompleteCanaryResourceCleanupError\s+extends\s+IncompleteCanaryCleanupError/u.test(
+      source,
+    ) ||
+    !/class\s+IncompleteCanaryResourceAcquisitionError\s+extends\s+IncompleteCanaryCleanupError/u.test(
+      source,
+    ) ||
+    !/super\(\s*\[startupError,\s*cleanupError\],\s*"RSI canary startup cleanup did not complete; the profile lock must remain held",?\s*\)/u.test(
+      source,
+    ) ||
+    !/this\.name\s*=\s*"IncompleteCanaryOperatorStartupCleanupError"/u.test(source) ||
+    !/"RSI canary resource acquisition did not return a cleanup handle; the profile lock must remain held"/u.test(
+      source,
+    ) ||
+    acquireResource.length === 0 ||
+    !/try\s*\{\s*return\s+acquire\(\);?\s*\}\s*catch\s*\(error\)\s*\{\s*throw\s+new\s+IncompleteCanaryResourceAcquisitionError\(error\)/u.test(
+      acquireResource,
+    ) ||
+    acquireResourceAsync.length === 0 ||
+    !/try\s*\{\s*return\s+await\s+acquire\(\);?\s*\}\s*catch\s*\(error\)\s*\{\s*throw\s+new\s+IncompleteCanaryResourceAcquisitionError\(error\)/u.test(
+      acquireResourceAsync,
+    ) ||
+    resourceCleanup.length === 0 ||
+    !/for\s*\(const\s+cleanup\s+of\s+cleanupSteps\)/u.test(resourceCleanup) ||
+    countMatches(resourceCleanup, /await\s+cleanup\(\)/gu) !== 1 ||
+    !/catch\s*\(error\)\s*\{\s*failures\.push\(error\)/u.test(resourceCleanup) ||
+    !/if\s*\(failures\.length\s*>\s*0\)\s*throw\s+new\s+IncompleteCanaryResourceCleanupError\(failures\)/u.test(
+      resourceCleanup,
+    ) ||
+    cleanup.length === 0 ||
+    countMatches(cleanup, /await\s+close\(\)/gu) !== 1 ||
+    !/try\s*\{\s*await\s+close\(\);?\s*\}\s*catch\s*\(cleanupError\)\s*\{\s*throw\s+new\s+IncompleteCanaryOperatorStartupCleanupError\(startupError,\s*cleanupError\);?\s*\}\s*throw\s+startupError/u.test(
+      cleanup,
+    ) ||
+    lockDecision.length === 0 ||
+    uncertain < 0 ||
+    release < uncertain ||
+    releaseFailure < release ||
+    originalFailure < releaseFailure ||
+    countMatches(lockDecision, /profileLock\.release\s*\(\s*\)/gu) !== 1 ||
+    countMatches(lockDecision, /throw\s+startupError/gu) !== 2 ||
+    !/throw\s+new\s+AggregateError\(\s*\[startupError,\s*releaseError\],\s*combinedFailureMessage\s*\)/u.test(
+      lockDecision,
+    ) ||
+    /\b(?:finally|setTimeout|setInterval|unlink|rm|rmdir|retry|stale)\b/iu.test(
+      sourceWithoutComments(source),
+    )
+  ) {
+    violations.push(
+      `${CANARY_STARTUP_CLEANUP_FILE} must retain the shared lock when startup cleanup is uncertain and release it only after proven cleanup`,
+    );
+  }
+}
+
+function verifyProfileServiceLockBoundary(root, graph, violations) {
+  const facade = requireSource(root, PROFILE_LOCK_FILE, graph.files, violations);
+  const core = requireSource(root, PROFILE_LOCK_CORE_FILE, graph.files, violations);
+
+  if (facade !== undefined) {
+    const expectedExports = [
+      "PROFILE_SERVICE_LOCK_ERROR_MESSAGES",
+      "ProductionCanaryProfileLock",
+      "ProfileServiceLockError",
+      "ProfileServiceLockErrorCode",
+      "acquireProductionCanaryProfileLock",
+      "bindProfileServiceLock",
+    ];
+    const acquire = namedFunctionSource(facade, "acquireProductionCanaryProfileLock");
+    if (
+      !hasExactNames(staticExportNames(facade), expectedExports) ||
+      !/PRODUCTION_CANARY_DATABASE_PATH\s*=\s*resolve\(\s*import\.meta\.dirname,\s*"\.\.\/\.local\/rsi-runtime\.sqlite",?\s*\)/u.test(
+        facade,
+      ) ||
+      !/export\s+async\s+function\s+acquireProductionCanaryProfileLock\s*\(\s*\)/u.test(facade) ||
+      !/export\s+interface\s+ProductionCanaryProfileLock\s+extends\s+CanaryProfileLockLease/u.test(
+        facade,
+      ) ||
+      countMatches(facade, /acquireCanaryProfileLockForDatabasePath\s*\(/gu) !== 1 ||
+      !/return\s+acquireCanaryProfileLockForDatabasePath\s*\(\s*PRODUCTION_CANARY_DATABASE_PATH\s*\)/u.test(
+        acquire,
+      ) ||
+      /\b(?:cwd|env|homedir)\b|process\s*\./u.test(facade)
+    ) {
+      violations.push(
+        `${PROFILE_LOCK_FILE} must expose only the module-anchored, option-free shared production lock`,
+      );
+    }
+  }
+
+  if (core !== undefined) {
+    const expectedExports = [
+      "AcquireProfileServiceLockOptions",
+      "CanaryProfileLockLease",
+      "PROFILE_SERVICE_LOCK_ERROR_MESSAGES",
+      "ProfileServiceLock",
+      "ProfileServiceLockBoundResource",
+      "ProfileServiceLockError",
+      "ProfileServiceLockErrorCode",
+      "acquireCanaryProfileLockForDatabasePath",
+      "acquireProfileServiceLock",
+      "assertCanaryProfileLockForDatabasePath",
+      "bindProfileServiceLock",
+    ];
+    const code = sourceWithoutComments(core);
+    const existing = namedFunctionSource(core, "classifyExistingArtifact");
+    const acquire = namedFunctionSource(core, "acquireProfileServiceLock");
+    const hostAcquire = namedFunctionSource(core, "acquireCanaryProfileLockForDatabasePath");
+    const assertHostLock = namedFunctionSource(core, "assertCanaryProfileLockForDatabasePath");
+    const verifiedDirectory = namedFunctionSource(core, "verifiedPrivateDirectoryHandle");
+    const openDirectory = namedFunctionSource(core, "openVerifiedPrivateDirectory");
+    const partialCleanup = namedFunctionSource(core, "removePartiallyOwnedArtifact");
+    const ownedClassStart = core.indexOf("class OwnedProfileServiceLock");
+    const ownedClass = ownedClassStart < 0 ? "" : core.slice(ownedClassStart);
+    const release = namedClassMethodSource(ownedClass, "release");
+    const releaseOnce = namedClassMethodSource(ownedClass, "releaseOnce");
+    const bindStart = core.indexOf("export function bindProfileServiceLock<");
+    const bind = bindStart < 0 ? "" : core.slice(bindStart);
+    const close = bind.indexOf("await resource.close()");
+    const unlock = bind.indexOf("await lock.release()", close);
+    const directoryOpen = acquire.indexOf("await openVerifiedPrivateDirectory(");
+    const artifactOpen = acquire.indexOf("handle = await open(", directoryOpen);
+    const artifactSync = acquire.indexOf("await handle.sync()", artifactOpen);
+    const retainArtifact = acquire.indexOf("artifactMustRemain = true", artifactSync);
+    const directorySync = acquire.indexOf("await directoryHandle.sync()", retainArtifact);
+    const returnLease = acquire.indexOf("new OwnedProfileServiceLock(", directorySync);
+    const releaseUnlink = releaseOnce.indexOf("await unlink(this.artifactPath)");
+    const releaseDirectorySync = releaseOnce.indexOf(
+      "await this.#directoryHandle.sync()",
+      releaseUnlink,
+    );
+    const requirements = [
+      [/PRIVATE_DIRECTORY_MODE\s*=\s*0o700n/u, "owner-only directory mode"],
+      [/PRIVATE_FILE_MODE\s*=\s*0o600n/u, "owner-only artifact mode"],
+      [/SHARED_CANARY_SCOPE_ID\s*=\s*"stage1-canary"\s+as\s+const/u, "one shared scope"],
+      [
+        /durability:\s*"RSI operator lock release could not confirm directory durability\."/u,
+        "sanitized directory-durability error",
+      ],
+      [
+        /AUTHENTIC_PROFILE_SERVICE_LOCKS\s*=\s*new\s+WeakSet<object>\(\)/u,
+        "unforgeable lease registry",
+      ],
+      [/join\(directory,\s*`\.rsi-\$\{parsed\.scopeId\}\.lock`\)/u, "canonical artifact name"],
+      [
+        /constants\.O_CREAT\s*\|\s*constants\.O_EXCL\s*\|\s*constants\.O_NOFOLLOW\s*\|\s*constants\.O_RDWR/u,
+        "atomic no-follow open",
+      ],
+      [/entry\.uid\s*===\s*expectedUserId/u, "effective-user ownership"],
+      [/entry\.nlink\s*===\s*1n/u, "single-link artifact"],
+      [/sameIdentity\(descriptorEntry,\s*pathEntry\)/u, "descriptor/path identity"],
+      [/timingSafeEqual\(actual,\s*this\.#expectedArtifact\)/u, "owner-token verification"],
+      [/AUTHENTIC_PROFILE_SERVICE_LOCKS\.add\(this\)/u, "authentic lease registration"],
+    ];
+    for (const [pattern, label] of requirements) {
+      if (!pattern.test(core)) violations.push(`${PROFILE_LOCK_CORE_FILE} lacks ${label}`);
+    }
+    if (!hasExactNames(staticExportNames(core), expectedExports)) {
+      violations.push(`${PROFILE_LOCK_CORE_FILE} exposes an unreviewed lock API`);
+    }
+    if (
+      existing.length === 0 ||
+      !/lstat\(path,\s*\{\s*bigint:\s*true\s*\}\)/u.test(existing) ||
+      !/if\s*\(!isPrivateLockFile\(entry,\s*expectedUserId\)\)\s*throw\s+unsafe\(\)/u.test(
+        existing,
+      ) ||
+      !/throw\s+new\s+ProfileServiceLockError\("contended"\)/u.test(existing) ||
+      /\b(?:unlink|rename|rm|rmdir|truncate|open|writeFile|setTimeout|setInterval)\b/u.test(
+        existing,
+      )
+    ) {
+      violations.push(
+        `${PROFILE_LOCK_CORE_FILE} must refuse every existing artifact without stale takeover or forced deletion`,
+      );
+    }
+    if (
+      verifiedDirectory.length === 0 ||
+      !/Promise\.all\(\s*\[\s*handle\.stat\(\{\s*bigint:\s*true\s*\}\),\s*lstat\(path,\s*\{\s*bigint:\s*true\s*\}\),?\s*\]\s*\)/u.test(
+        verifiedDirectory,
+      ) ||
+      !/!isPrivateDirectory\(descriptorEntry,\s*expectedUserId\)/u.test(verifiedDirectory) ||
+      !/!isPrivateDirectory\(pathEntry,\s*expectedUserId\)/u.test(verifiedDirectory) ||
+      !/!sameIdentity\(descriptorEntry,\s*pathEntry\)/u.test(verifiedDirectory) ||
+      openDirectory.length === 0 ||
+      !/handle\s*=\s*await\s+open\(path,\s*constants\.O_RDONLY\s*\|\s*constants\.O_NOFOLLOW\)/u.test(
+        openDirectory,
+      ) ||
+      !/await\s+verifiedPrivateDirectoryHandle\(path,\s*handle,\s*expectedUserId\)/u.test(
+        openDirectory,
+      ) ||
+      !/await\s+handle\.close\(\)\.catch\(\(\)\s*=>\s*undefined\)/u.test(openDirectory)
+    ) {
+      violations.push(
+        `${PROFILE_LOCK_CORE_FILE} must hold and verify the canonical owner-only directory for the full lease`,
+      );
+    }
+    if (
+      acquire.length === 0 ||
+      countMatches(acquire, /await\s+open\s*\(/gu) !== 1 ||
+      !/if\s*\(\s*errnoCode\(error\)\s*===\s*"EEXIST"\s*\)\s*\{\s*return\s+classifyExistingArtifact\(artifactPath,\s*expectedUserId\);?\s*\}/u.test(
+        acquire,
+      ) ||
+      /\b(?:while|setTimeout|setInterval|backoff|retry|sleep)\b/iu.test(acquire) ||
+      directoryOpen < 0 ||
+      artifactOpen < directoryOpen ||
+      artifactSync < artifactOpen ||
+      retainArtifact < artifactSync ||
+      directorySync < retainArtifact ||
+      returnLease < directorySync ||
+      !/if\s*\(artifactMustRemain\)\s*\{\s*await\s+handle\.close\(\)\.catch\(\(\)\s*=>\s*undefined\);?\s*\}\s*else\s*\{[\s\S]{0,500}?await\s+removePartiallyOwnedArtifact\(/u.test(
+        acquire,
+      ) ||
+      !/new\s+OwnedProfileServiceLock\(\{[\s\S]{0,200}?directoryHandle,[\s\S]{0,240}?handle,/u.test(
+        acquire,
+      ) ||
+      countMatches(code, /\bawait\s+unlink\s*\(/gu) !== 2 ||
+      countMatches(partialCleanup, /await\s+unlink\(path\)/gu) !== 1 ||
+      countMatches(releaseOnce, /await\s+unlink\(this\.artifactPath\)/gu) !== 1
+    ) {
+      violations.push(
+        `${PROFILE_LOCK_CORE_FILE} must atomically acquire once, persist the owned artifact and directory before returning, and delete only a verified partial artifact`,
+      );
+    }
+    if (
+      hostAcquire.length === 0 ||
+      !/const\s+dataDirectory\s*=\s*dirname\(resolve\(databasePath\)\)/u.test(hostAcquire) ||
+      !/mkdir\(dataDirectory,\s*\{[\s\S]{0,160}?mode:\s*Number\(PRIVATE_DIRECTORY_MODE\)[\s\S]{0,100}?recursive:\s*true/u.test(
+        hostAcquire,
+      ) ||
+      !/acquireProfileServiceLock\(\{\s*dataDirectory,\s*scopeId:\s*SHARED_CANARY_SCOPE_ID\s*\}\)/u.test(
+        hostAcquire,
+      ) ||
+      /scopeId\s*[:=]\s*(?:process|options|databasePath)|\b(?:env|cwd|homedir)\b/u.test(hostAcquire)
+    ) {
+      violations.push(
+        `${PROFILE_LOCK_CORE_FILE} must derive every canary host lock from its database directory and one fixed shared scope`,
+      );
+    }
+    if (
+      assertHostLock.length === 0 ||
+      !/AUTHENTIC_PROFILE_SERVICE_LOCKS\.has\(value\)/u.test(assertHostLock) ||
+      !/dataDirectory\s*=\s*await\s+realpath\(dirname\(resolve\(databasePath\)\)\)/u.test(
+        assertHostLock,
+      ) ||
+      !/expectedArtifactPath\s*=\s*join\(\s*dataDirectory,\s*`\.rsi-\$\{SHARED_CANARY_SCOPE_ID\}\.lock`,?\s*\)/u.test(
+        assertHostLock,
+      ) ||
+      !/lock\.scopeId\s*!==\s*SHARED_CANARY_SCOPE_ID/u.test(assertHostLock) ||
+      !/lock\.artifactPath\s*!==\s*expectedArtifactPath/u.test(assertHostLock) ||
+      /\b(?:env|cwd|homedir|release)\b/u.test(assertHostLock)
+    ) {
+      violations.push(
+        `${PROFILE_LOCK_CORE_FILE} must authenticate the shared lease and bind it to the host database directory`,
+      );
+    }
+    if (
+      release.length === 0 ||
+      !/this\.#releasePromise\s*!==\s*null/u.test(release) ||
+      !/this\.#released\s*=\s*true/u.test(release) ||
+      releaseOnce.length === 0 ||
+      !/verifiedPrivateDirectoryHandle\(\s*dirname\(this\.artifactPath\),\s*this\.#directoryHandle,\s*this\.#expectedUserId,?\s*\)/u.test(
+        releaseOnce,
+      ) ||
+      !/verifiedOwnedEntry\(/u.test(releaseOnce) ||
+      !/this\.#handle\.read\(/u.test(releaseOnce) ||
+      !/timingSafeEqual\(/u.test(releaseOnce) ||
+      releaseUnlink < 0 ||
+      releaseDirectorySync < releaseUnlink ||
+      !/try\s*\{\s*await\s+this\.#directoryHandle\.sync\(\);?\s*\}\s*catch\s*\{\s*throw\s+durabilityFailure\(\);?\s*\}/u.test(
+        releaseOnce,
+      ) ||
+      !/Promise\.all\(\s*\[[\s\S]{0,160}?this\.#handle\.close\(\)[\s\S]{0,160}?this\.#directoryHandle\.close\(\)/u.test(
+        releaseOnce,
+      )
+    ) {
+      violations.push(
+        `${PROFILE_LOCK_CORE_FILE} must make release idempotent, ownership-verified, and directory-durable after unlink`,
+      );
+    }
+    if (
+      bind.length === 0 ||
+      !/closePromise\s*\?\?=\s*\(async\s*\(\)\s*=>\s*\{/u.test(bind) ||
+      close < 0 ||
+      unlock < close ||
+      countMatches(bind, /await\s+resource\.close\(\)/gu) !== 1 ||
+      countMatches(bind, /await\s+lock\.release\(\)/gu) !== 1 ||
+      /\b(?:catch|finally)\b/u.test(bind.slice(close, unlock))
+    ) {
+      violations.push(
+        `${PROFILE_LOCK_CORE_FILE} must retain the lock unless the complete wrapped shutdown succeeds`,
+      );
+    }
+    if (
+      /\b(?:setTimeout|setInterval|rename|rmdir|truncate)\b/u.test(code) ||
+      /\b(?:pid|processId|createdAt|expiresAt|staleAt)\b/u.test(code) ||
+      /PROFILE_SERVICE_LOCK_ERROR_MESSAGES[\s\S]{0,500}?\$\{|new\s+ProfileServiceLockError\([^"']/u.test(
+        code,
+      )
+    ) {
+      violations.push(
+        `${PROFILE_LOCK_CORE_FILE} must not add wait, expiry, PID, path-bearing errors, or stale-lock takeover logic`,
+      );
+    }
+  }
+}
+
+function verifyProductionCanaryFacade(root, graph, violations) {
+  const source = requireSource(root, PRODUCTION_FACADE_FILE, graph.files, violations);
+  if (source === undefined) return;
+
+  const expectedExports = [
+    "ReadOnlyCanaryRuntime",
+    "RunningProductionCanaryOperator",
+    "createProductionCanaryOperatorFacade",
+  ];
+  const runtimeInterface = source.match(
+    /export\s+interface\s+ReadOnlyCanaryRuntime\s*\{([\s\S]*?)\n\}/u,
+  )?.[1];
+  const runtimeProperties =
+    runtimeInterface === undefined
+      ? []
+      : [...runtimeInterface.matchAll(/^\s*([A-Za-z_$][\w$]*)\s*\(/gmu)].map((match) => match[1]);
+  const facade = namedFunctionSource(source, "createProductionCanaryOperatorFacade");
+  if (
+    !hasExactNames(staticExportNames(source), expectedExports) ||
+    runtimeProperties.length !== 1 ||
+    runtimeProperties[0] !== "getSnapshot" ||
+    !/readonly\s+runtime:\s*Readonly<ReadOnlyCanaryRuntime>/u.test(source) ||
+    !/const\s+runtime\s*=\s*Object\.freeze\(\{\s*getSnapshot:\s*\(\):\s*Readonly<RuntimeSnapshotV1>\s*=>\s*operator\.runtime\.getSnapshot\(\),?\s*\}\)/u.test(
+      facade,
+    ) ||
+    !/return\s+Object\.freeze\(\{\s*origin:\s*operator\.origin,\s*paths:\s*operator\.paths,\s*runtime,\s*close:\s*\(\):\s*Promise<void>\s*=>\s*operator\.close\(\),?\s*\}\)/u.test(
+      facade,
+    ) ||
+    countMatches(facade, /Object\.freeze\s*\(/gu) !== 2 ||
+    /operator\.runtime\.(?:close|listAudit|requestBoundaryAuthorization|stop|transition)\b/u.test(
+      facade,
+    ) ||
+    /\b(?:Proxy|Reflect|__proto__|setPrototypeOf)\b/u.test(facade)
+  ) {
+    violations.push(
+      `${PRODUCTION_FACADE_FILE} must expose only a frozen runtime getSnapshot facade plus the operator close lifecycle`,
+    );
+  }
+}
+
+function verifyEarlySignalCleanup(entry, startExpression, outputExpression, label, violations) {
+  const operator = entry.indexOf("let operator:");
+  const closeOperator = entry.indexOf("const closeOperator =");
+  const signalHandler = entry.indexOf("const handleSignal =");
+  const armInterrupt = entry.indexOf('process.once("SIGINT", handleSignal)');
+  const armTerminate = entry.indexOf('process.once("SIGTERM", handleSignal)');
+  const start = entry.indexOf(startExpression);
+  const firstShutdownCheck = entry.indexOf("if (shutdownRequested)", start);
+  const startupLine = entry.indexOf("const startupLine", firstShutdownCheck);
+  const secondShutdownCheck = entry.indexOf("if (shutdownRequested)", startupLine);
+  const output = entry.indexOf(outputExpression, secondShutdownCheck);
+  const catchStart = entry.indexOf("} catch {", start);
+  const catchClose = entry.indexOf("await closeOperator().catch(() => undefined)", catchStart);
+  const catchRemove = entry.indexOf("removeSignalHandlers();", catchClose);
+  if (
+    operator < 0 ||
+    closeOperator < operator ||
+    signalHandler < closeOperator ||
+    armInterrupt < signalHandler ||
+    armTerminate < signalHandler ||
+    start < armInterrupt ||
+    start < armTerminate ||
+    firstShutdownCheck < start ||
+    startupLine < firstShutdownCheck ||
+    secondShutdownCheck < startupLine ||
+    output < secondShutdownCheck ||
+    catchStart < start ||
+    catchClose < catchStart ||
+    catchRemove < catchClose ||
+    countMatches(entry, /process\.once\(\s*"SIGINT"\s*,\s*handleSignal\s*\)/gu) !== 1 ||
+    countMatches(entry, /process\.once\(\s*"SIGTERM"\s*,\s*handleSignal\s*\)/gu) !== 1 ||
+    countMatches(entry, /process\.off\(\s*"SIG(?:INT|TERM)"\s*,\s*handleSignal\s*\)/gu) !== 2 ||
+    countMatches(entry, /operator\.close\(\)/gu) !== 1 ||
+    !/closePromise\s*\?\?=\s*operator\.close\(\)/u.test(entry) ||
+    !/const\s+handleSignal\s*=\s*\(\)\s*:\s*void\s*=>\s*\{\s*shutdownRequested\s*=\s*true;\s*if\s*\(operator\s*===\s*undefined\)\s*return;/u.test(
+      entry,
+    )
+  ) {
+    violations.push(
+      `${label} must latch early signals and finish lock-bearing shutdown before exit`,
+    );
+  }
+}
+
+function verifyStage0StorageIsolation(root, violations) {
+  const source = (relativeFile) => {
+    const path = resolveSourceFile(join(root, relativeFile));
+    if (path === undefined) {
+      violations.push(`required reviewed source ${relativeFile} is missing`);
+      return undefined;
+    }
+    return readFileSync(path, "utf8");
+  };
+  const options = source(STAGE0_OPTIONS_FILE);
+  const operator = source(STAGE0_OPERATOR_FILE);
+  const prospectivePath =
+    options === undefined ? "" : namedFunctionSource(options, "resolveProspectiveStoragePath");
+  if (
+    options !== undefined &&
+    (!hasExactNames(staticExportNames(options), [
+      "OperatorOptions",
+      "assertStage0StorageIsolation",
+      "operatorUsage",
+      "parseOperatorOptions",
+      "resolveProspectiveStoragePath",
+    ]) ||
+      !/DEFAULT_DATABASE_PATH\s*=\s*"\.local\/stage0\/rsi-runtime\.sqlite"/u.test(options) ||
+      !/DEFAULT_RESEARCH_DATABASE_PATH\s*=\s*"\.local\/stage0\/rsi-research\.sqlite"/u.test(
+        options,
+      ) ||
+      !/const\s+offset\s*=\s*relative\(root,\s*candidate\)/u.test(options) ||
+      !/offset\s*===\s*""\s*\|\|\s*\(offset\s*!==\s*"\.\."\s*&&\s*!offset\.startsWith\(`\.\.\$\{sep\}`\)\s*&&\s*!isAbsolute\(offset\)\)/u.test(
+        options,
+      ) ||
+      !/const\s+productionRoot\s*=\s*resolve\(productionDataDirectory\)/u.test(options) ||
+      !/const\s+permittedStage0Root\s*=\s*join\(productionRoot,\s*"stage0"\)/u.test(options) ||
+      !/isAtOrBelow\(productionRoot,\s*candidate\)\s*&&\s*!isAtOrBelow\(permittedStage0Root,\s*candidate\)/u.test(
+        options,
+      ) ||
+      prospectivePath.length === 0 ||
+      !/let\s+existingAncestor\s*=\s*resolve\(path\)/u.test(prospectivePath) ||
+      !/return\s+resolve\(await\s+realpath\(existingAncestor\),\s*\.\.\.unresolvedSegments\)/u.test(
+        prospectivePath,
+      ) ||
+      !/unresolvedSegments\.unshift\(basename\(existingAncestor\)\)/u.test(prospectivePath) ||
+      !/existingAncestor\s*=\s*parent/u.test(prospectivePath) ||
+      /\b(?:mkdir|writeFile|open)\s*\(/u.test(prospectivePath))
+  ) {
+    violations.push(
+      `${STAGE0_OPTIONS_FILE} must confine defaults and every Stage 1-directory descendant to the dedicated Stage 0 subtree`,
+    );
+  }
+  if (operator !== undefined) {
+    const stage0Run = namedFunctionSource(operator, "runStage0Operator");
+    const databaseIdentity = namedFunctionSource(operator, "resolveDatabaseIdentity");
+    const guardedRuntimeControls = namedFunctionSource(
+      operator,
+      "createClosingAwareRuntimeControls",
+    );
+    const requestedGuard = stage0Run.search(
+      /assertStage0StorageIsolation\(\s*requestedDatabasePath,\s*requestedResearchDatabasePath,\s*requestedProductionDataDirectory,?\s*\)/u,
+    );
+    const prospectiveResolution = stage0Run.indexOf(
+      "resolveProspectiveStoragePath(requestedDatabasePath)",
+      requestedGuard,
+    );
+    const prospectiveGuard = stage0Run.search(
+      /assertStage0StorageIsolation\(\s*prospectiveRuntimePath,\s*prospectiveResearchPath,\s*productionDataDirectory,?\s*\)/u,
+    );
+    const databaseInspection = stage0Run.indexOf(
+      "resolveDatabaseIdentity(prospectiveRuntimePath)",
+      Math.max(0, prospectiveGuard),
+    );
+    const identityGuard = stage0Run.search(
+      /assertStage0StorageIsolation\(\s*runtimeIdentity\.path,\s*researchIdentity\.path,\s*productionDataDirectory,?\s*\)/u,
+    );
+    const runtimeOpen = stage0Run.indexOf("SqliteRuntimeController.open(");
+    if (
+      databaseIdentity.length === 0 ||
+      !/entry\.isSymbolicLink\(\)\s*\|\|\s*!entry\.isFile\(\)\s*\|\|\s*entry\.nlink\s*!==\s*1n/u.test(
+        databaseIdentity,
+      ) ||
+      !/productionXCanaryHostOptions\(\)\.databasePath/u.test(operator) ||
+      requestedGuard < 0 ||
+      prospectiveResolution < requestedGuard ||
+      prospectiveGuard < prospectiveResolution ||
+      databaseInspection < prospectiveGuard ||
+      identityGuard < databaseInspection ||
+      runtimeOpen < identityGuard ||
+      countMatches(operator, /resolveProspectiveStoragePath\s*\(/gu) !== 3 ||
+      countMatches(operator, /assertStage0StorageIsolation\s*\(/gu) !== 3
+    ) {
+      violations.push(
+        `${STAGE0_OPERATOR_FILE} must reject hard-linked databases and refuse requested, prospective, or canonical Stage 1 storage before opening Stage 0`,
+      );
+    }
+
+    const closeStart = stage0Run.indexOf("const close = (): Promise<void> => {");
+    const closeEnd = stage0Run.indexOf("\n  const removeSignalHandlers", closeStart);
+    const closeSource = closeStart < 0 || closeEnd < 0 ? "" : stage0Run.slice(closeStart, closeEnd);
+    const closeGuard = closeSource.indexOf("if (closePromise !== null) return closePromise");
+    const activateClosing = closeSource.indexOf("= true", closeGuard);
+    const closePromiseStart = closeSource.indexOf("closePromise = (async", activateClosing);
+    const initialStop = closeSource.indexOf("activeRuntime.stop(", closePromiseStart);
+    const drainServer = closeSource.indexOf("await operator?.close()", initialStop);
+    const closeResearch = closeSource.indexOf("research?.close()", drainServer);
+    const finalStop = closeSource.indexOf("activeRuntime.stop(", initialStop + 1);
+    const closeRuntime = closeSource.indexOf("activeRuntime.close()", finalStop);
+    const finalRuntimeSection = closeSource.slice(closeSource.lastIndexOf("try {", finalStop));
+    const signalHandlerStart = stage0Run.indexOf("const handleSignal = (): void => {");
+    const signalHandlerEnd = stage0Run.indexOf(
+      '\n  process.once("SIGINT", handleSignal);',
+      signalHandlerStart,
+    );
+    const signalHandler =
+      signalHandlerStart < 0 || signalHandlerEnd < 0
+        ? ""
+        : stage0Run.slice(signalHandlerStart, signalHandlerEnd);
+    const latchShutdown = signalHandler.indexOf("shutdownRequested = true");
+    const latchRuntimeControls = signalHandler.indexOf("hostClosing = true", latchShutdown);
+    const deferredResource = signalHandler.indexOf(
+      "if (operator === undefined) return",
+      latchRuntimeControls,
+    );
+    const installSigint = stage0Run.indexOf('process.once("SIGINT", handleSignal)');
+    const installSigterm = stage0Run.indexOf('process.once("SIGTERM", handleSignal)');
+    const postIdentityShutdown = stage0Run.indexOf("if (shutdownRequested)", databaseInspection);
+    const identityGuardInRun = stage0Run.indexOf(
+      "assertStage0StorageIsolation(",
+      postIdentityShutdown,
+    );
+    const researchOpen = stage0Run.indexOf("SqliteResearchLedger.open(", runtimeOpen);
+    const postOpenShutdown = stage0Run.indexOf("if (shutdownRequested)", researchOpen);
+    const controlConstruction = stage0Run.indexOf(
+      "createClosingAwareRuntimeControls(runtime, () => hostClosing)",
+      runtimeOpen,
+    );
+    const serverStart = stage0Run.indexOf("startOperatorServer(provider", controlConstruction);
+    const controlsPassed = stage0Run.indexOf("runtime: runtimeControls", serverStart);
+    const postServerShutdown = stage0Run.indexOf("if (shutdownRequested)", serverStart);
+    const startupSnapshot = stage0Run.indexOf(
+      "const snapshot = runtime.getSnapshot()",
+      postServerShutdown,
+    );
+    const preOutputShutdown = stage0Run.indexOf("if (shutdownRequested)", startupSnapshot);
+    const startupOutput = stage0Run.indexOf("console.log(startupLine)", preOutputShutdown);
+    if (
+      stage0Run.length === 0 ||
+      guardedRuntimeControls.length === 0 ||
+      !/const\s+controls\s*=\s*createRuntimeOperatorControls\(\{\s*controller\s*\}\)/u.test(
+        guardedRuntimeControls,
+      ) ||
+      !/if\s*\(isClosing\(\)\)\s*\{\s*throw\s+new\s+RuntimeConflictError\(\s*"STALE_STATE"/u.test(
+        guardedRuntimeControls,
+      ) ||
+      countMatches(guardedRuntimeControls, /assertHostOpen\(\)/gu) !== 2 ||
+      !/executeRuntimeControl\([^)]*\)[\s\S]{0,160}?assertHostOpen\(\);[\s\S]{0,160}?controls\.executeRuntimeControl/u.test(
+        guardedRuntimeControls,
+      ) ||
+      !/getRuntimeSnapshot\(\)[\s\S]{0,120}?assertHostOpen\(\);[\s\S]{0,120}?controls\.getRuntimeSnapshot/u.test(
+        guardedRuntimeControls,
+      ) ||
+      closeSource.length === 0 ||
+      closeGuard < 0 ||
+      activateClosing < closeGuard ||
+      closePromiseStart < activateClosing ||
+      initialStop < closePromiseStart ||
+      drainServer < initialStop ||
+      closeResearch < drainServer ||
+      finalStop < closeResearch ||
+      closeRuntime < finalStop ||
+      /\bawait\b/u.test(closeSource.slice(finalStop, closeRuntime)) ||
+      countMatches(closeSource, /activeRuntime\.stop\s*\(/gu) !== 2 ||
+      countMatches(closeSource, /activeRuntime\.close\s*\(/gu) !== 1 ||
+      !/try\s*\{\s*activeRuntime\.stop\([\s\S]{0,180}?\}\s*catch\s*\(error\)\s*\{\s*failures\.push\(error\);?\s*\}[\s\S]{0,120}?try\s*\{\s*activeRuntime\.close\(\);?\s*\}\s*catch\s*\(error\)\s*\{\s*failures\.push\(error\);?\s*\}[\s\S]{0,180}?throw\s+new\s+AggregateError\(failures,/u.test(
+        finalRuntimeSection,
+      ) ||
+      signalHandler.length === 0 ||
+      latchShutdown < 0 ||
+      latchRuntimeControls < latchShutdown ||
+      deferredResource < latchRuntimeControls ||
+      installSigint < 0 ||
+      installSigterm < installSigint ||
+      databaseInspection < installSigterm ||
+      postIdentityShutdown < databaseInspection ||
+      identityGuardInRun < postIdentityShutdown ||
+      runtimeOpen < identityGuardInRun ||
+      researchOpen < runtimeOpen ||
+      postOpenShutdown < researchOpen ||
+      controlConstruction < postOpenShutdown ||
+      controlConstruction < runtimeOpen ||
+      serverStart < controlConstruction ||
+      controlsPassed < serverStart ||
+      postServerShutdown < controlsPassed ||
+      startupSnapshot < postServerShutdown ||
+      preOutputShutdown < startupSnapshot ||
+      startupOutput < preOutputShutdown ||
+      countMatches(stage0Run, /if\s*\(shutdownRequested\)/gu) !== 4 ||
+      countMatches(operator, /createClosingAwareRuntimeControls\s*\(/gu) !== 2
+    ) {
+      violations.push(
+        `${STAGE0_OPERATOR_FILE} must install and latch shutdown before mutable startup, share one close promise, synchronously gate runtime control and persist STOP, drain the server/research store, then synchronously STOP-and-close runtime`,
+      );
+    }
+  }
+}
+
 function verifyProductionLaunchBoundary(root, graph, violations) {
   const config = requireSource(root, PRODUCTION_CONFIG_FILE, graph.files, violations);
   const runtime = requireSource(root, PRODUCTION_RUNTIME_FILE, graph.files, violations);
   const options = requireSource(root, OPERATOR_OPTIONS_FILE, graph.files, violations);
   const entry = requireSource(root, ENTRY, graph.files, violations);
   const host = requireSource(root, OPERATOR_HOST_FILE, graph.files, violations);
+  const hostCore = requireSource(root, OPERATOR_HOST_CORE_FILE, graph.files, violations);
 
   if (config !== undefined) {
     const requirements = [
@@ -2165,7 +2985,7 @@ function verifyProductionLaunchBoundary(root, graph, violations) {
       !/try\s*\{[\s\S]{0,300}?options\s*=\s*parseXCanaryOperatorOptions\(process\.argv\.slice\(2\)\)[\s\S]{0,180}?catch\s*\{[\s\S]{0,100}?process\.stderr\.write\(STARTUP_FAILURE_MESSAGE\)[\s\S]{0,100}?process\.exitCode\s*=\s*1/u.test(
         entry,
       ) ||
-      !/try\s*\{[\s\S]{0,180}?const\s+operator\s*=\s*await\s+startXCanaryOperator\(options\)[\s\S]{0,2400}?catch\s*\{[\s\S]{0,100}?process\.stderr\.write\(STARTUP_FAILURE_MESSAGE\)[\s\S]{0,100}?process\.exitCode\s*=\s*1/u.test(
+      !/try\s*\{[\s\S]{0,180}?operator\s*=\s*await\s+startXCanaryOperator\(options\)[\s\S]{0,3000}?catch\s*\{[\s\S]{0,300}?process\.stderr\.write\(STARTUP_FAILURE_MESSAGE\)[\s\S]{0,100}?process\.exitCode\s*=\s*1/u.test(
         entry,
       ) ||
       !/catch\s*\{[\s\S]{0,180}?process\.stderr\.write\(PRODUCTION_RUNTIME_FAILURE_MESSAGE\)[\s\S]{0,120}?process\.exitCode\s*=\s*1/u.test(
@@ -2177,21 +2997,87 @@ function verifyProductionLaunchBoundary(root, graph, violations) {
         `${ENTRY} must sanitize option, runtime, and host startup failures and keep startup output path-free`,
       );
     }
+    verifyEarlySignalCleanup(
+      entry,
+      "operator = await startXCanaryOperator(options)",
+      "console.log(startupLine)",
+      ENTRY,
+      violations,
+    );
   }
 
   if (host !== undefined) {
     const runtimeCheck = host.indexOf("assertActiveProductionRuntime();");
     const canonicalOptions = host.indexOf("productionXCanaryHostOptions();");
-    const keychain = host.indexOf("new DarwinXReadCanaryKeychain()");
-    const claimHost = host.indexOf("createDarwinXOneShotClaimHost()");
-    const dispatch = host.indexOf("return startXCanaryOperatorWithHost(");
+    const profileLock = host.indexOf("await acquireProductionCanaryProfileLock()");
+    const trackedOperatorMatch = host.match(
+      /let\s+([A-Za-z_$][\w$]*)\s*:\s*InternalRunningXCanaryOperator\s*\|\s*undefined/u,
+    );
+    const trackedOperator = trackedOperatorMatch?.[1];
+    const dispatch =
+      trackedOperator === undefined
+        ? -1
+        : host.search(
+            new RegExp(`${trackedOperator}\\s*=\\s*await\\s+startXCanaryOperatorWithHost\\(`, "u"),
+          );
+    const keychain = host.indexOf("new DarwinXReadCanaryKeychain()", dispatch);
+    const claimHost = host.indexOf("createDarwinXOneShotClaimHost()", dispatch);
+    const wrappedReturn =
+      trackedOperator === undefined
+        ? -1
+        : host.search(
+            new RegExp(
+              `return\\s+createProductionCanaryOperatorFacade\\(\\s*bindProfileServiceLock\\(\\s*${trackedOperator}\\s*,\\s*profileLock\\s*\\)\\s*\\)`,
+              "u",
+            ),
+          );
+    const catchStart = host.indexOf("} catch (error)", wrappedReturn);
+    const postStartClose =
+      trackedOperator === undefined
+        ? -1
+        : host.search(new RegExp(`await\\s+${trackedOperator}\\.close\\(\\)`, "u"));
+    const incompleteCleanup = host.indexOf(
+      "new IncompleteCanaryOperatorStartupCleanupError(error, cleanupError)",
+      postStartClose,
+    );
+    const retainedLockDecision = host.lastIndexOf(
+      "return rethrowCanaryStartupFailureAfterProfileLockDecision(",
+      incompleteCleanup,
+    );
+    const cleanLockDecision = host.indexOf(
+      "return rethrowCanaryStartupFailureAfterProfileLockDecision(",
+      incompleteCleanup,
+    );
     if (
       runtimeCheck < 0 ||
       canonicalOptions < runtimeCheck ||
-      keychain < canonicalOptions ||
-      claimHost < canonicalOptions ||
-      dispatch < canonicalOptions ||
+      profileLock < canonicalOptions ||
+      dispatch < profileLock ||
+      keychain < dispatch ||
+      claimHost < dispatch ||
+      wrappedReturn < claimHost ||
+      catchStart < wrappedReturn ||
+      postStartClose < catchStart ||
+      incompleteCleanup < postStartClose ||
+      retainedLockDecision < postStartClose ||
+      incompleteCleanup < retainedLockDecision ||
+      cleanLockDecision < incompleteCleanup ||
       countMatches(host, /assertActiveProductionRuntime\s*\(\s*\)/gu) !== 1 ||
+      countMatches(host, /acquireProductionCanaryProfileLock\s*\(\s*\)/gu) !== 1 ||
+      countMatches(host, /bindProfileServiceLock\s*\(/gu) !== 1 ||
+      countMatches(
+        host,
+        /rethrowCanaryStartupFailureAfterProfileLockDecision\s*\(\s*error\s*,\s*profileLock\s*,\s*"RSI X canary startup and lock release both failed"\s*,?\s*\)/gu,
+      ) !== 1 ||
+      countMatches(
+        host,
+        /rethrowCanaryStartupFailureAfterProfileLockDecision\s*\(\s*new\s+IncompleteCanaryOperatorStartupCleanupError\(\s*error\s*,\s*cleanupError\s*\)\s*,\s*profileLock\s*,\s*"RSI X canary startup and lock release both failed"\s*,?\s*\)/gu,
+      ) !== 1 ||
+      countMatches(host, /profileLock\.release\s*\(\s*\)/gu) !== 0 ||
+      !/IncompleteCanaryOperatorStartupCleanupError[\s\S]{0,200}?rethrowCanaryStartupFailureAfterProfileLockDecision/u.test(
+        host,
+      ) ||
+      /\.runtime\.(?:close|listAudit|requestBoundaryAuthorization|stop|transition)\b/u.test(host) ||
       !/options\.databasePath\s*!==\s*productionOptions\.databasePath/u.test(host) ||
       !/options\.researchDatabasePath\s*!==\s*productionOptions\.researchDatabasePath/u.test(
         host,
@@ -2199,7 +3085,175 @@ function verifyProductionLaunchBoundary(root, graph, violations) {
       !/options\.port\s*!==\s*productionOptions\.port/u.test(host)
     ) {
       violations.push(
-        `${OPERATOR_HOST_FILE} must reject injected production paths and ports before Keychain access`,
+        `${OPERATOR_HOST_FILE} must validate fixed options, acquire the shared lock before Keychain/core access, wrap the result in the read-only facade, and prove post-start cleanup before releasing its lock`,
+      );
+    }
+  }
+
+  if (hostCore !== undefined) {
+    const startCore = namedFunctionSource(hostCore, "startXCanaryOperatorWithHost");
+    const providerClassStart = hostCore.indexOf("class KeychainReadCanaryProvider");
+    const providerClassEnd = hostCore.indexOf("\n}\n\nfunction requestedPaths", providerClassStart);
+    const providerClass =
+      providerClassStart < 0 || providerClassEnd < 0
+        ? ""
+        : hostCore.slice(providerClassStart, providerClassEnd + 2);
+    const abortActive = namedClassMethodSource(providerClass, "abortActive");
+    const beginClosing = namedClassMethodSource(providerClass, "beginClosing");
+    const providerClose = namedClassMethodSource(providerClass, "close");
+    const guardedRuntimeControls = namedFunctionSource(
+      hostCore,
+      "createHostClosingRuntimeControls",
+    );
+    const leaseAssertion = startCore.indexOf(
+      "await assertCanaryProfileLockForDatabasePath(profileLock, options.databasePath)",
+    );
+    const requestedPaths = startCore.indexOf("const requested = requestedPaths(options)");
+    const storageInspection = startCore.indexOf("resolveDatabaseIdentity(", requestedPaths);
+    const runtimeOpen = startCore.indexOf("SqliteRuntimeController.open(", storageInspection);
+    const closeGuard = startCore.indexOf("if (closePromise === null)");
+    const closingStateMatch = startCore
+      .slice(0, closeGuard < 0 ? undefined : closeGuard)
+      .match(/let\s+([A-Za-z_$][\w$]*)\s*=\s*false;\s*$/mu);
+    const closingState = closingStateMatch?.[1];
+    const activateClosing =
+      closingState === undefined ? -1 : startCore.indexOf(`${closingState} = true`, closeGuard);
+    const closeProviderAdmission = startCore.indexOf("canary?.beginClosing()", activateClosing);
+    const outerClose = startCore.indexOf(
+      "closePromise = closeCanaryResourceSet(",
+      closeProviderAdmission,
+    );
+    const initialStop = startCore.indexOf("runtime?.stop(", outerClose);
+    const initialStopCallback = startCore.lastIndexOf("() => {", initialStop);
+    const firstCleanupCallback = startCore.indexOf("() =>", outerClose);
+    const stopAdmission = startCore.indexOf("() => operator?.close()", initialStop);
+    const drainProvider = startCore.indexOf("() => canary?.close()", initialStop);
+    const closeEventStore = startCore.indexOf("() => eventStore?.close()", drainProvider);
+    const closeResearch = startCore.indexOf("() => research?.close()", closeEventStore);
+    const finalStop = startCore.indexOf("runtime?.stop(", closeResearch);
+    const closeRuntime = startCore.indexOf("runtime?.close()", finalStop);
+    const finalRuntimeShutdown = startCore.slice(
+      startCore.lastIndexOf("() => {", finalStop),
+      startCore.indexOf("        },", closeRuntime) + "        },".length,
+    );
+    const closeSetEnd = startCore.indexOf("      ]);", closeRuntime);
+    const finalRuntimeShutdownEnd =
+      finalRuntimeShutdown.length === 0
+        ? -1
+        : startCore.lastIndexOf("() => {", finalStop) + finalRuntimeShutdown.length;
+    const guardedControlsConstruction =
+      closingState === undefined
+        ? -1
+        : startCore.search(
+            new RegExp(
+              `createHostClosingRuntimeControls\\(runtime,\\s*\\(\\)\\s*=>\\s*${closingState}\\)`,
+              "u",
+            ),
+          );
+    const cleanlyRethrow = startCore.indexOf(
+      "return rethrowCanaryStartupFailureAfterCleanup(error, close)",
+      runtimeOpen,
+    );
+    if (
+      !/import\s+\{[\s\S]{0,300}?\bIncompleteCanaryCleanupError\b[\s\S]{0,300}?\bacquireCanaryResource\b[\s\S]{0,200}?\bacquireCanaryResourceAsync\b[\s\S]{0,200}?\bcloseCanaryResourceSet\b[\s\S]{0,200}?\brethrowCanaryStartupFailureAfterCleanup\b[\s\S]{0,120}?\}\s+from\s+"\.\/canary-operator-startup-cleanup\.js"/u.test(
+        hostCore,
+      ) ||
+      !/import\s+\{[\s\S]{0,180}?\bassertCanaryProfileLockForDatabasePath\b[\s\S]{0,180}?\btype\s+CanaryProfileLockLease\b[\s\S]{0,100}?\}\s+from\s+"\.\/profile-service-lock-core\.js"/u.test(
+        hostCore,
+      ) ||
+      leaseAssertion < 0 ||
+      requestedPaths < leaseAssertion ||
+      storageInspection < requestedPaths ||
+      runtimeOpen < storageInspection ||
+      cleanlyRethrow < runtimeOpen ||
+      closeGuard < storageInspection ||
+      activateClosing < closeGuard ||
+      closeProviderAdmission < activateClosing ||
+      outerClose < closeProviderAdmission ||
+      initialStop < outerClose ||
+      initialStopCallback !== firstCleanupCallback ||
+      stopAdmission < initialStop ||
+      drainProvider < stopAdmission ||
+      closeEventStore < drainProvider ||
+      closeResearch < closeEventStore ||
+      finalStop < closeResearch ||
+      closeRuntime < finalStop ||
+      closeSetEnd < closeRuntime ||
+      !/^\s*$/u.test(startCore.slice(finalRuntimeShutdownEnd, closeSetEnd)) ||
+      finalRuntimeShutdown.length === 0 ||
+      /\bawait\b/u.test(finalRuntimeShutdown) ||
+      !/const\s+failures\s*:\s*unknown\[\]\s*=\s*\[\];[\s\S]{0,160}?try\s*\{\s*runtime\?\.stop\([\s\S]{0,180}?\}\s*catch\s*\(error\)\s*\{\s*failures\.push\(error\);?\s*\}[\s\S]{0,120}?try\s*\{\s*runtime\?\.close\(\);?\s*\}\s*catch\s*\(error\)\s*\{\s*failures\.push\(error\);?\s*\}[\s\S]{0,180}?throw\s+new\s+AggregateError\(failures,/u.test(
+        finalRuntimeShutdown,
+      ) ||
+      guardedControlsConstruction < runtimeOpen ||
+      guardedRuntimeControls.length === 0 ||
+      !/const\s+controls\s*=\s*createRuntimeOperatorControls\(\{\s*controller\s*\}\)/u.test(
+        guardedRuntimeControls,
+      ) ||
+      !/if\s*\(isHostClosing\(\)\)\s*\{\s*throw\s+new\s+RuntimeConflictError\(\s*"STALE_STATE"/u.test(
+        guardedRuntimeControls,
+      ) ||
+      countMatches(guardedRuntimeControls, /assertHostOpen\(\)/gu) !== 2 ||
+      !/executeRuntimeControl\([^)]*\)[\s\S]{0,160}?assertHostOpen\(\);[\s\S]{0,160}?controls\.executeRuntimeControl/u.test(
+        guardedRuntimeControls,
+      ) ||
+      !/getRuntimeSnapshot\(\)[\s\S]{0,120}?assertHostOpen\(\);[\s\S]{0,120}?controls\.getRuntimeSnapshot/u.test(
+        guardedRuntimeControls,
+      ) ||
+      countMatches(startCore, /runtime\?\.stop\s*\(/gu) !== 2 ||
+      countMatches(startCore, /canary\?\.beginClosing\s*\(\s*\)/gu) !== 1 ||
+      countMatches(startCore, /createHostClosingRuntimeControls\s*\(/gu) !== 1 ||
+      countMatches(
+        startCore,
+        /assertCanaryProfileLockForDatabasePath\s*\(\s*profileLock\s*,\s*options\.databasePath\s*\)/gu,
+      ) !== 1 ||
+      countMatches(
+        startCore,
+        /return\s+rethrowCanaryStartupFailureAfterCleanup\s*\(\s*error\s*,\s*close\s*\)/gu,
+      ) !== 1 ||
+      countMatches(hostCore, /acquireCanaryResource\s*\(/gu) !== 9 ||
+      countMatches(hostCore, /acquireCanaryResourceAsync\s*\(/gu) !== 3 ||
+      countMatches(hostCore, /closeCanaryResourceSet\s*\(/gu) !== 4 ||
+      !/#incompleteCleanupError\s*:\s*IncompleteCanaryCleanupError\s*\|\s*null\s*=\s*null/u.test(
+        hostCore,
+      ) ||
+      !/#activeStatus\s*:\s*Promise<Readonly<XReadCanaryProjectionV1>>\s*\|\s*null\s*=\s*null/u.test(
+        hostCore,
+      ) ||
+      !/if\s*\(this\.#activeStatus\s*!==\s*null\)\s*return\s+this\.#activeStatus/u.test(hostCore) ||
+      !/this\.#activeStatus\s*=\s*status/u.test(hostCore) ||
+      !/if\s*\(this\.#activeStatus\s*===\s*status\)\s*this\.#activeStatus\s*=\s*null/u.test(
+        hostCore,
+      ) ||
+      !/void\s+status\.then\(clear,\s*\(error:\s*unknown\)\s*=>\s*\{\s*this\.#latchIncompleteCleanupError\(error\);\s*clear\(\);\s*\}\)/u.test(
+        hostCore,
+      ) ||
+      !/const\s+activeStatus\s*=\s*this\.#activeStatus/u.test(hostCore) ||
+      !/await\s+Promise\.all\(\s*\[\s*this\.#awaitActiveWork\(activeRun\),\s*this\.#awaitActiveWork\(activeRecovery\),\s*this\.#awaitActiveWork\(activeStatus\),?\s*\]\s*\)/u.test(
+        hostCore,
+      ) ||
+      !/if\s*\(this\.#incompleteCleanupError\s*!==\s*null\)\s*throw\s+this\.#incompleteCleanupError/u.test(
+        hostCore,
+      ) ||
+      !/if\s*\(error\s+instanceof\s+IncompleteCanaryCleanupError\)\s*\{\s*this\.#closing\s*=\s*true;\s*this\.#incompleteCleanupError\s*\?\?=\s*error/u.test(
+        hostCore,
+      ) ||
+      abortActive.length === 0 ||
+      !/this\.#abortEpoch\s*\+=\s*1;\s*this\.#activeController\?\.abortActive\(\)/u.test(
+        abortActive,
+      ) ||
+      beginClosing.length === 0 ||
+      !/beginClosing\(\)\s*:\s*void\s*\{\s*if\s*\(this\.#closingBegan\)\s*return;\s*this\.#closingBegan\s*=\s*true;\s*this\.#closing\s*=\s*true;\s*try\s*\{\s*this\.abortActive\(\);\s*\}\s*catch\s*\(error\)\s*\{\s*this\.#latchIncompleteCleanupError\(error\);\s*this\.#admissionAbortFailure\s*\?\?=\s*error/u.test(
+        beginClosing,
+      ) ||
+      providerClose.length === 0 ||
+      !/async\s+close\(\)\s*:\s*Promise<void>\s*\{\s*this\.beginClosing\(\)/u.test(providerClose) ||
+      !/await\s+Promise\.all\([\s\S]{0,300}?activeRun[\s\S]{0,160}?activeRecovery[\s\S]{0,160}?activeStatus[\s\S]{0,200}?\);[\s\S]{0,160}?if\s*\(this\.#incompleteCleanupError\s*!==\s*null\)[\s\S]{0,200}?if\s*\(this\.#admissionAbortFailure\s*!==\s*undefined\)/u.test(
+        providerClose,
+      )
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_CORE_FILE} must assert its authentic lease before storage, single-flight and drain status work, synchronously close provider admission and runtime control before STOP, drain server/provider/storage, then synchronously STOP-and-close runtime while retaining the lock across uncertain cleanup`,
       );
     }
   }
@@ -2265,24 +3319,57 @@ function verifyXClaimBackfillBoundary(root, violations) {
   if (host !== undefined) {
     const runtime = host.indexOf("assertActiveProductionRuntime();");
     const path = host.indexOf("productionXCanaryEventStorePath();");
-    const inspect = host.indexOf("lstat(dirname(eventStorePath)");
-    const open = host.indexOf("new SqliteEventStore(eventStorePath)");
+    const profileLock = host.indexOf("await acquireProductionCanaryProfileLock()", path);
+    const inspect = host.indexOf("lstat(dirname(eventStorePath)", profileLock);
+    const open = host.indexOf(
+      "eventStore = acquireCanaryResource(() => new SqliteEventStore(eventStorePath))",
+      inspect,
+    );
     const invoke = host.indexOf("backfillXCanaryClaimWithHost(");
+    const close = host.indexOf("await closeCanaryResourceSet([() => eventStore?.close()])", invoke);
+    const release = host.indexOf("await profileLock.release()", close);
+    const failureClose = host.indexOf(
+      "await closeCanaryResourceSet([() => eventStore?.close()])",
+      release,
+    );
+    const incompleteCleanup = host.indexOf(
+      "throw new IncompleteCanaryResourceCleanupError([error, cleanupError])",
+      failureClose,
+    );
+    const lockDecision = host.indexOf(
+      "return rethrowCanaryStartupFailureAfterProfileLockDecision(",
+      incompleteCleanup,
+    );
     if (
       runtime < 0 ||
       path < runtime ||
-      inspect < path ||
+      profileLock < path ||
+      inspect < profileLock ||
       open < inspect ||
       invoke < open ||
+      close < invoke ||
+      release < close ||
+      failureClose < release ||
+      incompleteCleanup < failureClose ||
+      lockDecision < incompleteCleanup ||
+      countMatches(host, /acquireProductionCanaryProfileLock\s*\(\s*\)/gu) !== 1 ||
+      countMatches(host, /profileLock\.release\s*\(\s*\)/gu) !== 1 ||
+      countMatches(host, /acquireCanaryResource\s*\(/gu) !== 1 ||
+      countMatches(host, /closeCanaryResourceSet\s*\(/gu) !== 2 ||
+      countMatches(
+        host,
+        /rethrowCanaryStartupFailureAfterProfileLockDecision\s*\(\s*error\s*,\s*profileLock\s*,\s*"RSI X marker backfill and lock release both failed"\s*,?\s*\)/gu,
+      ) !== 1 ||
       countMatches(host, /createDarwinXOneShotClaimHost\s*\(\s*\)/gu) !== 1 ||
       !/OWNER_ONLY_DIRECTORY_MODE\s*=\s*0o700n/u.test(host) ||
       !/directoryEntry\.uid\s*!==\s*EFFECTIVE_USER_ID/u.test(host) ||
+      !/eventStoreEntry\.nlink\s*!==\s*1n/u.test(host) ||
       !/eventStoreEntry\.uid\s*!==\s*EFFECTIVE_USER_ID/u.test(host) ||
-      !/eventStore\.close\(\)/u.test(host) ||
+      /\bfinally\b/u.test(sourceWithoutComments(host)) ||
       /\b(?:fetch|withSecrets|bearerToken|apiKey|DarwinXReadCanaryKeychain)\b/u.test(host)
     ) {
       violations.push(
-        `${CLAIM_BACKFILL_HOST_FILE} must use only the canonical owner-controlled receipt store and fixed X marker host`,
+        `${CLAIM_BACKFILL_HOST_FILE} must acquire the shared lock before its single-link owner-owned event store and retain it unless every store cleanup succeeds`,
       );
     }
   }
@@ -2346,12 +3433,12 @@ function verifyOperatorHostBoundary(root, graph, violations) {
       );
     }
     if (
-      !/export\s+async\s+function\s+startXCanaryOperatorWithHost\s*\([\s\S]{0,500}?options\s*:\s*StartXCanaryOperatorOptions\s*,[\s\S]{0,500}?credentialHost\s*:\s*DarwinXReadCanaryKeychain\s*,[\s\S]{0,300}?claimHost\s*:\s*DarwinOneShotClaimHost/u.test(
+      !/export\s+async\s+function\s+startXCanaryOperatorWithHost\s*\([\s\S]{0,500}?options\s*:\s*StartXCanaryOperatorOptions\s*,[\s\S]{0,500}?credentialHost\s*:\s*DarwinXReadCanaryKeychain\s*,[\s\S]{0,300}?claimHost\s*:\s*DarwinOneShotClaimHost\s*,[\s\S]{0,200}?profileLock\s*:\s*CanaryProfileLockLease/u.test(
         core,
       )
     ) {
       violations.push(
-        `${OPERATOR_HOST_CORE_FILE} must keep credential and claim injection in its private three-argument host function`,
+        `${OPERATOR_HOST_CORE_FILE} must require credential, claim, and authentic lock capabilities in its private four-argument host function`,
       );
     }
     const optionsStart = core.search(
@@ -2383,9 +3470,45 @@ function verifyOperatorHostBoundary(root, graph, violations) {
         `${OPERATOR_HOST_CORE_FILE} must enforce an owner-owned mode-0700 data directory before credential access`,
       );
     }
+    const databaseIdentity = namedFunctionSource(core, "resolveDatabaseIdentity");
+    const databaseFileRequirements = [
+      /lstat\(canonicalPath,\s*\{\s*bigint:\s*true\s*\}\)/u,
+      /entry\.isSymbolicLink\(\)/u,
+      /!entry\.isFile\(\)/u,
+      /entry\.nlink\s*!==\s*1n/u,
+      /entry\.uid\s*!==\s*EFFECTIVE_USER_ID/u,
+      /stat\(canonicalPath,\s*\{\s*bigint:\s*true\s*\}\)/u,
+      /!identity\.isFile\(\)/u,
+      /identity\.nlink\s*!==\s*1n/u,
+      /identity\.uid\s*!==\s*EFFECTIVE_USER_ID/u,
+      /identity\.dev\s*!==\s*entry\.dev/u,
+      /identity\.ino\s*!==\s*entry\.ino/u,
+    ];
+    if (
+      databaseIdentity.length === 0 ||
+      databaseFileRequirements.some((pattern) => !pattern.test(databaseIdentity))
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_CORE_FILE} must accept only owner-owned, single-link database files with stable identity`,
+      );
+    }
 
-    const live = namedClassMethodSource(core, "runWithKeychain");
-    const recovery = namedClassMethodSource(core, "recoverWithStorageSecrets");
+    const liveStart = core.indexOf("async #runWithKeychain(");
+    const liveEnd = core.indexOf("\n  async #recoverInterruptedIfPossible(", liveStart);
+    const live = liveStart < 0 || liveEnd < 0 ? "" : core.slice(liveStart, liveEnd);
+    const providerClassStart = core.indexOf("class KeychainReadCanaryProvider");
+    const providerClassEnd = core.indexOf("\n}\n\nfunction requestedPaths", providerClassStart);
+    const providerClass =
+      providerClassStart < 0 || providerClassEnd < 0
+        ? ""
+        : core.slice(providerClassStart, providerClassEnd + 2);
+    const executeCanary = namedClassMethodSource(providerClass, "executeReadCanary");
+    const afterRecovery = namedClassMethodSource(providerClass, "executeAfterRecovery");
+    const initialize = namedClassMethodSource(providerClass, "initialize");
+    const recoveryStart = core.indexOf("async #recoverWithStorageSecrets(", liveEnd);
+    const recoveryEnd = core.indexOf("\n}\n\nfunction requestedPaths", recoveryStart);
+    const recovery =
+      recoveryStart < 0 || recoveryEnd < 0 ? "" : core.slice(recoveryStart, recoveryEnd);
     const operationsConstruction =
       /new\s+SqliteOperationsStore\s*\(\s*\{\s*path:\s*this\.paths\.operations\s*,\s*stateKey:\s*secrets\.operationsStateKey\s*,?\s*\}\s*\)/u;
     const registryConstruction =
@@ -2400,9 +3523,6 @@ function verifyOperatorHostBoundary(root, graph, violations) {
       countMatches(core, /\.withSecrets\s*\(/gu) !== 1 ||
       countMatches(core, /\.withStorageSecrets\s*\(/gu) !== 1 ||
       !/return\s+this\.credentialHost\.withSecrets\s*\(\s*async\s*\(\s*secrets\s*\)\s*=>\s*\{/u.test(
-        live,
-      ) ||
-      !/await\s+this\.claimHost\.claim\(\)\s*;[\s\S]{0,120}?return\s+this\.credentialHost\.withSecrets/u.test(
         live,
       ) ||
       !/await\s+this\.credentialHost\.withStorageSecrets\s*\(\s*async\s*\(\s*secrets\s*\)\s*=>\s*\{/u.test(
@@ -2428,16 +3548,101 @@ function verifyOperatorHostBoundary(root, graph, violations) {
         `${OPERATOR_HOST_CORE_FILE} must bind the live and recovery paths only to their exact Keychain secrets`,
       );
     }
+    const executeSnapshot = executeCanary.indexOf("const runtime = this.runtime.getSnapshot()");
+    const executeMode = executeCanary.indexOf('runtime.mode !== "RESEARCH"', executeSnapshot);
+    const executeRevision = executeCanary.indexOf(
+      "runtime.revision !== command.expectedRuntimeRevision",
+      executeMode,
+    );
+    const executeReceipt = executeCanary.indexOf("this.#existingReceipt(command)", executeRevision);
+    const executeEpoch = executeCanary.indexOf(
+      "this.#executeAfterRecovery(command, this.#abortEpoch)",
+      executeReceipt,
+    );
+    const recoveryCall = afterRecovery.indexOf("await this.#recoverInterruptedIfPossible(false)");
+    const recoveryClosing = afterRecovery.indexOf("this.#closing", recoveryCall);
+    const recoveryEpoch = afterRecovery.indexOf("this.#abortEpoch !== abortEpoch", recoveryClosing);
+    const recoveryReceipt = afterRecovery.indexOf("this.#existingReceipt(command)", recoveryEpoch);
+    const recoveryRun = afterRecovery.indexOf(
+      "this.#runWithKeychain(command, abortEpoch)",
+      recoveryReceipt,
+    );
+    const preSnapshot = live.indexOf("const runtimeBeforeClaim = this.runtime.getSnapshot()");
+    const preMode = live.indexOf('runtimeBeforeClaim.mode !== "RESEARCH"', preSnapshot);
+    const preRevision = live.indexOf(
+      "runtimeBeforeClaim.revision !== command.expectedRuntimeRevision",
+      preMode,
+    );
+    const claimCall = live.indexOf("await this.claimHost.claim()", preRevision);
+    const ownership = live.indexOf("this.#ownedCanaryClaim = true", claimCall);
+    const postSnapshot = live.indexOf(
+      "const runtimeAfterClaim = this.runtime.getSnapshot()",
+      ownership,
+    );
+    const postClosing = live.indexOf("this.#closing", postSnapshot);
+    const postEpoch = live.indexOf("this.#abortEpoch !== abortEpoch", postClosing);
+    const postMode = live.indexOf('runtimeAfterClaim.mode !== "RESEARCH"', postEpoch);
+    const postRevision = live.indexOf(
+      "runtimeAfterClaim.revision !== command.expectedRuntimeRevision",
+      postMode,
+    );
+    const reveal = live.indexOf("this.credentialHost.withSecrets(", postRevision);
     if (
+      executeCanary.length === 0 ||
+      executeSnapshot < 0 ||
+      executeMode < executeSnapshot ||
+      executeRevision < executeMode ||
+      executeReceipt < executeRevision ||
+      executeEpoch < executeReceipt ||
+      afterRecovery.length === 0 ||
+      recoveryCall < 0 ||
+      recoveryClosing < recoveryCall ||
+      recoveryEpoch < recoveryClosing ||
+      recoveryReceipt < recoveryEpoch ||
+      recoveryRun < recoveryReceipt ||
+      preSnapshot < 0 ||
+      preMode < preSnapshot ||
+      preRevision < preMode ||
+      claimCall < preRevision ||
+      ownership < claimCall ||
+      postSnapshot < ownership ||
+      postClosing < postSnapshot ||
+      postEpoch < postClosing ||
+      postMode < postEpoch ||
+      postRevision < postMode ||
+      reveal < postRevision ||
+      !/await\s+this\.claimHost\.claim\(\);\s*this\.#ownedCanaryClaim\s*=\s*true;\s*const\s+runtimeAfterClaim/u.test(
+        live,
+      ) ||
+      countMatches(live, /this\.claimHost\.claim\(\)/gu) !== 1 ||
+      countMatches(live, /this\.credentialHost\.withSecrets\s*\(/gu) !== 1
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_CORE_FILE} must reject stale runtime state before admission and claim, carry the abort epoch, own the marker immediately after claim, then recheck closing/runtime before live credentials`,
+      );
+    }
+
+    const markerStatus = initialize.indexOf("const claimStatus = await this.claimHost.status()");
+    const markerWithoutReceipt = initialize.indexOf(
+      'projection.lastReceipt === null && claimStatus === "present"',
+      markerStatus,
+    );
+    const receiptWithoutMarker = initialize.indexOf(
+      'projection.lastReceipt !== null && claimStatus !== "present"',
+      markerWithoutReceipt,
+    );
+    if (
+      initialize.length === 0 ||
+      markerStatus < 0 ||
+      markerWithoutReceipt < markerStatus ||
+      receiptWithoutMarker < markerWithoutReceipt ||
       countMatches(core, /this\.claimHost\.claim\(\)/gu) !== 1 ||
       countMatches(core, /this\.claimHost\.status\(\)/gu) !== 1 ||
       /claimHost/u.test(recovery) ||
-      !/projection\.lastReceipt\s*!==\s*null\s*&&\s*\(await\s+this\.claimHost\.status\(\)\)\s*!==\s*"present"/u.test(
-        core,
-      )
+      /(?:withSecrets|fetch\s*\(|XReadCanaryController)/u.test(initialize)
     ) {
       violations.push(
-        `${OPERATOR_HOST_CORE_FILE} must claim before live credentials and require a presence-only marker for completed receipts`,
+        `${OPERATOR_HOST_CORE_FILE} must require exact agreement between durable X receipt state and its presence-only marker before credentials or network`,
       );
     }
 
@@ -2472,7 +3677,7 @@ function verifyOperatorHostBoundary(root, graph, violations) {
         "one-argument production starter",
       ],
       [
-        /startXCanaryOperatorWithHost\s*\(\s*(?:options|productionOptions)\s*,\s*(?:credentialHost|keychain|new\s+DarwinXReadCanaryKeychain\s*\(\s*\))\s*,\s*(?:claimHost|createDarwinXOneShotClaimHost\s*\(\s*\))\s*,?\s*\)/u,
+        /startXCanaryOperatorWithHost\s*\(\s*(?:options|productionOptions)\s*,\s*(?:credentialHost|keychain|new\s+DarwinXReadCanaryKeychain\s*\(\s*\))\s*,\s*(?:claimHost|createDarwinXOneShotClaimHost\s*\(\s*\))\s*,\s*profileLock\s*,?\s*\)/u,
         "private host dispatch",
       ],
     ];
@@ -2518,6 +3723,10 @@ function verifyOriginAndBrowserBoundary(root, graph, violations) {
   }
   const server = requireSource(root, OPERATOR_SERVER_FILE, graph.files, violations);
   if (server === undefined) return;
+  const createServer = namedFunctionSource(server, "createOperatorServer");
+  const startServer = namedFunctionSource(server, "startOperatorServer");
+  const gracefulClose = startServer.indexOf("server.close((error)");
+  const forceClose = startServer.indexOf("server.closeAllConnections()", gracefulClose);
   if (
     countMatches(server, /connect-src/gu) !== 1 ||
     !server.includes(
@@ -2527,6 +3736,24 @@ function verifyOriginAndBrowserBoundary(root, graph, violations) {
   ) {
     violations.push(
       `${OPERATOR_SERVER_FILE} must keep dashboard connections, scripts, styles, and forms same-origin`,
+    );
+  }
+  if (
+    !/CONTROL_BODY_TIMEOUT_MS\s*=\s*5_000/u.test(server) ||
+    !/server\.headersTimeout\s*=\s*CONTROL_BODY_TIMEOUT_MS/u.test(createServer) ||
+    !/server\.requestTimeout\s*=\s*CONTROL_BODY_TIMEOUT_MS/u.test(createServer) ||
+    !/server\.keepAliveTimeout\s*=\s*1_000/u.test(createServer) ||
+    !/server\.maxHeadersCount\s*=\s*32/u.test(createServer) ||
+    !/server\.maxRequestsPerSocket\s*=\s*25/u.test(createServer) ||
+    !/server\.on\(\s*"upgrade"\s*,\s*\([^)]*socket[^)]*\)\s*=>\s*socket\.destroy\(\)\s*\)/u.test(
+      createServer,
+    ) ||
+    gracefulClose < 0 ||
+    forceClose < gracefulClose ||
+    countMatches(startServer, /server\.closeAllConnections\(\)/gu) !== 1
+  ) {
+    violations.push(
+      `${OPERATOR_SERVER_FILE} must bound slow clients, reject upgrades, and force-close admitted connections during shutdown`,
     );
   }
 }
@@ -2551,6 +3778,7 @@ export function verifyStage1ReadCanaryBoundary(options = {}) {
   }
   const graph = inspectGraph(root, packages);
   violations.push(...graph.violations);
+  verifyNoDisconnectedHostCoreBypass(root, violations);
   verifyRequiredPackages(graph, violations);
   verifyFetchBoundary(root, graph, violations);
   verifyXContract(root, graph, violations);
@@ -2558,9 +3786,13 @@ export function verifyStage1ReadCanaryBoundary(options = {}) {
   verifyOneShotClaimBoundary(root, graph, violations);
   verifyReadCanaryCompletionBoundary(root, graph, violations);
   verifyOperationsAttemptBoundary(root, graph, violations);
+  verifyCanaryStartupCleanupBoundary(root, graph, violations);
+  verifyProfileServiceLockBoundary(root, graph, violations);
+  verifyProductionCanaryFacade(root, graph, violations);
   verifyProductionLaunchBoundary(root, graph, violations);
   verifyXClaimBackfillBoundary(root, violations);
   verifyOperatorHostBoundary(root, graph, violations);
+  verifyStage0StorageIsolation(root, violations);
   verifyOriginAndBrowserBoundary(root, graph, violations);
 
   const uniqueViolations = [...new Set(violations)].sort();

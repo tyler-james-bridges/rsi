@@ -31,11 +31,38 @@ if (options === null) {
   }
 
   if (runtimeVerified) {
+    let operator: Awaited<ReturnType<typeof startOpenSeaCanaryOperator>> | undefined;
+    let closePromise: Promise<void> | null = null;
+    let shutdownRequested = false;
+    const closeOperator = (): Promise<void> => {
+      if (operator === undefined) return Promise.resolve();
+      closePromise ??= operator.close();
+      return closePromise;
+    };
+    const removeSignalHandlers = (): void => {
+      process.off("SIGINT", handleSignal);
+      process.off("SIGTERM", handleSignal);
+    };
+    const handleSignal = (): void => {
+      shutdownRequested = true;
+      if (operator === undefined) return;
+      void closeOperator()
+        .catch(() => {
+          process.stderr.write("RSI failed to persist STOP cleanly during OpenSea shutdown.\n");
+          process.exitCode = 1;
+        })
+        .finally(removeSignalHandlers);
+    };
+    process.once("SIGINT", handleSignal);
+    process.once("SIGTERM", handleSignal);
     try {
-      const operator = await startOpenSeaCanaryOperator(options);
-      const snapshot = operator.runtime.getSnapshot();
-      console.log(
-        JSON.stringify({
+      operator = await startOpenSeaCanaryOperator(options);
+      if (shutdownRequested) {
+        await closeOperator();
+        removeSignalHandlers();
+      } else {
+        const snapshot = operator.runtime.getSnapshot();
+        const startupLine = JSON.stringify({
           mode: "stage1-opensea-read-canary",
           runtimeMode: snapshot.mode,
           executionEnabled: false,
@@ -45,21 +72,17 @@ if (options === null) {
           provider: "opensea-api-v2",
           chain: "base",
           origin: operator.origin,
-        }),
-      );
-
-      let closing = false;
-      const handleSignal = (): void => {
-        if (closing) return;
-        closing = true;
-        void operator.close().catch(() => {
-          process.stderr.write("RSI failed to persist STOP cleanly during OpenSea shutdown.\n");
-          process.exitCode = 1;
         });
-      };
-      process.once("SIGINT", handleSignal);
-      process.once("SIGTERM", handleSignal);
+        if (shutdownRequested) {
+          await closeOperator();
+          removeSignalHandlers();
+        } else {
+          console.log(startupLine);
+        }
+      }
     } catch {
+      await closeOperator().catch(() => undefined);
+      removeSignalHandlers();
       process.stderr.write(STARTUP_FAILURE_MESSAGE);
       process.exitCode = 1;
     }
