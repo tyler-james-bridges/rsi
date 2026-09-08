@@ -943,7 +943,10 @@ describe("SqliteRuntimeController", () => {
       const receipt = authorization.consumeAndDispatch((checked) => {
         Atomics.store(coordination, 0, 1);
         Atomics.notify(coordination, 0);
-        expect(Atomics.wait(coordination, 1, 0, 2_000)).toBe("ok");
+        // The worker may announce immediately before this thread begins
+        // waiting. Both "ok" (notified while waiting) and "not-equal"
+        // (announcement already observed) complete the handshake.
+        expect(Atomics.wait(coordination, 1, 0, 2_000)).not.toBe("timed-out");
         expect(Atomics.load(coordination, 1)).toBe(1);
         expect(checked).toMatchObject({ decision: "allowed", mode: "RESEARCH" });
         // The competing controller announced its STOP attempt before this
@@ -1059,7 +1062,10 @@ describe("SqliteRuntimeController", () => {
       const completion = authorization.guardCompletion((facts) => {
         Atomics.store(coordination, 0, 1);
         Atomics.notify(coordination, 0);
-        expect(Atomics.wait(coordination, 1, 0, 2_000)).toBe("ok");
+        // The worker may announce immediately before this thread begins
+        // waiting. Both "ok" (notified while waiting) and "not-equal"
+        // (announcement already observed) complete the handshake.
+        expect(Atomics.wait(coordination, 1, 0, 2_000)).not.toBe("timed-out");
         expect(Atomics.load(coordination, 1)).toBe(1);
         resultStore.append({
           aggregateId: `canary:${authorization.actionId}`,

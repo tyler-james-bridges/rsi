@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./base-rpc": "./src/base-rpc.ts",
+    "./base-rpc-recovery": "./src/base-rpc-recovery.ts",
     "./opensea": "./src/opensea.ts"
   },
   "scripts": {
@@ -12,6 +14,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@rsi/base-rpc-collector": "workspace:*",
     "@rsi/capture-registry": "workspace:*",
     "@rsi/ingestion": "workspace:*",
     "@rsi/opensea-collector": "workspace:*",
@@ -23,6 +26,7 @@
     "zod": "^4.4.3"
   },
   "engines": {
-    "node": "24.x"
+    "node": "24.19.0",
+    "pnpm": "11.20.0"
   }
 }

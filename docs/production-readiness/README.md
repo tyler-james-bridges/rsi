@@ -2,6 +2,9 @@
 
 Status: **active single-machine contract**
 
+Operator steps, fixed Keychain identities, and the independent authorization boundaries are in the
+[Stage 1 commissioning runbook](./commissioning-runbook.md).
+
 RSI is built and operated on the computer already available to the owner. **No additional
 physical hardware is required.** A second computer, removable media, custom signing ceremony,
 hardware wallet, and hardware security key are not launch gates.
@@ -30,9 +33,10 @@ block the staged activation states below. In particular, a `production-observer`
 not a readiness verdict for `READ_CANARY`, and no new staged runtime may silently substitute the
 legacy all-source closure equation for stage-specific acceptance.
 
-The Stage 1 coordinator records exactly one X plan, request fingerprint, runtime authorization,
-durable attempt, encrypted capture receipt, and terminal sanitized outcome. Optional recovery or
-publication components may be added later without expanding that authority.
+Each Stage 1 coordinator records exactly one code-owned plan, request fingerprint, runtime
+authorization, durable attempt, encrypted capture receipt, and terminal sanitized outcome.
+Recovery remains a credentialless, storage-only boundary and cannot retry the provider request.
+Optional publication components may be added later without expanding that authority.
 
 ## Staged activation
 
@@ -70,6 +74,9 @@ reduces available authority; it does not create a hardware-purchase requirement.
   research and execution wallets are separate software accounts with only expendable balances.
 - Keep one durable authorization writer. Activation limits default to zero or unset, and policy,
   allowlists, caps, logs, tests, and emergency controls are outside the self-improvement loop.
+- X, OpenSea, Base RPC, and the X marker backfill share one owner-only Stage 1 profile lock acquired
+  before storage, recovery, or Keychain access. Stage 0 development state remains isolated under
+  `.local/stage0/` and cannot open canonical Stage 1 storage.
 - The Stage 0 runtime persists fail-closed `STOPPED`, checks a revision-bound one-shot permit
   before collection or proposal persistence, and records denied attempts. Every future approval,
   payment, signing, execution, and broadcast component must integrate the same STOP boundary and
@@ -90,6 +97,17 @@ Releases use normal reviewed Git commits, green CI, dependency and secret scans,
 inventory, and ordinary GitHub tags/releases. Custom release keys and signing ceremonies are not
 required. Loss of an optional signing key starts a clearly recorded new lineage; it does not require
 an offline physical copy.
+
+Graceful Stage 1 `SIGINT`/`SIGTERM` shutdown releases the shared profile lock only after the full
+operator close. Abrupt process termination such as `SIGKILL` leaves the artifact fail-closed while
+the OS remains running. After a host crash or power loss, any retained artifact receives the same
+treatment: it is never auto-deleted or judged stale from its contents. Manual removal requires
+first proving that no RSI process remains.
+The implementation synchronizes the lock file and containing directory before startup continues;
+its `SIGKILL` regression validates live-OS behavior and does not claim to simulate power loss.
+Restart the Mac if that proof is uncertain, then remove only the exact
+`apps/cli/.local/.rsi-stage1-canary.lock` file according to the
+[commissioning runbook](./commissioning-runbook.md).
 
 ## Standards order
 
@@ -129,6 +147,14 @@ forbidden in shell history, environment variables, `.env`, chat, Git, screenshot
 output, events, and operator projections. Restart recovery may finish only the already-recorded
 content-free result; it has no credential or egress path and cannot retry the provider request.
 
+The permanent Keychain one-shot marker was added after this historical canary completed, so its
+marker migration remains uncommissioned. Production X operator startup now fails closed when it
+finds a completed receipt without a presence-only marker status of `present`. The dedicated
+backfill CLI accepts only the exact typed X plan acknowledgement, verifies the canonical completed
+receipt, and can create only the missing marker; it has no provider credential, transport, database
+path, or port input. Running that CLI is a separate Keychain action that requires explicit
+authorization. The marker is never reset or deleted by RSI.
+
 ## OpenSea read-canary implementation — complete but uncommissioned
 
 The fixed candidate contract is plan `opensea-base-trending-collections-v1`, provider
@@ -137,6 +163,9 @@ The fixed candidate contract is plan `opensea-base-trending-collections-v1`, pro
 `https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=base&limit=10`.
 It is Base-only, JSON-only, identity-encoded, limited to at most 10 collections, and permits no
 retry, redirect, pagination, alternate query, or alternate destination.
+The official provider contract was rechecked on 2026-09-05; the sources, verified facts, and RSI's
+deliberately narrower acceptance rules are recorded in the
+[OpenSea provider-contract review](./evidence/opensea-provider-contract-review-2026-09-05.md).
 
 The reviewed source parser, one-shot dual-authorized collector, separate macOS Keychain boundary,
 exact dispatch provenance, encrypt-before-parse ingestion, durable singleton controller,
@@ -155,17 +184,53 @@ fixtures are quarantined historical test contracts, not current live-schema or a
 This work has not created, accessed, or used an OpenSea API key; whether the owner already has one
 is unknown. No OpenSea provider request has been made or authorized.
 Credential creation or access and the first live request require separate explicit authorization
-after current official documentation, account limits, and the exact response schema have been
-reviewed. The canary may produce a content-free commissioning receipt only. Before any later
+after current official documentation, account limits, and RSI's stricter response acceptance
+policy have been reviewed. The 2026-09-05 provider-contract review satisfies only that read-only
+documentation check; it did not commission the canary. The canary may produce a content-free
+commissioning receipt only. Before any later
 marketplace observation can become policy-eligible, trusted provenance must bind it to an exact
 commissioned endpoint, parser contract, request, capture lifecycle, and freshness proof;
 `source.kind = "opensea"` alone is never sufficient.
 
+## Base RPC read-canary implementation — complete but uncommissioned
+
+The fixed candidate contract is plan `base-mainnet-finalized-anchor-v1`: exactly one HTTP `POST`
+to `https://base-mainnet.g.alchemy.com/v2`, authenticated only by an
+`Authorization: Bearer` header, containing one two-item JSON-RPC batch for `eth_chainId` and
+`eth_getBlockByNumber` with `finalized` and `false`. The destination, method, headers, request IDs,
+RPC methods, parameters, timeout, response limit, and identity encoding are code-owned. Retry,
+redirect, fallback, payment, x402, wallet, signing, transaction, WebSocket, and arbitrary RPC
+method paths are absent. An HTTP `402` or `429` is terminal and cannot trigger another request.
+
+The strict source contract accepts only Base Mainnet chain ID `8453` and a reviewed nonzero block
+shape returned for the `finalized` tag. It applies a two-hour local freshness limit and labels the
+result only `providerReportedFinalized`; one provider response is not independent finality or
+canonical-chain proof. Raw response bytes are encrypted before parsing, private block identifiers
+remain inside authenticated storage, and verified key deletion precedes the content-free public
+receipt. Recovery has a separate static entry point with no collector, credential, or egress
+dependency and cannot replay the request.
+
+The singleton controller, permanent one-shot Keychain claim, canonical owner-only storage,
+fixed-port loopback operator, production runtime guard, and executable authority-graph gate are
+offline-tested. The public dashboard and receipt expose no block number, block hash, parent hash,
+JSON-RPC ID, provider header, quota value, raw content, capture ID, attempt ID, or request UUID.
+The provider contract, deliberate RSI narrowings, and remaining uncertainties are recorded in the
+[Base RPC provider-contract review](./evidence/base-rpc-provider-contract-review-2026-09-05.md).
+
+This work has not created, accessed, or used an Alchemy credential; no Base RPC provider request
+has been made or authorized. The strict response shape has therefore not been compared with a live
+account response, and current account-specific quota and pricing remain unknown. Credential setup
+or access and the one live request require separate explicit authorization immediately after a
+fresh official-documentation and account-limit check. A schema mismatch consumes the one-shot
+claim and does not retry.
+
 ## Next build target
 
-Immediately before commissioning, re-check the official endpoint, API-key authentication, account
-limits, rate-limit headers, and response contract. Then, only after separate authorization, access
-the fixed Keychain items and commission the single OpenSea read. Inspect its content-free receipt
-and keep the adapter quarantined before building the Base RPC canary. Only after live proposals are
+First migrate the historical completed X receipt into the permanent one-shot marker with the
+receipt-verifying, typed-plan-acknowledged backfill CLI. Do not run it without separate explicit
+authorization for that Keychain write. OpenSea and Base RPC then remain separate, uncommissioned
+one-shot reads: each requires its own credential decision, current official-documentation and
+account-limit recheck, exact-plan acknowledgement, and explicit live-request authorization. Inspect
+each content-free receipt while its adapter remains quarantined. Only after live proposals are
 useful and auditable should the owner fund the tiny research wallet for one AgentCash/x402 paid
 read. Capital activation values remain local and unset in source.

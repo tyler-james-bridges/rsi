@@ -7,8 +7,11 @@ later commissioning has an exact contract to test before any transport can be en
 
 ## OpenSea trending collections
 
-`@rsi/source-contracts/opensea-trending` is the live-wire, read-only contract reviewed against the
-official OpenSea API v2 OpenAPI description on 2026-08-25. It can prepare exactly one request:
+`@rsi/source-contracts/opensea-trending` is the live-wire, read-only request and acceptance
+contract reviewed against the official OpenSea API v2 OpenAPI description on 2026-09-05. The
+[public provider-contract review](../../docs/production-readiness/evidence/opensea-provider-contract-review-2026-09-05.md)
+records the official sources and the distinction between OpenSea's schema and RSI's local policy.
+The contract can prepare exactly one request:
 
 ```text
 GET https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=base&limit=10
@@ -18,12 +21,36 @@ The origin, path, and fixed ordered query are exported separately; the URL is co
 three constants so no caller can confuse query parameters with a path or supply its own query.
 The descriptor names `x-api-key` as the credential header but never accepts or contains a
 credential. It has no request input, cursor input, retry, pagination, order, token-ID, wallet,
-payment, or execution capability. The strict response parser admits only the documented
-`CollectionResponse` fields, requires at most ten unique collection slugs, one to sixteen valid
-Base contract addresses per collection, and requires every collection to be verified, enabled,
-and non-NSFW. Provider text, metadata, media, URLs, feature flags, and the optional cursor are
-discarded. The trusted result contains only rank, slug, normalized Base addresses, acquisition and
-expiry timestamps, and whether a valid cursor was present.
+payment, or execution capability. The strict response parser applies RSI's intentionally narrower
+acceptance policy over the documented `CollectionResponse` field set. OpenSea does not publish
+RSI's extra string bounds, exact-property rule, uniqueness requirements, contract-count limit, or
+Base-only contract-array guarantee. RSI deliberately fails closed outside those local bounds,
+requires at most ten unique collection slugs, one to sixteen valid Base contract addresses per
+collection, and requires every collection to be verified, enabled, and non-NSFW. Provider text,
+metadata, media, URLs, feature flags, and the optional cursor are discarded. The trusted result
+contains only rank, slug, normalized Base addresses, acquisition and expiry timestamps, and
+whether a valid cursor was present.
+
+## Base Mainnet finalized anchor
+
+`@rsi/source-contracts/base-rpc-anchor` is a separate live-wire request and acceptance contract for
+one signer-blind Base Mainnet check. It owns one exact JSON-RPC batch:
+
+```text
+POST https://base-mainnet.g.alchemy.com/v2
+eth_chainId([])
+eth_getBlockByNumber(["finalized", false])
+```
+
+The descriptor contains no credential and accepts no URL, method, parameter, block-tag, provider,
+retry, fallback, payment, wallet, or transaction input. Its strict parser accepts both expected
+response IDs exactly once, verifies chain ID `8453`, rejects JSON-RPC errors and unknown block
+fields, and applies a two-hour local freshness limit. Private block number and hash access is
+available only through an authentic branded anchor; generic serialization projects only a
+content-free `providerReportedFinalized` claim. That label records one provider's response to the
+`finalized` tag and is not independent finality proof. The dated
+[provider-contract review](../../docs/production-readiness/evidence/base-rpc-provider-contract-review-2026-09-05.md)
+records the upstream facts and deliberate local narrowings.
 
 ## Legacy OpenSea fixtures
 

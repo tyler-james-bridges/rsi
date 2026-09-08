@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./base-rpc-anchor": "./src/base-rpc-anchor.ts",
+    "./base-rpc-anchor-recovery": "./src/base-rpc-anchor-recovery.ts",
     "./capture-storage-recovery": "./src/capture-storage-recovery.ts",
     "./opensea-trending": "./src/opensea-trending.ts"
   },
@@ -14,6 +16,7 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@rsi/base-rpc-collector": "workspace:*",
     "@rsi/capture-registry": "workspace:*",
     "@rsi/opensea-collector": "workspace:*",
     "@rsi/operations": "workspace:*",

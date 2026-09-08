@@ -1,12 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { link, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { link, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SqliteRuntimeController } from "@rsi/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  PRODUCTION_STARTUP_SIGNALS,
+  captureProductionSignalListeners,
+  deferred,
+  invokeAddedProductionSignalListener,
+  productionSignalListenersMatch,
+  removeAddedProductionSignalListeners,
+} from "./production-entry-lifecycle-helpers.js";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const TSX_CLI = fileURLToPath(new URL("../../../node_modules/tsx/dist/cli.mjs", import.meta.url));
@@ -71,6 +80,8 @@ describe("Stage 0 operator process", () => {
   let directory: string | undefined;
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.resetModules();
     if (child !== undefined && child.exitCode === null && child.signalCode === null) {
       const exited = waitForExit(child);
       child.kill("SIGTERM");
@@ -175,6 +186,28 @@ describe("Stage 0 operator process", () => {
     reopened.close();
   });
 
+  it("creates fresh default Stage 0 directories owner-only without poisoning Stage 1", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-operator-default-modes-"));
+    child = spawn(process.execPath, [TSX_CLI, OPERATOR_ENTRY, "--port", "0"], {
+      cwd: directory,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const startup = await waitForStartup(child);
+    const canonicalDirectory = await realpath(directory);
+    expect(startup.databasePath).toBe(join(canonicalDirectory, ".local/stage0/rsi-runtime.sqlite"));
+    expect(startup.researchDatabasePath).toBe(
+      join(canonicalDirectory, ".local/stage0/rsi-research.sqlite"),
+    );
+    expect((await stat(join(directory, ".local"))).mode & 0o777).toBe(0o700);
+    expect((await stat(join(directory, ".local/stage0"))).mode & 0o777).toBe(0o700);
+
+    const exited = waitForExit(child);
+    child.kill("SIGINT");
+    expect(await exited).toBe(0);
+  });
+
   it("refuses aliased runtime and research database files", async () => {
     directory = await mkdtemp(join(tmpdir(), "rsi-operator-alias-"));
     const runtimePath = join(directory, "runtime.sqlite");
@@ -193,4 +226,133 @@ describe("Stage 0 operator process", () => {
     );
     expect(await waitForExit(child)).toBe(1);
   });
+
+  it.each(PRODUCTION_STARTUP_SIGNALS)(
+    "latches %s during server startup, closes every opened resource, and emits no startup line",
+    async (signal) => {
+      directory = await mkdtemp(join(tmpdir(), "rsi-stage0-early-signal-"));
+      const runtimePath = join(directory, "runtime.sqlite");
+      const researchPath = join(directory, "research.sqlite");
+      const originalArgv = process.argv;
+      const originalExitCode = process.exitCode;
+      const signalListeners = captureProductionSignalListeners();
+      const startup = deferred<{
+        close(): Promise<void>;
+        readonly origin: string;
+      }>();
+      const serverShutdown = deferred<void>();
+      const serverClose = vi.fn(() => serverShutdown.promise);
+      const runtimeStop = vi.fn(() => ({ mode: "STOPPED" }));
+      const runtimeClose = vi.fn(() => undefined);
+      const runtimeSnapshot = vi.fn(() => ({ mode: "STOPPED" as const }));
+      const researchClose = vi.fn(() => undefined);
+      const runtime = {
+        close: runtimeClose,
+        getSnapshot: runtimeSnapshot,
+        listAudit: vi.fn(() => []),
+        stop: runtimeStop,
+      };
+      const research = {
+        close: researchClose,
+        getProjection: vi.fn(() => ({ schemaVersion: 1 })),
+      };
+      let admittedRuntime:
+        | {
+            executeRuntimeControl(command: unknown): unknown;
+            getRuntimeSnapshot(): unknown;
+          }
+        | undefined;
+      const start = vi.fn(
+        (
+          _provider: unknown,
+          serverOptions: {
+            runtime: {
+              executeRuntimeControl(command: unknown): unknown;
+              getRuntimeSnapshot(): unknown;
+            };
+          },
+        ) => {
+          admittedRuntime = serverOptions.runtime;
+          return startup.promise;
+        },
+      );
+      vi.doMock("@rsi/runtime", () => ({
+        RuntimeConflictError: class RuntimeConflictError extends Error {
+          constructor(_code: string, message: string) {
+            super(message);
+          }
+        },
+        SqliteRuntimeController: { open: vi.fn(() => runtime) },
+      }));
+      vi.doMock("@rsi/research-ledger", () => ({
+        SqliteResearchLedger: { open: vi.fn(() => research) },
+      }));
+      vi.doMock("@rsi/operator", () => ({
+        createRuntimeOperatorControls: vi.fn(() => ({
+          executeRuntimeControl: vi.fn(),
+          getRuntimeSnapshot: runtimeSnapshot,
+          supportedActions: [],
+        })),
+        startOperatorServer: start,
+      }));
+      vi.doMock("../src/operator-options.js", () => ({
+        assertStage0StorageIsolation: vi.fn(),
+        operatorUsage: vi.fn(() => "unused"),
+        parseOperatorOptions: vi.fn(() => ({
+          databasePath: runtimePath,
+          port: 0,
+          researchDatabasePath: researchPath,
+        })),
+        resolveProspectiveStoragePath: vi.fn(async (path: string) => path),
+      }));
+      vi.doMock("../src/production-canary-config.js", () => ({
+        productionXCanaryHostOptions: vi.fn(() => ({
+          databasePath: join(directory!, "production", "runtime.sqlite"),
+        })),
+      }));
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      process.argv = [process.execPath, OPERATOR_ENTRY];
+      process.exitCode = undefined;
+
+      try {
+        const importing = import("../src/operator.js");
+        await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+        invokeAddedProductionSignalListener(signalListeners, signal);
+        expect(() => admittedRuntime?.getRuntimeSnapshot()).toThrow(
+          "Runtime controls are unavailable while the Stage 0 host is closing",
+        );
+        expect(() =>
+          admittedRuntime?.executeRuntimeControl({
+            action: "runtime-stop",
+            requestId: randomUUID(),
+          }),
+        ).toThrow("Runtime controls are unavailable while the Stage 0 host is closing");
+        startup.resolve({ close: serverClose, origin: "http://127.0.0.1:8787" });
+        await vi.waitFor(() => expect(serverClose).toHaveBeenCalledOnce());
+        expect(runtimeStop).toHaveBeenCalledOnce();
+        serverShutdown.resolve();
+        await importing;
+
+        expect(serverClose).toHaveBeenCalledOnce();
+        expect(researchClose).toHaveBeenCalledOnce();
+        expect(runtimeStop).toHaveBeenCalledTimes(2);
+        expect(runtimeClose).toHaveBeenCalledOnce();
+        expect(runtimeSnapshot).not.toHaveBeenCalled();
+        expect(consoleLog).not.toHaveBeenCalled();
+        expect(stderr).not.toHaveBeenCalled();
+        expect(process.exitCode).toBeUndefined();
+        expect(productionSignalListenersMatch(signalListeners)).toBe(true);
+      } finally {
+        removeAddedProductionSignalListeners(signalListeners);
+        process.argv = originalArgv;
+        process.exitCode = originalExitCode;
+        vi.doUnmock("@rsi/runtime");
+        vi.doUnmock("@rsi/research-ledger");
+        vi.doUnmock("@rsi/operator");
+        vi.doUnmock("../src/operator-options.js");
+        vi.doUnmock("../src/production-canary-config.js");
+      }
+    },
+  );
 });

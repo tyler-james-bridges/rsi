@@ -1,12 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { lstat, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SqliteRuntimeController } from "@rsi/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  PRODUCTION_STARTUP_SIGNALS,
+  captureProductionSignalListeners,
+  deferred,
+  invokeAddedProductionSignalListener,
+  productionSignalListenersMatch,
+  removeAddedProductionSignalListeners,
+} from "./production-entry-lifecycle-helpers.js";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const TSX_CLI = fileURLToPath(new URL("../../../node_modules/tsx/dist/cli.mjs", import.meta.url));
@@ -14,6 +23,9 @@ const FIXTURE_ENTRY = fileURLToPath(
   new URL("./fixtures/x-canary-operator-process-fixture.ts", import.meta.url),
 );
 const PRODUCTION_ENTRY = fileURLToPath(new URL("../src/x-canary-operator.ts", import.meta.url));
+const CLAIM_BACKFILL_ENTRY = fileURLToPath(
+  new URL("../src/x-canary-claim-backfill.ts", import.meta.url),
+);
 
 interface StartupReceipt {
   readonly executionEnabled: false;
@@ -55,6 +67,9 @@ function waitForLine(
 }
 
 function waitForExit(child: ChildProcessWithoutNullStreams): Promise<number | null> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(child.exitCode);
+  }
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("operator shutdown timed out")), 10_000);
     child.once("error", reject);
@@ -79,6 +94,8 @@ describe("Stage 1 CLI/operator process", () => {
   let directory: string | undefined;
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.resetModules();
     if (child !== undefined && child.exitCode === null && child.signalCode === null) {
       const exited = waitForExit(child);
       child.kill("SIGTERM");
@@ -163,6 +180,9 @@ describe("Stage 1 CLI/operator process", () => {
     await expect(closedLine).resolves.toEqual({ closed: true, xRequests: 1 });
     expect(await exited).toBe(0);
     expect(stderr).toBe("");
+    await expect(lstat(join(directory, ".rsi-stage1-canary.lock"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
 
     const reopened = SqliteRuntimeController.open({
       openedAt: new Date().toISOString(),
@@ -177,49 +197,221 @@ describe("Stage 1 CLI/operator process", () => {
     reopened.close();
   });
 
-  it("boots the production entry fail-closed without reading a secret value", async () => {
-    directory = await mkdtemp(join(tmpdir(), "rsi-x-canary-production-process-"));
-    const runtimePath = join(directory, "runtime.sqlite");
-    const researchPath = join(directory, "research.sqlite");
+  it.each(["snapshot", "serialization"] as const)(
+    "closes once and redacts a post-start %s failure",
+    async (failure) => {
+      vi.resetModules();
+      const originalArgv = process.argv;
+      const originalExitCode = process.exitCode;
+      const signalListeners = captureProductionSignalListeners();
+      const sensitive = `private X ${failure} failure at /Users/private/rsi-x.sqlite`;
+      const close = vi.fn(async () => undefined);
+      const getSnapshot = vi.fn(() => {
+        if (failure === "snapshot") throw new Error(sensitive);
+        return { mode: "STOPPED" };
+      });
+      const poisonedOrigin =
+        failure === "serialization"
+          ? {
+              toJSON(): never {
+                throw new Error(sensitive);
+              },
+            }
+          : "http://127.0.0.1:8787";
+      const start = vi.fn(async () => ({
+        close,
+        origin: poisonedOrigin,
+        runtime: { getSnapshot },
+      }));
+      vi.doMock("../src/production-runtime.js", () => ({
+        PRODUCTION_RUNTIME_FAILURE_MESSAGE: "unused runtime refusal\n",
+        assertActiveProductionRuntime: vi.fn(),
+      }));
+      vi.doMock("../src/x-canary-operator-host.js", () => ({
+        startXCanaryOperator: start,
+      }));
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      process.argv = [process.execPath, PRODUCTION_ENTRY];
+      process.exitCode = undefined;
+
+      try {
+        await import("../src/x-canary-operator.js");
+        expect(start).toHaveBeenCalledOnce();
+        expect(close).toHaveBeenCalledOnce();
+        expect(process.exitCode).toBe(1);
+        expect(consoleLog).not.toHaveBeenCalled();
+        expect(stdout).not.toHaveBeenCalled();
+        expect(stderr).toHaveBeenCalledTimes(1);
+        expect(String(stderr.mock.calls[0]![0])).toBe("RSI X canary startup was refused.\n");
+        expect(JSON.stringify(stderr.mock.calls)).not.toContain(sensitive);
+        expect(productionSignalListenersMatch(signalListeners)).toBe(true);
+      } finally {
+        removeAddedProductionSignalListeners(signalListeners);
+        process.argv = originalArgv;
+        process.exitCode = originalExitCode;
+        vi.doUnmock("../src/production-runtime.js");
+        vi.doUnmock("../src/x-canary-operator-host.js");
+      }
+    },
+  );
+
+  it.each(PRODUCTION_STARTUP_SIGNALS)(
+    "latches %s during async startup, closes once, emits no startup line, and removes handlers",
+    async (signal) => {
+      vi.resetModules();
+      const originalArgv = process.argv;
+      const originalExitCode = process.exitCode;
+      const signalListeners = captureProductionSignalListeners();
+      const startup = deferred<{
+        close(): Promise<void>;
+        readonly origin: string;
+        readonly runtime: { getSnapshot(): { readonly mode: "STOPPED" } };
+      }>();
+      const close = vi.fn(async () => undefined);
+      const getSnapshot = vi.fn(() => ({ mode: "STOPPED" as const }));
+      const start = vi.fn(() => startup.promise);
+      vi.doMock("../src/production-runtime.js", () => ({
+        PRODUCTION_RUNTIME_FAILURE_MESSAGE: "unused runtime refusal\n",
+        assertActiveProductionRuntime: vi.fn(),
+      }));
+      vi.doMock("../src/x-canary-operator-host.js", () => ({
+        startXCanaryOperator: start,
+      }));
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      process.argv = [process.execPath, PRODUCTION_ENTRY];
+      process.exitCode = undefined;
+
+      try {
+        const importing = import("../src/x-canary-operator.js");
+        await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+        invokeAddedProductionSignalListener(signalListeners, signal);
+        startup.resolve({
+          close,
+          origin: "http://127.0.0.1:8787",
+          runtime: { getSnapshot },
+        });
+        await importing;
+
+        expect(close).toHaveBeenCalledOnce();
+        expect(getSnapshot).not.toHaveBeenCalled();
+        expect(consoleLog).not.toHaveBeenCalled();
+        expect(stdout).not.toHaveBeenCalled();
+        expect(stderr).not.toHaveBeenCalled();
+        expect(process.exitCode).toBeUndefined();
+        expect(productionSignalListenersMatch(signalListeners)).toBe(true);
+      } finally {
+        removeAddedProductionSignalListeners(signalListeners);
+        process.argv = originalArgv;
+        process.exitCode = originalExitCode;
+        vi.doUnmock("../src/production-runtime.js");
+        vi.doUnmock("../src/x-canary-operator-host.js");
+      }
+    },
+  );
+
+  it("refuses an unreviewed production runtime before host startup", async () => {
     let stderr = "";
+    let stdout = "";
+    child = spawn(process.execPath, [TSX_CLI, PRODUCTION_ENTRY], {
+      cwd: ROOT,
+      env: { ...process.env, npm_config_user_agent: "pnpm/0.0.0" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+
+    expect(await waitForExit(child)).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toBe(
+      "RSI live canary startup refused because the exact production runtime is unavailable.\n",
+    );
+  });
+
+  it("redacts rejected production options before runtime or host startup", async () => {
+    let stderr = "";
+    let stdout = "";
+    const sensitiveOverride = "/Users/example/private/canary.sqlite";
+    child = spawn(process.execPath, [TSX_CLI, PRODUCTION_ENTRY, "--db", sensitiveOverride], {
+      cwd: ROOT,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+
+    expect(await waitForExit(child)).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("RSI X canary startup was refused.\n");
+    expect(stderr).not.toContain(sensitiveOverride);
+    expect(stderr).not.toContain(" at ");
+  });
+
+  it("refuses marker backfill on an unreviewed runtime without touching Keychain", async () => {
+    let stderr = "";
+    let stdout = "";
     child = spawn(
       process.execPath,
-      [
-        TSX_CLI,
-        PRODUCTION_ENTRY,
-        "--db",
-        runtimePath,
-        "--research-db",
-        researchPath,
-        "--port",
-        "0",
-      ],
-      { cwd: ROOT, env: process.env, stdio: ["pipe", "pipe", "pipe"] },
+      [TSX_CLI, CLAIM_BACKFILL_ENTRY, "--typed-plan-id-acknowledgement", "x-nft-market-pulse-v1"],
+      {
+        cwd: ROOT,
+        env: { ...process.env, npm_config_user_agent: "pnpm/0.0.0" },
+        stdio: ["pipe", "pipe", "pipe"],
+      },
     );
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    const startup = (await waitForLine(
-      child,
-      (value) =>
-        typeof value === "object" &&
-        value !== null &&
-        (value as { mode?: unknown }).mode === "stage1-x-read-canary",
-    )) as { origin: string; runtimeMode: string; financialAuthority: boolean };
-    expect(startup).toMatchObject({ financialAuthority: false, runtimeMode: "STOPPED" });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
 
-    const canary = await fetch(`${startup.origin}/api/read-canary`);
-    const body = (await canary.json()) as {
-      readCanary: { credentialStatus: string; status: string };
-    };
-    expect(canary.status).toBe(200);
-    expect(["configured", "missing", "unknown"]).toContain(body.readCanary.credentialStatus);
-    expect(body.readCanary.status).not.toBe("running");
+    expect(await waitForExit(child)).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toBe(
+      "RSI live canary startup refused because the exact production runtime is unavailable.\n",
+    );
+  });
 
-    const exited = waitForExit(child);
-    child.kill("SIGTERM");
-    expect(await exited).toBe(0);
-    expect(stderr).toBe("");
+  it("redacts rejected marker-backfill options before runtime or Keychain", async () => {
+    let stderr = "";
+    let stdout = "";
+    const sensitiveOverride = "/Users/example/private/receipt.sqlite";
+    child = spawn(process.execPath, [TSX_CLI, CLAIM_BACKFILL_ENTRY, "--db", sensitiveOverride], {
+      cwd: ROOT,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+
+    expect(await waitForExit(child)).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("RSI X one-shot marker backfill was refused.\n");
+    expect(stderr).not.toContain(sensitiveOverride);
+    expect(stderr).not.toContain(" at ");
   });
 });

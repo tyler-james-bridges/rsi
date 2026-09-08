@@ -25,7 +25,7 @@ Exit: normal CI passes and RSI can run locally without credentials, funds, or ad
 
 ## Stage 1 — Live research and proposals
 
-Status: **X READ_CANARY commissioned; OpenSea READ_CANARY implementation complete and uncommissioned**
+Status: **X READ_CANARY commissioned; OpenSea and Base RPC READ_CANARY implementations complete and uncommissioned**
 
 - [x] Build the signer-blind X read-canary path with a fixed query, dual one-shot authorization,
       durable singleton claim, Keychain isolation, encrypted capture, sanitized receipt, STOP races,
@@ -38,11 +38,20 @@ Status: **X READ_CANARY commissioned; OpenSea READ_CANARY implementation complet
       credential or provider request.
 - [x] Add the supervised OpenSea singleton controller, STOP-guarded completion, verified deletion
       before receipt, storage-only recovery, loopback operator, and dedicated authority-graph gate.
-- [ ] Separately authorize and commission the one Base trending-collections read, then retain and
+- [x] Build the signer-blind Base Mainnet finalized-anchor source, fixed one-batch Alchemy
+      collector, isolated Keychain boundary, encrypt-first ingestion, singleton controller,
+      storage-only recovery, loopback operator, permanent one-shot claim, and dedicated
+      authority-graph gate without a credential or provider request.
+- [ ] Separately authorize and commission the one OpenSea Base trending-collections read, then retain and
       inspect its content-free receipt without promoting continuous collection.
-- [ ] Build and separately commission the Base RPC read.
+- [ ] Separately authorize and commission the one Base Mainnet finalized-anchor read, then retain
+      and inspect its content-free receipt without promoting continuous collection.
 - Re-check current official documentation, authentication, pricing, schemas, and deployed addresses
-  immediately before each bounded canary.
+  immediately before each bounded canary. The read-only
+  [2026-09-05 OpenSea provider-contract review](./production-readiness/evidence/opensea-provider-contract-review-2026-09-05.md)
+  and
+  [2026-09-05 Base RPC provider-contract review](./production-readiness/evidence/base-rpc-provider-contract-review-2026-09-05.md)
+  record the latest checks without commissioning either canary.
 - Keep raw provider content inside quarantine and persist only typed, provenance-rich evidence.
 - Add opportunity scoring, outcome labels, source information-lift measurement, and explicit
   abstention reasons.
@@ -105,9 +114,15 @@ agents.
 
 ## Immediate next work
 
-Re-check the official OpenSea endpoint, authentication, account limits, rate-limit receipt, and
-response schema immediately before commissioning. No OpenSea API key creation, access, or provider
-request is authorized or has occurred. Request separate authorization for that first bounded read,
-inspect its content-free receipt, and keep continuous collection quarantined; then add Base RPC.
-Keep proposal persistence behind `PROPOSE_ONLY`; only after proposals are useful should the owner
-choose an expendable research-wallet balance for one AgentCash/x402 call.
+First migrate the already-completed X canary into the new permanent one-shot claim boundary. The
+backfill command must verify the canonical content-free X receipt and exact typed plan ID before it
+may create only the missing Keychain marker; it has no provider credential, transport, or path
+override. Creating that marker is a separately authorized Keychain action and is not part of an
+offline build.
+
+The official OpenSea and Base/Alchemy contracts were rechecked on 2026-09-05 and recorded in their
+dated provider-contract evidence. Those documentation reviews created or accessed no API key,
+made no provider request, and did not commission either canary. Request separate explicit
+authorization for each first bounded read, inspect its content-free receipt, and keep continuous
+collection quarantined. Keep proposal persistence behind `PROPOSE_ONLY`; only after proposals are
+useful should the owner choose an expendable research-wallet balance for one AgentCash/x402 call.

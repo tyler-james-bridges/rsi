@@ -16,7 +16,7 @@ import {
 
 import { SourceContractError } from "../src/errors.js";
 
-const ACQUIRED_AT = "2026-08-25T12:00:00.000Z";
+const ACQUIRED_AT = "2026-09-05T12:00:00.000Z";
 const FIRST_ADDRESS = `0x${"Aa".repeat(20)}`;
 const SECOND_ADDRESS = `0x${"Bb".repeat(20)}`;
 
@@ -25,7 +25,7 @@ describe("OpenSea trending-collections request contract", () => {
     const request = prepareOpenSeaTrendingRequest();
     expect(request).toEqual({
       accept: "application/json",
-      contractReviewDate: "2026-08-25",
+      contractReviewDate: "2026-09-05",
       contractVersion: OPENSEA_TRENDING_CONTRACT_VERSION,
       credentialHeader: "x-api-key",
       maximumResponseBytes: 2_097_152,
@@ -47,7 +47,7 @@ describe("OpenSea trending-collections request contract", () => {
         cursor: "forbidden",
       }),
     ).toThrowError(SourceContractError);
-    expect(OPENSEA_TRENDING_CONTRACT_REVIEW_DATE).toBe("2026-08-25");
+    expect(OPENSEA_TRENDING_CONTRACT_REVIEW_DATE).toBe("2026-09-05");
     expect(OPENSEA_TRENDING_ORIGIN).toBe("https://api.opensea.io");
     expect(OPENSEA_TRENDING_PATH).toBe("/api/v2/collections/trending");
     expect(OPENSEA_TRENDING_QUERY).toBe("timeframe=one_day&chains=base&limit=10");
@@ -100,7 +100,7 @@ describe("OpenSea trending-collections response contract", () => {
         },
       ],
       hasNextPage: true,
-      validUntil: "2026-08-25T12:02:00.000Z",
+      validUntil: "2026-09-05T12:02:00.000Z",
     });
     expect(bytes).toEqual(original);
     expect(Object.isFrozen(evidence)).toBe(true);
@@ -289,7 +289,7 @@ describe("OpenSea trending-collections response contract", () => {
     backing.set(ordinary, 1);
     expectInvalid(() => parseOpenSeaTrendingResponse(backing.subarray(1), ACQUIRED_AT));
     expectInvalid(() =>
-      parseOpenSeaTrendingResponse(jsonBytes(trendingFixture([])), "2026-08-25T12:00:00Z"),
+      parseOpenSeaTrendingResponse(jsonBytes(trendingFixture([])), "2026-09-05T12:00:00Z"),
     );
   });
 });

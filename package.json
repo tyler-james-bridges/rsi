@@ -20,6 +20,7 @@
   "scripts": {
     "check": "pnpm format:check && pnpm typecheck && pnpm test",
     "ci:actions": "node scripts/ci/verify-actions-pinned.mjs",
+    "ci:base-rpc": "node scripts/ci/verify-base-rpc-read-canary-boundary.mjs && node --test scripts/ci/verify-base-rpc-read-canary-boundary.test.mjs",
     "ci:clean": "node scripts/ci/verify-clean.mjs",
     "ci:contract": "node scripts/ci/verify-production-contract.mjs",
     "ci:demos": "node scripts/ci/run-offline-demos.mjs",
@@ -35,6 +36,8 @@
     "demo:pipeline": "pnpm --filter @rsi/cli pipeline",
     "operator": "pnpm --filter @rsi/cli run operator --",
     "operator:opensea-canary": "pnpm --filter @rsi/cli run operator:opensea-canary --",
+    "operator:base-rpc-canary": "pnpm --filter @rsi/cli run operator:base-rpc-canary --",
+    "operator:x-canary-backfill-claim": "pnpm --filter @rsi/cli run operator:x-canary-backfill-claim --",
     "operator:x-canary": "pnpm --filter @rsi/cli run operator:x-canary --",
     "operator:demo": "pnpm --filter @rsi/cli run operator --",
     "format": "prettier --write .",

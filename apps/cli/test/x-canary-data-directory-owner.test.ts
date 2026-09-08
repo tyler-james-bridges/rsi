@@ -6,6 +6,7 @@ import {
   createDarwinXReadCanaryKeychainForTesting,
   type CredentialCommandRequest,
 } from "@rsi/credential-host/testing";
+import { createDarwinOneShotClaimHostForTesting } from "@rsi/credential-host/one-shot-claim-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 let directory: string | undefined;
@@ -36,16 +37,22 @@ describe("Stage 1 X canary data-directory ownership", () => {
       }),
       platform: "darwin",
     });
+    const claimExecutor = vi.fn();
 
     await expect(
       startXCanaryOperatorForTesting({
+        claimHost: createDarwinOneShotClaimHostForTesting("x", {
+          executor: claimExecutor,
+          platform: "darwin",
+        }),
         credentialHost,
         databasePath: join(directory, "runtime.sqlite"),
         port: 0,
         researchDatabasePath: join(directory, "research.sqlite"),
       }),
-    ).rejects.toThrow("Stage 1 data directories must be owner-only (mode 0700)");
+    ).rejects.toMatchObject({ code: "unsafe", name: "ProfileServiceLockError" });
     expect(requests).toEqual([]);
+    expect(claimExecutor).not.toHaveBeenCalled();
     expect(await readdir(directory)).toEqual([]);
   });
 });

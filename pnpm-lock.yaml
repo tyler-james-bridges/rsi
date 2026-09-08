@@ -112,6 +112,18 @@ importers:
 
   packages/backup: {}
 
+  packages/base-rpc-collector:
+    dependencies:
+      "@rsi/operations":
+        specifier: workspace:*
+        version: link:../operations
+      "@rsi/runtime":
+        specifier: workspace:*
+        version: link:../runtime
+      "@rsi/source-contracts":
+        specifier: workspace:*
+        version: link:../source-contracts
+
   packages/capture-registry:
     dependencies:
       zod:
@@ -158,6 +170,9 @@ importers:
 
   packages/ingestion:
     dependencies:
+      "@rsi/base-rpc-collector":
+        specifier: workspace:*
+        version: link:../base-rpc-collector
       "@rsi/capture-registry":
         specifier: workspace:*
         version: link:../capture-registry
@@ -251,6 +266,9 @@ importers:
 
   packages/read-canary:
     dependencies:
+      "@rsi/base-rpc-collector":
+        specifier: workspace:*
+        version: link:../base-rpc-collector
       "@rsi/capture-registry":
         specifier: workspace:*
         version: link:../capture-registry

@@ -4,6 +4,7 @@ import {
   createDarwinXReadCanaryKeychainForTesting,
   type CredentialCommandExecutor,
 } from "@rsi/credential-host/testing";
+import { createDarwinOneShotClaimHostForTesting } from "@rsi/credential-host/one-shot-claim-testing";
 
 import { startXCanaryOperatorForTesting } from "../../src/x-canary-operator-host.testing.js";
 
@@ -55,7 +56,22 @@ globalThis.fetch = async (request): Promise<Response> => {
   );
 };
 
+let markerPresent = false;
 const operator = await startXCanaryOperatorForTesting({
+  claimHost: createDarwinOneShotClaimHostForTesting("x", {
+    executor: async (request) => {
+      const claiming = request.args[0] === "add-generic-password";
+      const exitCode = claiming ? (markerPresent ? 45 : 0) : markerPresent ? 0 : 44;
+      if (claiming && exitCode === 0) markerPresent = true;
+      return {
+        exitCode,
+        stdout: new Uint8Array(),
+        stderr: new Uint8Array(),
+        timedOut: false,
+      };
+    },
+    platform: "darwin",
+  }),
   credentialHost: createDarwinXReadCanaryKeychainForTesting({
     executor,
     platform: "darwin",

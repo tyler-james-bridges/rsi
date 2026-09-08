@@ -9,13 +9,16 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
   Stage1VerificationFailure,
   verifyStage1ReadCanaryBoundary,
 } from "./verify-stage1-read-canary-boundary.mjs";
+
+const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const REQUIRED_PACKAGES = [
   "capture-registry",
@@ -43,9 +46,46 @@ function manifest(name, exports = { ".": "./src/index.ts" }) {
 
 function makeFixture() {
   const root = mkdtempSync(join(tmpdir(), "rsi-stage1-read-canary-gate-"));
+  write(
+    root,
+    "package.json",
+    `${JSON.stringify(
+      {
+        scripts: {
+          "operator:x-canary-backfill-claim":
+            "pnpm --filter @rsi/cli run operator:x-canary-backfill-claim --",
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  write(
+    root,
+    "apps/cli/package.json",
+    `${JSON.stringify(
+      {
+        name: "@rsi/cli",
+        type: "module",
+        scripts: {
+          "operator:x-canary-backfill-claim":
+            "node ../../scripts/ci/assert-runtime.mjs && tsx src/x-canary-claim-backfill.ts",
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
   for (const packageName of REQUIRED_PACKAGES) {
     const directory = packageName === "operator" ? "apps/operator" : `packages/${packageName}`;
-    write(root, `${directory}/package.json`, manifest(`@rsi/${packageName}`));
+    const exports =
+      packageName === "credential-host"
+        ? {
+            ".": "./src/index.ts",
+            "./one-shot-claim": "./src/one-shot-claim.ts",
+          }
+        : { ".": "./src/index.ts" };
+    write(root, `${directory}/package.json`, manifest(`@rsi/${packageName}`, exports));
     write(
       root,
       `${directory}/src/index.ts`,
@@ -104,10 +144,136 @@ export class SqliteOperationsStore {
 
   write(
     root,
+    "apps/cli/src/production-canary-config.ts",
+    `import { resolve } from "node:path";
+const CLI_PACKAGE_DIRECTORY = resolve(import.meta.dirname, "..");
+const PRODUCTION_DATA_DIRECTORY = resolve(CLI_PACKAGE_DIRECTORY, ".local");
+export const PRODUCTION_CANARY_PORT = 8_787 as const;
+export interface ProductionOpenSeaCanaryHostOptions {
+  readonly databasePath: string;
+  readonly port: typeof PRODUCTION_CANARY_PORT;
+}
+export interface ProductionXCanaryHostOptions {
+  readonly databasePath: string;
+  readonly port: typeof PRODUCTION_CANARY_PORT;
+  readonly researchDatabasePath: string;
+}
+export function productionOpenSeaCanaryHostOptions(): Readonly<ProductionOpenSeaCanaryHostOptions> {
+  return Object.freeze({
+    databasePath: resolve(PRODUCTION_DATA_DIRECTORY, "rsi-opensea-canary-runtime.sqlite"),
+    port: PRODUCTION_CANARY_PORT,
+  });
+}
+export function productionXCanaryHostOptions(): Readonly<ProductionXCanaryHostOptions> {
+  return Object.freeze({
+    databasePath: resolve(PRODUCTION_DATA_DIRECTORY, "rsi-runtime.sqlite"),
+    port: PRODUCTION_CANARY_PORT,
+    researchDatabasePath: resolve(PRODUCTION_DATA_DIRECTORY, "rsi-research.sqlite"),
+  });
+}
+export function productionXCanaryEventStorePath(): string {
+  return resolve(PRODUCTION_DATA_DIRECTORY, "rsi-x-canary-events.sqlite");
+}
+`,
+  );
+  for (const relativeFile of [
+    "apps/cli/src/x-canary-claim-backfill.ts",
+    "apps/cli/src/x-canary-claim-backfill-host.ts",
+    "apps/cli/src/x-canary-claim-backfill-core.ts",
+    "apps/cli/src/x-canary-claim-backfill-options.ts",
+  ]) {
+    write(root, relativeFile, readFileSync(join(REPOSITORY_ROOT, relativeFile), "utf8"));
+  }
+  write(
+    root,
+    "apps/cli/src/production-runtime.ts",
+    `export const PRODUCTION_NODE_VERSION = "24.19.0" as const;
+export const PRODUCTION_PNPM_VERSION = "11.20.0" as const;
+export const PRODUCTION_RUNTIME_FAILURE_MESSAGE =
+  "RSI live canary startup refused because the exact production runtime is unavailable.\\n" as const;
+export interface ProductionRuntimeIdentity {
+  readonly nodeVersion: string;
+  readonly packageManagerUserAgent: string;
+}
+function pnpmVersionFromUserAgent(value: string): string | null {
+  const matches = [...value.matchAll(/(?:^|\\s)pnpm\\/([^\\s]+)/gu)];
+  return matches.length === 1 ? (matches[0]?.[1] ?? null) : null;
+}
+export function assertExactProductionRuntime(value: ProductionRuntimeIdentity): void {
+  if (
+    value.nodeVersion !== PRODUCTION_NODE_VERSION ||
+    pnpmVersionFromUserAgent(value.packageManagerUserAgent) !== PRODUCTION_PNPM_VERSION
+  ) {
+    throw new Error(PRODUCTION_RUNTIME_FAILURE_MESSAGE.trim());
+  }
+}
+export function assertActiveProductionRuntime(): void {
+  assertExactProductionRuntime({
+    nodeVersion: process.versions.node,
+    packageManagerUserAgent: process.env.npm_config_user_agent ?? "",
+  });
+}
+`,
+  );
+  write(
+    root,
+    "apps/cli/src/x-canary-operator-options.ts",
+    `import {
+  productionXCanaryHostOptions,
+  type ProductionXCanaryHostOptions,
+} from "./production-canary-config.js";
+export function xCanaryOperatorUsage(): string {
+  return "Usage: pnpm operator:x-canary";
+}
+export function parseXCanaryOperatorOptions(
+  args: readonly string[],
+): Readonly<ProductionXCanaryHostOptions> | null {
+  for (const argument of args) {
+    if (argument === "--") continue;
+    if (argument === "--help" || argument === "-h") return null;
+    throw new Error("X canary production options are fixed");
+  }
+  return productionXCanaryHostOptions();
+}
+`,
+  );
+  write(
+    root,
     "apps/cli/src/x-canary-operator.ts",
     `${REQUIRED_PACKAGES.map((name) => `import "@rsi/${name}";`).join("\n")}
+import {
+  PRODUCTION_RUNTIME_FAILURE_MESSAGE,
+  assertActiveProductionRuntime,
+} from "./production-runtime.js";
+import { parseXCanaryOperatorOptions } from "./x-canary-operator-options.js";
 import { startXCanaryOperator } from "./x-canary-operator-host.js";
-void startXCanaryOperator;
+const STARTUP_FAILURE_MESSAGE = "RSI X canary startup was refused.\\n" as const;
+let options: ReturnType<typeof parseXCanaryOperatorOptions> | undefined;
+try {
+  options = parseXCanaryOperatorOptions(process.argv.slice(2));
+} catch {
+  process.stderr.write(STARTUP_FAILURE_MESSAGE);
+  process.exitCode = 1;
+}
+if (options !== null && options !== undefined) {
+  let runtimeVerified = false;
+  try {
+    assertActiveProductionRuntime();
+    runtimeVerified = true;
+  } catch {
+    process.stderr.write(PRODUCTION_RUNTIME_FAILURE_MESSAGE);
+    process.exitCode = 1;
+  }
+  if (runtimeVerified) {
+    try {
+      const operator = await startXCanaryOperator(options);
+      console.log(JSON.stringify({ mode: "stage1-x-read-canary", origin: operator.origin }));
+    } catch {
+      process.stderr.write(STARTUP_FAILURE_MESSAGE);
+      process.exitCode = 1;
+    }
+  }
+}
 `,
   );
   write(
@@ -117,6 +283,10 @@ void startXCanaryOperator;
 import { dirname } from "node:path";
 import { SqliteCaptureRegistry } from "@rsi/capture-registry";
 import type { DarwinXReadCanaryKeychain } from "@rsi/credential-host";
+import {
+  isDarwinOneShotClaimHost,
+  type DarwinOneShotClaimHost,
+} from "@rsi/credential-host/one-shot-claim";
 import { SqliteOperationsStore } from "@rsi/operations";
 import { XReadCanaryController } from "@rsi/read-canary";
 import { SqliteRuntimeController } from "@rsi/runtime";
@@ -150,11 +320,19 @@ export interface RunningXCanaryOperator {
 class FixtureCredentialProvider {
   constructor(
     private readonly credentialHost: DarwinXReadCanaryKeychain,
+    private readonly claimHost: DarwinOneShotClaimHost,
     private readonly eventStore: unknown,
     private readonly paths: any,
     private readonly runtime: unknown,
   ) {}
+  async initialize(): Promise<void> {
+    const projection = { lastReceipt: null };
+    if (projection.lastReceipt !== null && (await this.claimHost.status()) !== "present") {
+      throw new Error("marker missing");
+    }
+  }
   async #runWithKeychain(): Promise<unknown> {
+    await this.claimHost.claim();
     return this.credentialHost.withSecrets(async (secrets) => {
       const operationsStore = new SqliteOperationsStore({
         path: this.paths.operations,
@@ -205,6 +383,7 @@ class FixtureCredentialProvider {
 export async function startXCanaryOperatorWithHost(
   options: StartXCanaryOperatorOptions,
   credentialHost: DarwinXReadCanaryKeychain,
+  claimHost: DarwinOneShotClaimHost,
 ): Promise<RunningXCanaryOperator> {
   await resolveDatabaseIdentity(options.databasePath);
   const runtime = SqliteRuntimeController.open({
@@ -212,7 +391,8 @@ export async function startXCanaryOperatorWithHost(
     path: options.databasePath,
     processInstanceId: "00000000-0000-4000-8000-000000000000",
   });
-  void new FixtureCredentialProvider(credentialHost, {}, {}, runtime);
+  if (!isDarwinOneShotClaimHost(claimHost)) throw new Error("claim host invalid");
+  void new FixtureCredentialProvider(credentialHost, claimHost, {}, {}, runtime);
   return { paths: { runtime: options.databasePath } };
 }
 `,
@@ -221,6 +401,9 @@ export async function startXCanaryOperatorWithHost(
     root,
     "apps/cli/src/x-canary-operator-host.ts",
     `import { DarwinXReadCanaryKeychain } from "@rsi/credential-host";
+import { createDarwinXOneShotClaimHost } from "@rsi/credential-host/one-shot-claim";
+import { productionXCanaryHostOptions } from "./production-canary-config.js";
+import { assertActiveProductionRuntime } from "./production-runtime.js";
 import {
   startXCanaryOperatorWithHost,
   type RunningXCanaryOperator,
@@ -234,8 +417,18 @@ export type {
 export async function startXCanaryOperator(
   options: StartXCanaryOperatorOptions,
 ): Promise<RunningXCanaryOperator> {
-  const credentialHost = new DarwinXReadCanaryKeychain();
-  return startXCanaryOperatorWithHost(options, credentialHost);
+  assertActiveProductionRuntime();
+  const productionOptions = productionXCanaryHostOptions();
+  if (
+    options.databasePath !== productionOptions.databasePath ||
+    options.researchDatabasePath !== productionOptions.researchDatabasePath ||
+    options.port !== productionOptions.port
+  ) throw new TypeError("X canary production options are fixed");
+  return startXCanaryOperatorWithHost(
+    productionOptions,
+    new DarwinXReadCanaryKeychain(),
+    createDarwinXOneShotClaimHost(),
+  );
 }
 `,
   );
@@ -538,6 +731,19 @@ export function readCredential() {
   );
   write(
     root,
+    "packages/credential-host/src/one-shot-claim.ts",
+    readFileSync(join(REPOSITORY_ROOT, "packages/credential-host/src/one-shot-claim.ts"), "utf8"),
+  );
+  write(
+    root,
+    "packages/credential-host/src/one-shot-claim-keychain.ts",
+    readFileSync(
+      join(REPOSITORY_ROOT, "packages/credential-host/src/one-shot-claim-keychain.ts"),
+      "utf8",
+    ),
+  );
+  write(
+    root,
     "packages/read-canary/src/index.ts",
     `export * from "./constants.js";
 export * from "./x-read-canary-controller.js";
@@ -708,7 +914,49 @@ export const XReadCanaryResultEventPayloadSchema = z.strictObject({
     "default-src 'none'; connect-src 'self'; script-src 'self'; style-src 'self'; " +
     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
+const CONTROL_BODY_TIMEOUT_MS = 5_000;
+function createOperatorServer(): any {
+  const server: any = {};
+  server.headersTimeout = CONTROL_BODY_TIMEOUT_MS;
+  server.requestTimeout = CONTROL_BODY_TIMEOUT_MS;
+  server.keepAliveTimeout = 1_000;
+  server.maxHeadersCount = 32;
+  server.maxRequestsPerSocket = 25;
+  server.on("upgrade", (_request: unknown, socket: any) => socket.destroy());
+  return server;
+}
+export async function startOperatorServer(): Promise<any> {
+  const server = createOperatorServer();
+  return {
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error === undefined ? resolve() : reject(error)));
+        server.closeAllConnections();
+      });
+    },
+  };
+}
 `,
+  );
+  for (const relativeFile of [
+    "apps/cli/src/canary-operator-startup-cleanup.ts",
+    "apps/cli/src/operator-options.ts",
+    "apps/cli/src/operator.ts",
+    "apps/cli/src/profile-service-lock-core.ts",
+    "apps/cli/src/profile-service-lock.ts",
+    "apps/cli/src/production-canary-operator-facade.ts",
+    "apps/cli/src/x-canary-operator-host-core.ts",
+    "apps/cli/src/x-canary-operator-host.ts",
+  ]) {
+    write(root, relativeFile, readFileSync(join(REPOSITORY_ROOT, relativeFile), "utf8"));
+  }
+  write(
+    root,
+    "apps/cli/src/x-canary-operator.ts",
+    `${REQUIRED_PACKAGES.map((name) => `import "@rsi/${name}";`).join("\n")}\n${readFileSync(
+      join(REPOSITORY_ROOT, "apps/cli/src/x-canary-operator.ts"),
+      "utf8",
+    )}`,
   );
   return root;
 }
@@ -745,6 +993,503 @@ test("accepts only the bounded Stage 1 X read-canary graph", () => {
     assert.equal(report.maximumResults, 10);
     assert.deepEqual(report.packages, REQUIRED_PACKAGES.map((name) => `@rsi/${name}`).sort());
   });
+});
+
+test("pins the production runtime, paths, port, parser, and pre-Keychain guards", () => {
+  const mutations = [
+    {
+      path: "apps/cli/src/production-runtime.ts",
+      from: 'PRODUCTION_NODE_VERSION = "24.19.0"',
+      to: 'PRODUCTION_NODE_VERSION = "24.19.1"',
+      failure: /production-runtime\.ts lacks exact Node pin/u,
+    },
+    {
+      path: "apps/cli/src/production-runtime.ts",
+      from: "process.env.npm_config_user_agent",
+      to: "process.env.npm_config_other",
+      failure: /one exact ambient bridge/u,
+    },
+    {
+      path: "apps/cli/src/production-canary-config.ts",
+      from: "PRODUCTION_CANARY_PORT = 8_787",
+      to: "PRODUCTION_CANARY_PORT = 0",
+      failure: /production-canary-config\.ts lacks fixed port 8787/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-options.ts",
+      from: 'if (argument === "--help" || argument === "-h") return null;',
+      to: 'if (argument === "--port") return productionXCanaryHostOptions();\n    if (argument === "--help" || argument === "-h") return null;',
+      failure: /must reject all production path and port overrides/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator.ts",
+      from: "    assertActiveProductionRuntime();\n    runtimeVerified = true;",
+      to: "    runtimeVerified = true;",
+      failure: /sanitize option, runtime, and host startup failures/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator.ts",
+      from: "          origin: operator.origin,",
+      to: "          origin: operator.origin,\n          paths: operator.paths,",
+      failure: /keep startup output path-free/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator.ts",
+      from: "      await closeOperator().catch(() => undefined);",
+      to: "      void closeOperator();",
+      failure: /latch early signals|sanitize option, runtime, and host startup failures/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host.ts",
+      from: "    options.port !== productionOptions.port",
+      to: "    false",
+      failure: /validate fixed options, acquire the shared lock before Keychain/u,
+    },
+  ];
+  for (const mutation of mutations) {
+    withFixture((root) => {
+      replace(root, mutation.path, mutation.from, mutation.to);
+      expectFailure(root, mutation.failure);
+    });
+  }
+});
+
+test("pins the shared fail-closed profile lease and blocks disconnected core bypasses", () => {
+  const mutations = [
+    {
+      path: "apps/cli/src/profile-service-lock.ts",
+      from: '"../.local/rsi-runtime.sqlite"',
+      to: '"../.local/alternate-runtime.sqlite"',
+      failure: /module-anchored, option-free shared production lock/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: 'SHARED_CANARY_SCOPE_ID = "stage1-canary"',
+      to: 'SHARED_CANARY_SCOPE_ID = "x-canary"',
+      failure: /one shared scope/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: "constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_RDWR",
+      to: "constants.O_CREAT | constants.O_NOFOLLOW | constants.O_RDWR",
+      failure: /atomic no-follow open|atomically acquire once/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: '    throw new ProfileServiceLockError("contended");',
+      to: '    await unlink(path);\n    throw new ProfileServiceLockError("contended");',
+      failure: /without stale takeover or forced deletion/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: "      await resource.close();\n      await lock.release();",
+      to: "      await lock.release();\n      await resource.close();",
+      failure: /retain the lock unless the complete wrapped shutdown succeeds/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: "    await directoryHandle.sync();",
+      to: "    void directoryHandle;",
+      failure: /persist the owned artifact and directory before returning/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: "    if (artifactMustRemain) {",
+      to: "    if (false) {",
+      failure: /persist the owned artifact and directory before returning/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: "      await this.#directoryHandle.sync();",
+      to: "      void this.#directoryHandle;",
+      failure: /directory-durable after unlink/u,
+    },
+    {
+      path: "apps/cli/src/profile-service-lock-core.ts",
+      from: "      } catch {\n        throw durabilityFailure();\n      }",
+      to: "      } catch (error) {\n        throw error;\n      }",
+      failure: /directory-durable after unlink/u,
+    },
+    {
+      path: "apps/cli/src/canary-operator-startup-cleanup.ts",
+      from: "  if (startupError instanceof IncompleteCanaryCleanupError) throw startupError;",
+      to: "  void startupError;",
+      failure: /retain the shared lock when startup cleanup is uncertain/u,
+    },
+    {
+      path: "apps/cli/src/production-canary-operator-facade.ts",
+      from: "    getSnapshot: (): Readonly<RuntimeSnapshotV1> => operator.runtime.getSnapshot(),",
+      to: `    getSnapshot: (): Readonly<RuntimeSnapshotV1> => operator.runtime.getSnapshot(),
+    stop: () => operator.runtime.stop(),`,
+      failure: /only a frozen runtime getSnapshot facade/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host.ts",
+      from: "    return createProductionCanaryOperatorFacade(bindProfileServiceLock(operator, profileLock));",
+      to: "    return bindProfileServiceLock(operator, profileLock) as never;",
+      failure: /wrap the result in the read-only facade/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host.ts",
+      from: "        await operator.close();",
+      to: "        void operator;",
+      failure: /prove post-start cleanup before releasing its lock/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "  await assertCanaryProfileLockForDatabasePath(profileLock, options.databasePath);",
+      to: "  void profileLock;",
+      failure: /assert its authentic lease before storage/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "      hostClosing = true;",
+      to: "      hostClosing = false;",
+      failure: /synchronously close provider admission and runtime control/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "      canary?.beginClosing();",
+      to: "      void canary;",
+      failure: /synchronously close provider admission/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: `        () => {
+          runtime?.stop({ occurredAt: new Date().toISOString(), requestId: randomUUID() });
+        },
+        () => operator?.close(),`,
+      to: `        () => operator?.close(),
+        () => {
+          runtime?.stop({ occurredAt: new Date().toISOString(), requestId: randomUUID() });
+        },`,
+      failure: /synchronously close provider admission and runtime control/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "            runtime?.close();",
+      to: "            queueMicrotask(() => runtime?.close());",
+      failure: /synchronously STOP-and-close runtime/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "      assertHostOpen();\n      return controls.executeRuntimeControl(command);",
+      to: "      return controls.executeRuntimeControl(command);",
+      failure: /synchronously close provider admission and runtime control/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "      this.#awaitActiveWork(activeStatus),",
+      to: "      Promise.resolve(),",
+      failure: /single-flight and drain status work/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "      entry.nlink !== 1n ||",
+      to: "      false ||",
+      failure: /owner-owned, single-link database files/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "      entry.uid !== EFFECTIVE_USER_ID",
+      to: "      false",
+      failure: /owner-owned, single-link database files/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-claim-backfill-host.ts",
+      from: "    await closeCanaryResourceSet([() => eventStore?.close()]);\n    await profileLock.release();",
+      to: "    await profileLock.release();\n    await closeCanaryResourceSet([() => eventStore?.close()]);",
+      failure: /retain it unless every store cleanup succeeds/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-claim-backfill-host.ts",
+      from: "      eventStoreEntry.nlink !== 1n ||",
+      to: "      false ||",
+      failure: /single-link owner-owned event store/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator.ts",
+      from: "      shutdownRequested = true;",
+      to: "      shutdownRequested = false;",
+      failure: /latch early signals/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator.ts",
+      from: '      process.off("SIGTERM", handleSignal);',
+      to: "      void handleSignal;",
+      failure: /latch early signals/u,
+    },
+    {
+      path: "apps/cli/src/operator-options.ts",
+      from: 'DEFAULT_DATABASE_PATH = ".local/stage0/rsi-runtime.sqlite"',
+      to: 'DEFAULT_DATABASE_PATH = ".local/rsi-runtime.sqlite"',
+      failure: /confine defaults and every Stage 1-directory descendant/u,
+    },
+    {
+      path: "apps/cli/src/operator-options.ts",
+      from: "isAtOrBelow(productionRoot, candidate) && !isAtOrBelow(permittedStage0Root, candidate)",
+      to: "isAtOrBelow(productionRoot, candidate) && false",
+      failure: /every Stage 1-directory descendant/u,
+    },
+    {
+      path: "apps/cli/src/operator-options.ts",
+      from: "return resolve(await realpath(existingAncestor), ...unresolvedSegments);",
+      to: "return resolve(path);",
+      failure: /dedicated Stage 0 subtree/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: `  assertStage0StorageIsolation(
+    requestedDatabasePath,
+    requestedResearchDatabasePath,
+    requestedProductionDataDirectory,
+  );`,
+      to: "  void requestedProductionDataDirectory;",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "    hostClosing = true;",
+      to: "    hostClosing = false;",
+      failure: /synchronously gate runtime control and persist STOP/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "    if (closePromise !== null) return closePromise;",
+      to: "    if (false) return closePromise!;",
+      failure: /share one close promise/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: `    closePromise = (async (): Promise<void> => {
+      const failures: unknown[] = [];
+      const activeRuntime = runtime;
+      if (activeRuntime !== undefined) {
+        try {
+          activeRuntime.stop({ occurredAt: new Date().toISOString(), requestId: randomUUID() });`,
+      to: `    closePromise = (async (): Promise<void> => {
+      const failures: unknown[] = [];
+      const activeRuntime = runtime;
+      if (activeRuntime !== undefined) {
+        try {
+          activeRuntime.getSnapshot();`,
+      failure: /synchronously gate runtime control and persist STOP/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "          activeRuntime.close();",
+      to: "          queueMicrotask(() => activeRuntime.close());",
+      failure: /synchronously STOP-and-close runtime/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: `    shutdownRequested = true;
+    hostClosing = true;`,
+      to: `    shutdownRequested = true;
+    hostClosing = false;`,
+      failure: /install and latch shutdown before mutable startup/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: `  process.once("SIGINT", handleSignal);
+  process.once("SIGTERM", handleSignal);`,
+      to: `  void handleSignal;
+  process.once("SIGTERM", handleSignal);`,
+      failure: /install and latch shutdown before mutable startup/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "entry.isSymbolicLink() || !entry.isFile() || entry.nlink !== 1n",
+      to: "entry.isSymbolicLink() || !entry.isFile()",
+      failure: /reject hard-linked databases/u,
+    },
+  ];
+  for (const mutation of mutations) {
+    withFixture((root) => {
+      replace(root, mutation.path, mutation.from, mutation.to);
+      expectFailure(root, mutation.failure);
+    });
+  }
+
+  withFixture((root) => {
+    write(
+      root,
+      "apps/cli/src/disconnected-canary-bypass.ts",
+      'import { startXCanaryOperatorWithHost } from "./x-canary-operator-host-core.js";\nvoid startXCanaryOperatorWithHost;\n',
+    );
+    expectFailure(root, /private host-core authority startXCanaryOperatorWithHost/u);
+  });
+
+  withFixture((root) => {
+    write(
+      root,
+      "packages/runtime/src/disconnected-canary-bypass.ts",
+      'import { startXCanaryOperatorWithHost } from "../../../apps/cli/src/x-canary-operator-host-core.js";\nvoid startXCanaryOperatorWithHost;\n',
+    );
+    expectFailure(root, /private host-core authority startXCanaryOperatorWithHost/u);
+  });
+
+  withFixture((root) => {
+    const manifestPath = join(root, "apps/cli/package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.scripts.bypass = "tsx src/x-canary-operator-host.testing.ts";
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    expectFailure(root, /script bypass exposes a private host-core or test-only lock bypass/u);
+  });
+
+  withFixture((root) => {
+    const manifestPath = join(root, "packages/runtime/package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.scripts = {
+      ...manifest.scripts,
+      bypass: "tsx ../../apps/cli/src/profile-service-lock.testing.ts",
+    };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    expectFailure(root, /script bypass exposes a private host-core or test-only lock bypass/u);
+  });
+
+  withFixture((root) => {
+    write(
+      root,
+      "scripts/run-canary.mjs",
+      'import { startXCanaryOperatorWithHost } from "../apps/cli/src/x-canary-operator-host-core.js";\nvoid startXCanaryOperatorWithHost;\n',
+    );
+    const manifestPath = join(root, "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.scripts.bypass = "node scripts/run-canary.mjs";
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    expectFailure(root, /private host-core authority startXCanaryOperatorWithHost/u);
+  });
+});
+
+test("pins X operator slow-client bounds and forced connection shutdown", () => {
+  const mutations = [
+    {
+      from: "  server.requestTimeout = CONTROL_BODY_TIMEOUT_MS;",
+      to: "  server.requestTimeout = 0;",
+    },
+    {
+      from: "        server.closeAllConnections();",
+      to: "        void server;",
+    },
+    {
+      from: '  server.on("upgrade", (_request: unknown, socket: any) => socket.destroy());',
+      to: "  void server;",
+    },
+  ];
+  for (const mutation of mutations) {
+    withFixture((root) => {
+      replace(root, "apps/operator/src/server.ts", mutation.from, mutation.to);
+      expectFailure(root, /bound slow clients, reject upgrades, and force-close/u);
+    });
+  }
+});
+
+test("pins permanent one-shot claims and the receipt-verified X marker backfill", () => {
+  const mutations = [
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "    await this.claimHost.claim();\n",
+      to: "    void this.claimHost;\n",
+      failure: /own the marker immediately after claim/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: 'runtime.mode !== "RESEARCH"',
+      to: "false",
+      failure: /reject stale runtime state before admission and claim/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "runtimeBeforeClaim.revision !== command.expectedRuntimeRevision",
+      to: "false",
+      failure: /reject stale runtime state before admission and claim/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "this.#abortEpoch !== abortEpoch",
+      to: "false",
+      failure: /carry the abort epoch/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "    this.#ownedCanaryClaim = true;",
+      to: "    this.#ownedCanaryClaim = false;",
+      failure: /own the marker immediately after claim/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: "runtimeAfterClaim.revision !== command.expectedRuntimeRevision",
+      to: "false",
+      failure: /recheck closing\/runtime before live credentials/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: 'projection.lastReceipt === null && claimStatus === "present"',
+      to: "false",
+      failure: /exact agreement between durable X receipt state/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-operator-host-core.ts",
+      from: 'projection.lastReceipt !== null && claimStatus !== "present"',
+      to: "false",
+      failure: /exact agreement between durable X receipt state/u,
+    },
+    {
+      path: "packages/credential-host/src/one-shot-claim-keychain.ts",
+      from: '      "add-generic-password",\n',
+      to: '      "add-generic-password",\n      "-U",\n',
+      failure: /only create-once claims and value-free presence checks/u,
+    },
+    {
+      path: "packages/credential-host/src/one-shot-claim-keychain.ts",
+      from: '    args: Object.freeze(["find-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", SERVICES[target]]),',
+      to: '    args: Object.freeze(["find-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", SERVICES[target], "-w"]),',
+      failure: /only create-once claims and value-free presence checks/u,
+    },
+    {
+      path: "packages/credential-host/src/one-shot-claim-keychain.ts",
+      from: '  return productionHost("x");',
+      to: '  return productionHost("openSea");',
+      failure: /keep createDarwinXOneShotClaimHost option-free and target-fixed/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-claim-backfill-core.ts",
+      from: '  const projection = readXReadCanaryProjection(eventStore, "unknown");',
+      to: '  const projection = { status: "completed", lastReceipt: { planId: X_READ_CANARY_PLAN_ID } };',
+      failure: /validate the canonical completed receipt before its only marker claim/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-claim-backfill-options.ts",
+      from: 'const ACKNOWLEDGEMENT_FLAG = "--typed-plan-id-acknowledgement" as const;',
+      to: 'const ACKNOWLEDGEMENT_FLAG = "--db" as const;',
+      failure: /require only the exact published X plan acknowledgement/u,
+    },
+    {
+      path: "apps/cli/src/x-canary-claim-backfill.ts",
+      from: "} catch {\n  process.stderr.write(BACKFILL_FAILURE_MESSAGE);",
+      to: "} catch (error) {\n  throw error;",
+      failure: /fail closed before marker backfill and emit only sanitized status/u,
+    },
+    {
+      path: "apps/cli/src/production-canary-config.ts",
+      from: '"rsi-x-canary-events.sqlite"',
+      to: '"alternate-x-events.sqlite"',
+      failure: /own the canonical X receipt-store path for marker backfill/u,
+    },
+    {
+      path: "apps/cli/package.json",
+      from: "node ../../scripts/ci/assert-runtime.mjs && tsx src/x-canary-claim-backfill.ts",
+      to: "tsx src/x-canary-claim-backfill.ts",
+      failure: /marker backfill scripts must retain the exact runtime preflight/u,
+    },
+  ];
+  for (const mutation of mutations) {
+    withFixture((root) => {
+      replace(root, mutation.path, mutation.from, mutation.to);
+      expectFailure(root, mutation.failure);
+    });
+  }
 });
 
 test("fails clearly until the dedicated production entry exists", () => {
@@ -1425,7 +2170,7 @@ export const injectedCollectorFactory = createXRecentSearchCollectorForTesting;
     replace(
       root,
       "apps/cli/src/x-canary-operator-host-core.ts",
-      "    (EFFECTIVE_USER_ID === null || parentEntry.uid !== EFFECTIVE_USER_ID)\n",
+      "    EFFECTIVE_USER_ID === null ||\n    parentEntry.uid !== EFFECTIVE_USER_ID\n",
       "    false\n",
     );
     expectFailure(root, /owner-owned mode-0700 data directory/u);
@@ -1486,8 +2231,8 @@ export const injectedCollectorFactory = createXRecentSearchCollectorForTesting;
     replace(
       root,
       "apps/cli/src/x-canary-operator-host-core.ts",
-      `  const runtime = SqliteRuntimeController.open({\n    openedAt: "2026-01-01T00:00:00.000Z",\n    path: options.databasePath,\n    processInstanceId: "00000000-0000-4000-8000-000000000000",\n  });`,
-      `  const runtime = SqliteRuntimeController.open({\n    openedAt: "2026-01-01T00:00:00.000Z",\n    path: options.databasePath,\n    processInstanceId: "00000000-0000-4000-8000-000000000000",\n  }, { clock: () => "2026-01-01T00:00:00.000Z" });`,
+      `        processInstanceId: randomUUID(),\n      }),`,
+      `        processInstanceId: randomUUID(),\n      }, { clock: () => "2026-01-01T00:00:00.000Z" }),`,
     );
     expectFailure(root, /runtime and operations clocks production-owned/u);
   });
@@ -1495,8 +2240,8 @@ export const injectedCollectorFactory = createXRecentSearchCollectorForTesting;
     replace(
       root,
       "apps/cli/src/x-canary-operator-host-core.ts",
-      `        stateKey: secrets.operationsStateKey,\n      });`,
-      `        stateKey: secrets.operationsStateKey,\n      }, { monotonicClock: () => 0 });`,
+      `              stateKey: secrets.operationsStateKey,\n            }),`,
+      `              stateKey: secrets.operationsStateKey,\n            }, { monotonicClock: () => 0 }),`,
     );
     expectFailure(root, /runtime and operations clocks production-owned/u);
   });

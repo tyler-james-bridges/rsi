@@ -40,6 +40,7 @@ function copyWorkspaceFixture() {
       if (existsSync(source)) cpSync(source, join(targetDirectory, "src"), { recursive: true });
     }
   }
+  cpSync(join(REPOSITORY_ROOT, "package.json"), join(root, "package.json"));
   return root;
 }
 
@@ -82,6 +83,167 @@ test("accepts the reviewed production OpenSea READ_CANARY graph", () => {
   assert.equal(result.maximumResults, 10);
   assert.equal(result.paymentCapability, false);
   assert.equal(result.status, "pass");
+});
+
+test("pins OpenSea production options and both pre-Keychain runtime guards", () => {
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-options.ts",
+      'if (argument === "--help" || argument === "-h") return null;',
+      'if (argument === "--port") return productionOpenSeaCanaryHostOptions();\n    if (argument === "--help" || argument === "-h") return null;',
+    );
+    expectFailure(root, /must reject all production path and port overrides/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator.ts",
+      "    assertActiveProductionRuntime();\n    runtimeVerified = true;",
+      "    runtimeVerified = true;",
+    );
+    expectFailure(root, /sanitize option, runtime, and host startup failures/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator.ts",
+      "      await closeOperator().catch(() => undefined);",
+      "      void closeOperator();",
+    );
+    expectFailure(root, /latch early signals|sanitize option, runtime, and host startup failures/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host.ts",
+      "    options.port !== productionOptions.port",
+      "    false",
+    );
+    expectFailure(root, /validate fixed options, acquire the shared lock before Keychain/u);
+  });
+});
+
+test("pins the OpenSea profile lease, cleanup decision, and shutdown ordering", () => {
+  const mutations = [
+    {
+      path: "apps/cli/src/opensea-canary-operator-host.ts",
+      from: "  const profileLock = await acquireProductionCanaryProfileLock();",
+      to: "  const profileLock = { release: async () => undefined } as never;",
+      failure: /acquire the shared lock before Keychain/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host.ts",
+      from: "    return rethrowCanaryStartupFailureAfterProfileLockDecision(",
+      to: "    return Promise.reject(",
+      failure: /prove post-start cleanup before releasing its lock/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host.ts",
+      from: "    return createProductionCanaryOperatorFacade(bindProfileServiceLock(operator, profileLock));",
+      to: "    return bindProfileServiceLock(operator, profileLock) as never;",
+      failure: /wrap the result in the read-only facade/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host.ts",
+      from: "        await operator.close();",
+      to: "        void operator;",
+      failure: /prove post-start cleanup before releasing its lock/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host-core.ts",
+      from: "  await assertCanaryProfileLockForDatabasePath(profileLock, options.databasePath);",
+      to: "  void profileLock;",
+      failure: /assert its authentic lease before storage/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host-core.ts",
+      from: "    eventStore = acquireCanaryResource(() => new SqliteEventStore(paths.eventStore));",
+      to: "    eventStore = new SqliteEventStore(paths.eventStore);",
+      failure: /retaining the lock across uncertain cleanup/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host-core.ts",
+      from: "      hostClosing = true;",
+      to: "      hostClosing = false;",
+      failure: /synchronously close provider admission and runtime control/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host-core.ts",
+      from: "      canary?.beginClosing();",
+      to: "      void canary;",
+      failure: /synchronously close provider admission/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host-core.ts",
+      from: `        () => {
+          runtime?.stop({ occurredAt: new Date().toISOString(), requestId: randomUUID() });
+        },
+        () => operator?.close(),`,
+      to: `        () => operator?.close(),
+        () => {
+          runtime?.stop({ occurredAt: new Date().toISOString(), requestId: randomUUID() });
+        },`,
+      failure: /synchronously close provider admission and runtime control/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host-core.ts",
+      from: "            runtime?.close();",
+      to: "            queueMicrotask(() => runtime?.close());",
+      failure: /synchronously STOP-and-close runtime/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host-core.ts",
+      from: "      assertHostOpen();\n      return controls.executeRuntimeControl(command);",
+      to: "      return controls.executeRuntimeControl(command);",
+      failure: /synchronously close provider admission and runtime control/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host-core.ts",
+      from: "      this.#awaitActiveWork(activeStatus),",
+      to: "      Promise.resolve(),",
+      failure: /single-flight and drain status work/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host-core.ts",
+      from: "      entry.nlink !== 1n ||",
+      to: "      false ||",
+      failure: /owner-owned, single-link database files/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator-host-core.ts",
+      from: "      entry.uid !== EFFECTIVE_USER_ID",
+      to: "      false",
+      failure: /owner-owned, single-link database files/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator.ts",
+      from: "      shutdownRequested = true;",
+      to: "      shutdownRequested = false;",
+      failure: /latch early signals/u,
+    },
+    {
+      path: "apps/cli/src/opensea-canary-operator.ts",
+      from: '      process.off("SIGTERM", handleSignal);',
+      to: "      void handleSignal;",
+      failure: /latch early signals/u,
+    },
+  ];
+  for (const mutation of mutations) {
+    withFixture((root) => {
+      replace(root, mutation.path, mutation.from, mutation.to);
+      expectFailure(root, mutation.failure);
+    });
+  }
+
+  withFixture((root) => {
+    append(
+      root,
+      "apps/cli/src/disconnected-opensea-bypass.ts",
+      'import { startOpenSeaCanaryOperatorWithHost } from "./opensea-canary-operator-host-core.js";\nvoid startOpenSeaCanaryOperatorWithHost;\n',
+    );
+    expectFailure(root, /private host-core authority startOpenSeaCanaryOperatorWithHost/u);
+  });
 });
 
 test("rejects request, chain, retry, fetch-count, and payment mutations", () => {
@@ -343,6 +505,15 @@ test("pins genuine runtime and operations one-shot authorization before the only
     );
     expectFailure(root, /reserve exactly one OpenSea attempt/u);
   });
+  withFixture((root) => {
+    replace(
+      root,
+      "packages/opensea-collector/src/collector.ts",
+      "const fetchPromise = Promise.resolve(fetchImplementation(request));",
+      "const fetchPromise = Promise.resolve(fetchImplementation(request));\n    void fetchImplementation(request);",
+    );
+    expectFailure(root, /only transport invocation/u);
+  });
 });
 
 test("rejects STOP and guarded-completion bypasses", () => {
@@ -406,6 +577,16 @@ test("keeps the operator loopback-only with no second network client", () => {
     );
     expectFailure(root, /protect credential refresh and bound request\/shutdown availability/u);
   });
+  for (const [from, to] of [
+    ["  server.maxHeadersCount = 32;", "  server.maxHeadersCount = 0;"],
+    ["  server.maxRequestsPerSocket = 25;", "  server.maxRequestsPerSocket = 0;"],
+    ['  server.on("upgrade", (_request, socket) => socket.destroy());', "  void server;"],
+  ]) {
+    withFixture((root) => {
+      replace(root, "apps/operator/src/opensea-server.ts", from, to);
+      expectFailure(root, /protect credential refresh and bound request\/shutdown availability/u);
+    });
+  }
   withFixture((root) => {
     replace(
       root,
@@ -638,5 +819,95 @@ test("pins singleton, published plan ID, and production-only operator credential
       "\nvoid process.env.OPENSEA_API_KEY;\n",
     );
     expectFailure(root, /ambient process\.env/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host-core.ts",
+      "    await this.claimHost.claim();\n",
+      "    void this.claimHost;\n",
+    );
+    expectFailure(root, /own the marker immediately after claim/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host-core.ts",
+      'runtime.mode !== "RESEARCH"',
+      "false",
+    );
+    expectFailure(root, /reject stale runtime state before admission and claim/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host-core.ts",
+      "runtimeBeforeClaim.revision !== command.expectedRuntimeRevision",
+      "false",
+    );
+    expectFailure(root, /reject stale runtime state before admission and claim/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host-core.ts",
+      "this.#abortEpoch !== abortEpoch",
+      "false",
+    );
+    expectFailure(root, /carry the abort epoch/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host-core.ts",
+      "    this.#ownedCanaryClaim = true;",
+      "    this.#ownedCanaryClaim = false;",
+    );
+    expectFailure(root, /own the marker immediately after claim/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host-core.ts",
+      "runtimeAfterClaim.revision !== command.expectedRuntimeRevision",
+      "false",
+    );
+    expectFailure(root, /recheck closing\/runtime before API credentials/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host-core.ts",
+      'projection.lastReceipt === null && claimStatus === "present"',
+      "false",
+    );
+    expectFailure(root, /exact agreement between durable OpenSea receipt state/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host-core.ts",
+      'projection.lastReceipt !== null && claimStatus !== "present"',
+      "false",
+    );
+    expectFailure(root, /exact agreement between durable OpenSea receipt state/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "apps/cli/src/opensea-canary-operator-host.ts",
+      "    createDarwinOpenSeaOneShotClaimHost(),",
+      "    createDarwinXOneShotClaimHost(),",
+    );
+    expectFailure(root, /only the option-free OpenSea one-shot claim host/u);
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "packages/credential-host/src/one-shot-claim-keychain.ts",
+      '      "add-generic-password",\n',
+      '      "add-generic-password",\n      "-U",\n',
+    );
+    expectFailure(root, /only create-once claims and value-free presence checks/u);
   });
 });

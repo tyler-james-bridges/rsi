@@ -27,8 +27,17 @@ const CONTROLLER_SCHEMA_FILE = "packages/read-canary/src/opensea-schemas.ts";
 const CONTROLLER_CONSTANTS_FILE = "packages/read-canary/src/opensea-constants.ts";
 const CREDENTIAL_ENTRY_FILE = "packages/credential-host/src/opensea-trending.ts";
 const CREDENTIAL_FILE = "packages/credential-host/src/opensea-trending-keychain.ts";
+const ONE_SHOT_CLAIM_FILE = "packages/credential-host/src/one-shot-claim-keychain.ts";
+const ONE_SHOT_CLAIM_ENTRY_FILE = "packages/credential-host/src/one-shot-claim.ts";
+const PRODUCTION_CONFIG_FILE = "apps/cli/src/production-canary-config.ts";
+const PRODUCTION_RUNTIME_FILE = "apps/cli/src/production-runtime.ts";
+const OPERATOR_OPTIONS_FILE = "apps/cli/src/opensea-canary-operator-options.ts";
 const OPERATOR_HOST_FILE = "apps/cli/src/opensea-canary-operator-host.ts";
 const OPERATOR_HOST_CORE_FILE = "apps/cli/src/opensea-canary-operator-host-core.ts";
+const CANARY_STARTUP_CLEANUP_FILE = "apps/cli/src/canary-operator-startup-cleanup.ts";
+const PROFILE_LOCK_FILE = "apps/cli/src/profile-service-lock.ts";
+const PROFILE_LOCK_CORE_FILE = "apps/cli/src/profile-service-lock-core.ts";
+const PRODUCTION_FACADE_FILE = "apps/cli/src/production-canary-operator-facade.ts";
 const OPERATOR_SERVER_FILE = "apps/operator/src/opensea-server.ts";
 const OPERATOR_DASHBOARD_FILE = "apps/operator/src/opensea-dashboard-assets.ts";
 const EXACT_ENDPOINT =
@@ -43,6 +52,7 @@ const REVIEWED_DASHBOARD_JS_SHA256 =
 const REQUIRED_IMPORTS = Object.freeze([
   "@rsi/capture-registry",
   "@rsi/credential-host/opensea-trending",
+  "@rsi/credential-host/one-shot-claim",
   "@rsi/ingestion/capture-storage-recovery",
   "@rsi/ingestion/opensea-trending",
   "@rsi/operations",
@@ -67,7 +77,13 @@ const REVIEWED_PREFIXES = Object.freeze([
 
 const REVIEWED_EXACT_FILES = new Set([
   ENTRY,
+  CANARY_STARTUP_CLEANUP_FILE,
+  PROFILE_LOCK_FILE,
+  PROFILE_LOCK_CORE_FILE,
+  PRODUCTION_FACADE_FILE,
   "apps/cli/src/opensea-canary-operator-options.ts",
+  PRODUCTION_CONFIG_FILE,
+  PRODUCTION_RUNTIME_FILE,
   OPERATOR_HOST_FILE,
   OPERATOR_HOST_CORE_FILE,
   "apps/operator/src/opensea.ts",
@@ -78,6 +94,8 @@ const REVIEWED_EXACT_FILES = new Set([
   "apps/operator/src/runtime-types.ts",
   CREDENTIAL_ENTRY_FILE,
   CREDENTIAL_FILE,
+  ONE_SHOT_CLAIM_ENTRY_FILE,
+  ONE_SHOT_CLAIM_FILE,
   CAPTURE_STORAGE_RECOVERY_FILE,
   INGESTION_FILE,
   CONTROLLER_FILE,
@@ -173,9 +191,12 @@ const NODE_BUILTINS = new Set([...builtinModules, ...builtinModules.map((name) =
 const SAFE_EXTERNAL_MODULES = new Set(["zod"]);
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 const REVIEWED_PROCESS_PROPERTIES = new Map([
-  [ENTRY, new Set(["argv", "exitCode", "once", "stderr"])],
+  [ENTRY, new Set(["argv", "exitCode", "off", "once", "stderr"])],
+  [PROFILE_LOCK_CORE_FILE, new Set(["geteuid"])],
+  [PRODUCTION_RUNTIME_FILE, new Set(["env", "versions"])],
   [OPERATOR_HOST_CORE_FILE, new Set(["geteuid"])],
   [CREDENTIAL_FILE, new Set(["platform"])],
+  [ONE_SHOT_CLAIM_FILE, new Set(["platform"])],
   ["packages/capture-registry/src/sqlite-capture-registry.ts", new Set(["geteuid"])],
   ["packages/vault/src/snapshot-vault.ts", new Set(["geteuid"])],
 ]);
@@ -691,7 +712,10 @@ function classifySpecifier(specifier, relativeFile, names) {
       : `${specifier} capability beyond the exact loopback server surface`;
   }
   if (FORBIDDEN_PROCESS_MODULES.has(specifier)) {
-    if (specifier === "node:child_process" && relativeFile === CREDENTIAL_FILE) {
+    if (
+      specifier === "node:child_process" &&
+      (relativeFile === CREDENTIAL_FILE || relativeFile === ONE_SHOT_CLAIM_FILE)
+    ) {
       const imported = [...new Set(names)].sort();
       return imported.length === 1 && imported[0] === "execFile"
         ? undefined
@@ -747,7 +771,14 @@ function inspectGraph(root, packages) {
       violations.push(`${relativeFile} cannot be parsed: ${error.message}`);
       continue;
     }
-    for (const violation of analysis.violations) violations.push(`${relativeFile} ${violation}`);
+    for (const violation of analysis.violations) {
+      if (
+        relativeFile !== PRODUCTION_RUNTIME_FILE ||
+        violation !== "references ambient process.env"
+      ) {
+        violations.push(`${relativeFile} ${violation}`);
+      }
+    }
     const allowedProcess = REVIEWED_PROCESS_PROPERTIES.get(relativeFile);
     const unreviewedProcess = analysis.processProperties.filter(
       (property) => allowedProcess === undefined || !allowedProcess.has(property),
@@ -856,6 +887,21 @@ function functionSlice(source, name) {
   if (start < 0) return "";
   const next = source.slice(start + 1).search(/\n(?:export\s+)?(?:async\s+)?function\s+/u);
   return source.slice(start, next < 0 ? source.length : start + 1 + next);
+}
+
+function classMethodSlice(source, className, methodName) {
+  const classStart = source.search(new RegExp(`\\bclass\\s+${className}\\b`, "u"));
+  if (classStart < 0) return "";
+  const classSource = source.slice(classStart);
+  const methodStart = classSource.search(
+    new RegExp(`\\n  (?:static\\s+)?(?:async\\s+)?#?${methodName}\\s*\\(`, "u"),
+  );
+  if (methodStart < 0) return "";
+  const methodEnd = classSource.indexOf("\n  }\n", methodStart);
+  return classSource.slice(
+    methodStart,
+    methodEnd < 0 ? classSource.length : methodEnd + "\n  }".length,
+  );
 }
 
 function extractNoSubstitutionTemplate(source, exportName) {
@@ -1020,10 +1066,11 @@ function verifyCollectorBoundary(root, graph, violations) {
       dispatch < attempt ||
       countMatches(collect, /runtimeCollectionAuthorization\.consumeAndDispatch\s*\(/gu) !== 1 ||
       countMatches(collect, /attemptAuthorization\.consume\s*\(\)/gu) !== 1 ||
-      countMatches(collect, /executeNetworkRequest\s*\(/gu) !== 1
+      countMatches(collect, /executeNetworkRequest\s*\(/gu) !== 1 ||
+      countMatches(collector, /fetchImplementation\s*\(\s*request\s*\)/gu) !== 1
     ) {
       violations.push(
-        `${COLLECTOR_FILE} must consume genuine runtime and operations authority exactly once before dispatch`,
+        `${COLLECTOR_FILE} must consume genuine runtime and operations authority exactly once before its only transport invocation`,
       );
     }
     const requestRequirements = [
@@ -1598,11 +1645,31 @@ function verifyCredentialAndOperatorBoundary(root, graph, violations) {
         `${OPERATOR_HOST_FILE} must expose only the option-free production Keychain starter`,
       );
     }
+    if (
+      !/from\s+"@rsi\/credential-host\/one-shot-claim"/u.test(host) ||
+      countMatches(host, /createDarwinOpenSeaOneShotClaimHost\s*\(\s*\)/gu) !== 1 ||
+      /createDarwin(?:X|BaseRpc)OneShotClaimHost\s*\(\s*\)/u.test(host)
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_FILE} must use only the option-free OpenSea one-shot claim host`,
+      );
+    }
   }
   if (core !== undefined) {
     const liveStart = core.indexOf("async #runWithKeychain(");
     const liveEnd = core.indexOf("\n  async #recoverInterruptedIfPossible(", liveStart);
     const liveRecovery = liveStart < 0 || liveEnd < 0 ? "" : core.slice(liveStart, liveEnd);
+    const executeCanary = classMethodSlice(
+      core,
+      "KeychainOpenSeaReadCanaryProvider",
+      "executeOpenSeaReadCanary",
+    );
+    const afterRecovery = classMethodSlice(
+      core,
+      "KeychainOpenSeaReadCanaryProvider",
+      "executeAfterRecovery",
+    );
+    const initialize = classMethodSlice(core, "KeychainOpenSeaReadCanaryProvider", "initialize");
     const storageStart = core.indexOf("async #recoverWithStorageSecrets(");
     const storageEnd = core.indexOf("\n}\n\nfunction requestedPaths", storageStart);
     const storageRecovery =
@@ -1633,9 +1700,108 @@ function verifyCredentialAndOperatorBoundary(root, graph, violations) {
         `${OPERATOR_HOST_CORE_FILE} must repair capture storage before both live and restart canary recovery while isolating Keychain authority`,
       );
     }
+    const executeSnapshot = executeCanary.indexOf("const runtime = this.runtime.getSnapshot()");
+    const executeMode = executeCanary.indexOf('runtime.mode !== "RESEARCH"', executeSnapshot);
+    const executeRevision = executeCanary.indexOf(
+      "runtime.revision !== command.expectedRuntimeRevision",
+      executeMode,
+    );
+    const executeReceipt = executeCanary.indexOf("this.#existingReceipt(command)", executeRevision);
+    const executeEpoch = executeCanary.indexOf(
+      "this.#executeAfterRecovery(command, this.#abortEpoch)",
+      executeReceipt,
+    );
+    const recoveryCall = afterRecovery.indexOf("await this.#recoverInterruptedIfPossible(false)");
+    const recoveryClosing = afterRecovery.indexOf("this.#closing", recoveryCall);
+    const recoveryEpoch = afterRecovery.indexOf("this.#abortEpoch !== abortEpoch", recoveryClosing);
+    const recoveryReceipt = afterRecovery.indexOf("this.#existingReceipt(command)", recoveryEpoch);
+    const recoveryRun = afterRecovery.indexOf(
+      "this.#runWithKeychain(command, abortEpoch)",
+      recoveryReceipt,
+    );
+    const preSnapshot = liveRecovery.indexOf(
+      "const runtimeBeforeClaim = this.runtime.getSnapshot()",
+    );
+    const preMode = liveRecovery.indexOf('runtimeBeforeClaim.mode !== "RESEARCH"', preSnapshot);
+    const preRevision = liveRecovery.indexOf(
+      "runtimeBeforeClaim.revision !== command.expectedRuntimeRevision",
+      preMode,
+    );
+    const claimCall = liveRecovery.indexOf("await this.claimHost.claim()", preRevision);
+    const ownership = liveRecovery.indexOf("this.#ownedCanaryClaim = true", claimCall);
+    const postSnapshot = liveRecovery.indexOf(
+      "const runtimeAfterClaim = this.runtime.getSnapshot()",
+      ownership,
+    );
+    const postClosing = liveRecovery.indexOf("this.#closing", postSnapshot);
+    const postEpoch = liveRecovery.indexOf("this.#abortEpoch !== abortEpoch", postClosing);
+    const postMode = liveRecovery.indexOf('runtimeAfterClaim.mode !== "RESEARCH"', postEpoch);
+    const postRevision = liveRecovery.indexOf(
+      "runtimeAfterClaim.revision !== command.expectedRuntimeRevision",
+      postMode,
+    );
+    const reveal = liveRecovery.indexOf("this.credentialHost.withSecrets(", postRevision);
+    if (
+      executeCanary.length === 0 ||
+      executeSnapshot < 0 ||
+      executeMode < executeSnapshot ||
+      executeRevision < executeMode ||
+      executeReceipt < executeRevision ||
+      executeEpoch < executeReceipt ||
+      afterRecovery.length === 0 ||
+      recoveryCall < 0 ||
+      recoveryClosing < recoveryCall ||
+      recoveryEpoch < recoveryClosing ||
+      recoveryReceipt < recoveryEpoch ||
+      recoveryRun < recoveryReceipt ||
+      preSnapshot < 0 ||
+      preMode < preSnapshot ||
+      preRevision < preMode ||
+      claimCall < preRevision ||
+      ownership < claimCall ||
+      postSnapshot < ownership ||
+      postClosing < postSnapshot ||
+      postEpoch < postClosing ||
+      postMode < postEpoch ||
+      postRevision < postMode ||
+      reveal < postRevision ||
+      !/await\s+this\.claimHost\.claim\(\);\s*this\.#ownedCanaryClaim\s*=\s*true;\s*const\s+runtimeAfterClaim/u.test(
+        liveRecovery,
+      ) ||
+      countMatches(liveRecovery, /this\.claimHost\.claim\(\)/gu) !== 1 ||
+      countMatches(liveRecovery, /this\.credentialHost\.withSecrets\s*\(/gu) !== 1
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_CORE_FILE} must reject stale runtime state before admission and claim, carry the abort epoch, own the marker immediately after claim, then recheck closing/runtime before API credentials`,
+      );
+    }
+
+    const markerStatus = initialize.indexOf("const claimStatus = await this.claimHost.status()");
+    const markerWithoutReceipt = initialize.indexOf(
+      'projection.lastReceipt === null && claimStatus === "present"',
+      markerStatus,
+    );
+    const receiptWithoutMarker = initialize.indexOf(
+      'projection.lastReceipt !== null && claimStatus !== "present"',
+      markerWithoutReceipt,
+    );
+    if (
+      initialize.length === 0 ||
+      markerStatus < 0 ||
+      markerWithoutReceipt < markerStatus ||
+      receiptWithoutMarker < markerWithoutReceipt ||
+      countMatches(core, /this\.claimHost\.claim\(\)/gu) !== 1 ||
+      countMatches(core, /this\.claimHost\.status\(\)/gu) !== 1 ||
+      /claimHost/u.test(storageRecovery) ||
+      /(?:withSecrets|fetch\s*\(|OpenSeaReadCanaryController)/u.test(initialize)
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_CORE_FILE} must require exact agreement between durable OpenSea receipt state and its presence-only marker before credentials or network`,
+      );
+    }
     const passiveProjectionStart = core.indexOf("getOpenSeaReadCanaryProjection():");
     const passiveProjectionEnd = core.indexOf(
-      "\n  async refreshOpenSeaCredentialStatus():",
+      "\n  refreshOpenSeaCredentialStatus():",
       passiveProjectionStart,
     );
     const passiveProjection =
@@ -1665,6 +1831,28 @@ function verifyCredentialAndOperatorBoundary(root, graph, violations) {
     ) {
       violations.push(
         `${OPERATOR_HOST_CORE_FILE} must verify an owner-owned mode-0700 data directory`,
+      );
+    }
+    const databaseIdentity = functionSlice(core, "resolveDatabaseIdentity");
+    const databaseFileRequirements = [
+      /lstat\(canonicalPath,\s*\{\s*bigint:\s*true\s*\}\)/u,
+      /entry\.isSymbolicLink\(\)/u,
+      /!entry\.isFile\(\)/u,
+      /entry\.nlink\s*!==\s*1n/u,
+      /entry\.uid\s*!==\s*EFFECTIVE_USER_ID/u,
+      /stat\(canonicalPath,\s*\{\s*bigint:\s*true\s*\}\)/u,
+      /!identity\.isFile\(\)/u,
+      /identity\.nlink\s*!==\s*1n/u,
+      /identity\.uid\s*!==\s*EFFECTIVE_USER_ID/u,
+      /identity\.dev\s*!==\s*entry\.dev/u,
+      /identity\.ino\s*!==\s*entry\.ino/u,
+    ];
+    if (
+      databaseIdentity.length === 0 ||
+      databaseFileRequirements.some((pattern) => !pattern.test(databaseIdentity))
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_CORE_FILE} must accept only owner-owned, single-link database files with stable identity`,
       );
     }
   }
@@ -1711,10 +1899,381 @@ function verifyCredentialAndOperatorBoundary(root, graph, violations) {
       refreshAction < refreshOrigin ||
       !/server\.headersTimeout\s*=\s*CONTROL_BODY_TIMEOUT_MS/u.test(server) ||
       !/server\.requestTimeout\s*=\s*CONTROL_BODY_TIMEOUT_MS/u.test(server) ||
+      !/server\.keepAliveTimeout\s*=\s*1_000/u.test(server) ||
+      !/server\.maxHeadersCount\s*=\s*32/u.test(server) ||
+      !/server\.maxRequestsPerSocket\s*=\s*25/u.test(server) ||
+      !/server\.on\(\s*"upgrade"\s*,\s*\([^)]*socket[^)]*\)\s*=>\s*socket\.destroy\(\)\s*\)/u.test(
+        server,
+      ) ||
       !/server\.close\([\s\S]{0,300}?server\.closeAllConnections\(\)/u.test(start)
     ) {
       violations.push(
         `${OPERATOR_SERVER_FILE} must protect credential refresh and bound request/shutdown availability`,
+      );
+    }
+  }
+}
+
+function verifyEarlySignalCleanup(entry, violations) {
+  const operator = entry.indexOf("let operator:");
+  const closeOperator = entry.indexOf("const closeOperator =");
+  const signalHandler = entry.indexOf("const handleSignal =");
+  const armInterrupt = entry.indexOf('process.once("SIGINT", handleSignal)');
+  const armTerminate = entry.indexOf('process.once("SIGTERM", handleSignal)');
+  const start = entry.indexOf("operator = await startOpenSeaCanaryOperator(options)");
+  const firstShutdownCheck = entry.indexOf("if (shutdownRequested)", start);
+  const startupLine = entry.indexOf("const startupLine", firstShutdownCheck);
+  const secondShutdownCheck = entry.indexOf("if (shutdownRequested)", startupLine);
+  const output = entry.indexOf("console.log(startupLine)", secondShutdownCheck);
+  const catchStart = entry.indexOf("} catch {", start);
+  const catchClose = entry.indexOf("await closeOperator().catch(() => undefined)", catchStart);
+  const catchRemove = entry.indexOf("removeSignalHandlers();", catchClose);
+  if (
+    operator < 0 ||
+    closeOperator < operator ||
+    signalHandler < closeOperator ||
+    armInterrupt < signalHandler ||
+    armTerminate < signalHandler ||
+    start < armInterrupt ||
+    start < armTerminate ||
+    firstShutdownCheck < start ||
+    startupLine < firstShutdownCheck ||
+    secondShutdownCheck < startupLine ||
+    output < secondShutdownCheck ||
+    catchStart < start ||
+    catchClose < catchStart ||
+    catchRemove < catchClose ||
+    countMatches(entry, /process\.once\(\s*"SIGINT"\s*,\s*handleSignal\s*\)/gu) !== 1 ||
+    countMatches(entry, /process\.once\(\s*"SIGTERM"\s*,\s*handleSignal\s*\)/gu) !== 1 ||
+    countMatches(entry, /process\.off\(\s*"SIG(?:INT|TERM)"\s*,\s*handleSignal\s*\)/gu) !== 2 ||
+    countMatches(entry, /operator\.close\(\)/gu) !== 1 ||
+    !/closePromise\s*\?\?=\s*operator\.close\(\)/u.test(entry) ||
+    !/const\s+handleSignal\s*=\s*\(\)\s*:\s*void\s*=>\s*\{\s*shutdownRequested\s*=\s*true;\s*if\s*\(operator\s*===\s*undefined\)\s*return;/u.test(
+      entry,
+    )
+  ) {
+    violations.push(
+      `${ENTRY} must latch early signals and finish lock-bearing shutdown before exit`,
+    );
+  }
+}
+
+function verifyProductionLaunchBoundary(root, graph, violations) {
+  const options = requireSource(root, OPERATOR_OPTIONS_FILE, graph, violations);
+  const entry = requireSource(root, ENTRY, graph, violations);
+  const host = requireSource(root, OPERATOR_HOST_FILE, graph, violations);
+  const hostCore = requireSource(root, OPERATOR_HOST_CORE_FILE, graph, violations);
+  requireSource(root, CANARY_STARTUP_CLEANUP_FILE, graph, violations);
+  requireSource(root, PRODUCTION_CONFIG_FILE, graph, violations);
+  requireSource(root, PRODUCTION_RUNTIME_FILE, graph, violations);
+  requireSource(root, PROFILE_LOCK_FILE, graph, violations);
+  requireSource(root, PROFILE_LOCK_CORE_FILE, graph, violations);
+
+  if (options !== undefined) {
+    if (
+      !/return\s+productionOpenSeaCanaryHostOptions\(\)/u.test(options) ||
+      !/argument\s*===\s*"--help"\s*\|\|\s*argument\s*===\s*"-h"/u.test(options) ||
+      !/throw\s+new\s+Error\("OpenSea canary production options are fixed"\)/u.test(options) ||
+      /["']--(?:db|research-db|port)["']/u.test(options) ||
+      /\b(?:cwd|env|homedir)\s*\(/u.test(options) ||
+      /\bprocess\b/u.test(options)
+    ) {
+      violations.push(
+        `${OPERATOR_OPTIONS_FILE} must reject all production path and port overrides`,
+      );
+    }
+  }
+
+  if (entry !== undefined) {
+    const parseOptions = entry.indexOf("parseOpenSeaCanaryOperatorOptions(process.argv.slice(2))");
+    const runtimeCheck = entry.indexOf("assertActiveProductionRuntime();");
+    const hostStart = entry.indexOf("await startOpenSeaCanaryOperator(options)");
+    const startupFailure = entry.indexOf(
+      "process.stderr.write(STARTUP_FAILURE_MESSAGE)",
+      hostStart,
+    );
+    if (
+      parseOptions < 0 ||
+      runtimeCheck < 0 ||
+      hostStart < 0 ||
+      parseOptions > runtimeCheck ||
+      runtimeCheck > hostStart ||
+      startupFailure < hostStart ||
+      countMatches(entry, /assertActiveProductionRuntime\s*\(\s*\)/gu) !== 1 ||
+      !/STARTUP_FAILURE_MESSAGE\s*=\s*"RSI OpenSea canary startup was refused\.\\n"\s+as\s+const/u.test(
+        entry,
+      ) ||
+      countMatches(entry, /process\.stderr\.write\(STARTUP_FAILURE_MESSAGE\)/gu) !== 2 ||
+      !/try\s*\{[\s\S]{0,300}?options\s*=\s*parseOpenSeaCanaryOperatorOptions\(process\.argv\.slice\(2\)\)[\s\S]{0,180}?catch\s*\{[\s\S]{0,100}?process\.stderr\.write\(STARTUP_FAILURE_MESSAGE\)[\s\S]{0,100}?process\.exitCode\s*=\s*1/u.test(
+        entry,
+      ) ||
+      !/try\s*\{[\s\S]{0,180}?operator\s*=\s*await\s+startOpenSeaCanaryOperator\(options\)[\s\S]{0,3400}?catch\s*\{[\s\S]{0,300}?process\.stderr\.write\(STARTUP_FAILURE_MESSAGE\)[\s\S]{0,100}?process\.exitCode\s*=\s*1/u.test(
+        entry,
+      ) ||
+      !/catch\s*\{[\s\S]{0,180}?process\.stderr\.write\(PRODUCTION_RUNTIME_FAILURE_MESSAGE\)[\s\S]{0,120}?process\.exitCode\s*=\s*1/u.test(
+        entry,
+      )
+    ) {
+      violations.push(
+        `${ENTRY} must sanitize option, runtime, and host startup failures before emitting output`,
+      );
+    }
+    verifyEarlySignalCleanup(entry, violations);
+  }
+
+  if (host !== undefined) {
+    const runtimeCheck = host.indexOf("assertActiveProductionRuntime();");
+    const canonicalOptions = host.indexOf("productionOpenSeaCanaryHostOptions();");
+    const profileLock = host.indexOf(
+      "await acquireProductionCanaryProfileLock()",
+      canonicalOptions,
+    );
+    const trackedOperatorMatch = host.match(
+      /let\s+([A-Za-z_$][\w$]*)\s*:\s*InternalRunningOpenSeaCanaryOperator\s*\|\s*undefined/u,
+    );
+    const trackedOperator = trackedOperatorMatch?.[1];
+    const dispatch =
+      trackedOperator === undefined
+        ? -1
+        : host.search(
+            new RegExp(
+              `${trackedOperator}\\s*=\\s*await\\s+startOpenSeaCanaryOperatorWithHost\\(`,
+              "u",
+            ),
+          );
+    const keychain = host.indexOf("new DarwinOpenSeaTrendingKeychain()", dispatch);
+    const claimHost = host.indexOf("createDarwinOpenSeaOneShotClaimHost()", dispatch);
+    const wrappedReturn =
+      trackedOperator === undefined
+        ? -1
+        : host.search(
+            new RegExp(
+              `return\\s+createProductionCanaryOperatorFacade\\(\\s*bindProfileServiceLock\\(\\s*${trackedOperator}\\s*,\\s*profileLock\\s*\\)\\s*\\)`,
+              "u",
+            ),
+          );
+    const catchStart = host.indexOf("} catch (error)", wrappedReturn);
+    const postStartClose =
+      trackedOperator === undefined
+        ? -1
+        : host.search(new RegExp(`await\\s+${trackedOperator}\\.close\\(\\)`, "u"));
+    const incompleteCleanup = host.indexOf(
+      "new IncompleteCanaryOperatorStartupCleanupError(error, cleanupError)",
+      postStartClose,
+    );
+    const retainedLockDecision = host.lastIndexOf(
+      "return rethrowCanaryStartupFailureAfterProfileLockDecision(",
+      incompleteCleanup,
+    );
+    const cleanLockDecision = host.indexOf(
+      "return rethrowCanaryStartupFailureAfterProfileLockDecision(",
+      incompleteCleanup,
+    );
+    if (
+      runtimeCheck < 0 ||
+      canonicalOptions < runtimeCheck ||
+      profileLock < canonicalOptions ||
+      dispatch < profileLock ||
+      keychain < dispatch ||
+      claimHost < dispatch ||
+      wrappedReturn < claimHost ||
+      catchStart < wrappedReturn ||
+      postStartClose < catchStart ||
+      retainedLockDecision < postStartClose ||
+      incompleteCleanup < retainedLockDecision ||
+      cleanLockDecision < incompleteCleanup ||
+      countMatches(host, /assertActiveProductionRuntime\s*\(\s*\)/gu) !== 1 ||
+      countMatches(host, /acquireProductionCanaryProfileLock\s*\(\s*\)/gu) !== 1 ||
+      countMatches(host, /bindProfileServiceLock\s*\(/gu) !== 1 ||
+      !/startOpenSeaCanaryOperatorWithHost\s*\(\s*productionOptions\s*,\s*new\s+DarwinOpenSeaTrendingKeychain\s*\(\s*\)\s*,\s*createDarwinOpenSeaOneShotClaimHost\s*\(\s*\)\s*,\s*profileLock\s*,?\s*\)/u.test(
+        host,
+      ) ||
+      countMatches(
+        host,
+        /rethrowCanaryStartupFailureAfterProfileLockDecision\s*\(\s*error\s*,\s*profileLock\s*,\s*"RSI OpenSea canary startup and lock release both failed"\s*,?\s*\)/gu,
+      ) !== 1 ||
+      countMatches(
+        host,
+        /rethrowCanaryStartupFailureAfterProfileLockDecision\s*\(\s*new\s+IncompleteCanaryOperatorStartupCleanupError\(\s*error\s*,\s*cleanupError\s*\)\s*,\s*profileLock\s*,\s*"RSI OpenSea canary startup and lock release both failed"\s*,?\s*\)/gu,
+      ) !== 1 ||
+      countMatches(host, /profileLock\.release\s*\(\s*\)/gu) !== 0 ||
+      !/IncompleteCanaryOperatorStartupCleanupError[\s\S]{0,200}?rethrowCanaryStartupFailureAfterProfileLockDecision/u.test(
+        host,
+      ) ||
+      /\.runtime\.(?:close|listAudit|requestBoundaryAuthorization|stop|transition)\b/u.test(host) ||
+      !/options\.databasePath\s*!==\s*productionOptions\.databasePath/u.test(host) ||
+      !/options\.port\s*!==\s*productionOptions\.port/u.test(host)
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_FILE} must validate fixed options, acquire the shared lock before Keychain/core access, wrap the result in the read-only facade, and prove post-start cleanup before releasing its lock`,
+      );
+    }
+  }
+
+  if (hostCore !== undefined) {
+    const startCore = functionSlice(hostCore, "startOpenSeaCanaryOperatorWithHost");
+    const abortActive = classMethodSlice(
+      hostCore,
+      "KeychainOpenSeaReadCanaryProvider",
+      "abortActive",
+    );
+    const beginClosing = classMethodSlice(
+      hostCore,
+      "KeychainOpenSeaReadCanaryProvider",
+      "beginClosing",
+    );
+    const providerClose = classMethodSlice(hostCore, "KeychainOpenSeaReadCanaryProvider", "close");
+    const guardedRuntimeControls = functionSlice(hostCore, "createHostClosingRuntimeControls");
+    const leaseAssertion = startCore.indexOf(
+      "await assertCanaryProfileLockForDatabasePath(profileLock, options.databasePath)",
+    );
+    const requestedPaths = startCore.indexOf("const requested = requestedPaths(options)");
+    const storageInspection = startCore.indexOf("resolveDatabaseIdentity(", requestedPaths);
+    const runtimeOpen = startCore.indexOf("SqliteRuntimeController.open(", storageInspection);
+    const closeGuard = startCore.indexOf("if (closePromise === null)");
+    const closingStateMatch = startCore
+      .slice(0, closeGuard < 0 ? undefined : closeGuard)
+      .match(/let\s+([A-Za-z_$][\w$]*)\s*=\s*false;\s*$/mu);
+    const closingState = closingStateMatch?.[1];
+    const activateClosing =
+      closingState === undefined ? -1 : startCore.indexOf(`${closingState} = true`, closeGuard);
+    const closeProviderAdmission = startCore.indexOf("canary?.beginClosing()", activateClosing);
+    const outerClose = startCore.indexOf(
+      "closePromise = closeCanaryResourceSet(",
+      closeProviderAdmission,
+    );
+    const initialStop = startCore.indexOf("runtime?.stop(", outerClose);
+    const initialStopCallback = startCore.lastIndexOf("() => {", initialStop);
+    const firstCleanupCallback = startCore.indexOf("() =>", outerClose);
+    const stopAdmission = startCore.indexOf("() => operator?.close()", initialStop);
+    const drainProvider = startCore.indexOf("() => canary?.close()", initialStop);
+    const closeEventStore = startCore.indexOf("() => eventStore?.close()", drainProvider);
+    const finalStop = startCore.indexOf("runtime?.stop(", closeEventStore);
+    const closeRuntime = startCore.indexOf("runtime?.close()", finalStop);
+    const finalRuntimeShutdown = startCore.slice(
+      startCore.lastIndexOf("() => {", finalStop),
+      startCore.indexOf("        },", closeRuntime) + "        },".length,
+    );
+    const closeSetEnd = startCore.indexOf("      ]);", closeRuntime);
+    const finalRuntimeShutdownEnd =
+      finalRuntimeShutdown.length === 0
+        ? -1
+        : startCore.lastIndexOf("() => {", finalStop) + finalRuntimeShutdown.length;
+    const guardedControlsConstruction =
+      closingState === undefined
+        ? -1
+        : startCore.search(
+            new RegExp(
+              `createHostClosingRuntimeControls\\(runtime,\\s*\\(\\)\\s*=>\\s*${closingState}\\)`,
+              "u",
+            ),
+          );
+    const cleanlyRethrow = startCore.indexOf(
+      "return rethrowCanaryStartupFailureAfterCleanup(error, close)",
+      runtimeOpen,
+    );
+    if (
+      !/import\s+\{[\s\S]{0,300}?\bIncompleteCanaryCleanupError\b[\s\S]{0,300}?\bacquireCanaryResource\b[\s\S]{0,200}?\bacquireCanaryResourceAsync\b[\s\S]{0,200}?\bcloseCanaryResourceSet\b[\s\S]{0,200}?\brethrowCanaryStartupFailureAfterCleanup\b[\s\S]{0,120}?\}\s+from\s+"\.\/canary-operator-startup-cleanup\.js"/u.test(
+        hostCore,
+      ) ||
+      !/import\s+\{[\s\S]{0,180}?\bassertCanaryProfileLockForDatabasePath\b[\s\S]{0,180}?\btype\s+CanaryProfileLockLease\b[\s\S]{0,100}?\}\s+from\s+"\.\/profile-service-lock-core\.js"/u.test(
+        hostCore,
+      ) ||
+      !/startOpenSeaCanaryOperatorWithHost\s*\([\s\S]{0,500}?profileLock\s*:\s*CanaryProfileLockLease/u.test(
+        startCore,
+      ) ||
+      leaseAssertion < 0 ||
+      requestedPaths < leaseAssertion ||
+      storageInspection < requestedPaths ||
+      runtimeOpen < storageInspection ||
+      cleanlyRethrow < runtimeOpen ||
+      closeGuard < storageInspection ||
+      activateClosing < closeGuard ||
+      closeProviderAdmission < activateClosing ||
+      outerClose < closeProviderAdmission ||
+      initialStop < outerClose ||
+      initialStopCallback !== firstCleanupCallback ||
+      stopAdmission < initialStop ||
+      drainProvider < stopAdmission ||
+      closeEventStore < drainProvider ||
+      finalStop < closeEventStore ||
+      closeRuntime < finalStop ||
+      closeSetEnd < closeRuntime ||
+      !/^\s*$/u.test(startCore.slice(finalRuntimeShutdownEnd, closeSetEnd)) ||
+      finalRuntimeShutdown.length === 0 ||
+      /\bawait\b/u.test(finalRuntimeShutdown) ||
+      !/const\s+failures\s*:\s*unknown\[\]\s*=\s*\[\];[\s\S]{0,160}?try\s*\{\s*runtime\?\.stop\([\s\S]{0,180}?\}\s*catch\s*\(error\)\s*\{\s*failures\.push\(error\);?\s*\}[\s\S]{0,120}?try\s*\{\s*runtime\?\.close\(\);?\s*\}\s*catch\s*\(error\)\s*\{\s*failures\.push\(error\);?\s*\}[\s\S]{0,180}?throw\s+new\s+AggregateError\(failures,/u.test(
+        finalRuntimeShutdown,
+      ) ||
+      guardedControlsConstruction < runtimeOpen ||
+      guardedRuntimeControls.length === 0 ||
+      !/const\s+controls\s*=\s*createRuntimeOperatorControls\(\{\s*controller\s*\}\)/u.test(
+        guardedRuntimeControls,
+      ) ||
+      !/if\s*\(isHostClosing\(\)\)\s*\{\s*throw\s+new\s+RuntimeConflictError\(\s*"STALE_STATE"/u.test(
+        guardedRuntimeControls,
+      ) ||
+      countMatches(guardedRuntimeControls, /assertHostOpen\(\)/gu) !== 2 ||
+      !/executeRuntimeControl\([^)]*\)[\s\S]{0,160}?assertHostOpen\(\);[\s\S]{0,160}?controls\.executeRuntimeControl/u.test(
+        guardedRuntimeControls,
+      ) ||
+      !/getRuntimeSnapshot\(\)[\s\S]{0,120}?assertHostOpen\(\);[\s\S]{0,120}?controls\.getRuntimeSnapshot/u.test(
+        guardedRuntimeControls,
+      ) ||
+      countMatches(startCore, /runtime\?\.stop\s*\(/gu) !== 2 ||
+      countMatches(startCore, /canary\?\.beginClosing\s*\(\s*\)/gu) !== 1 ||
+      countMatches(startCore, /createHostClosingRuntimeControls\s*\(/gu) !== 1 ||
+      countMatches(
+        startCore,
+        /assertCanaryProfileLockForDatabasePath\s*\(\s*profileLock\s*,\s*options\.databasePath\s*\)/gu,
+      ) !== 1 ||
+      countMatches(
+        startCore,
+        /return\s+rethrowCanaryStartupFailureAfterCleanup\s*\(\s*error\s*,\s*close\s*\)/gu,
+      ) !== 1 ||
+      countMatches(hostCore, /acquireCanaryResource\s*\(/gu) !== 8 ||
+      countMatches(hostCore, /acquireCanaryResourceAsync\s*\(/gu) !== 3 ||
+      countMatches(hostCore, /closeCanaryResourceSet\s*\(/gu) !== 4 ||
+      !/#incompleteCleanupError\s*:\s*IncompleteCanaryCleanupError\s*\|\s*null\s*=\s*null/u.test(
+        hostCore,
+      ) ||
+      !/#activeStatus\s*:\s*Promise<Readonly<OpenSeaReadCanaryProjectionV1>>\s*\|\s*null\s*=\s*null/u.test(
+        hostCore,
+      ) ||
+      !/if\s*\(this\.#activeStatus\s*!==\s*null\)\s*return\s+this\.#activeStatus/u.test(hostCore) ||
+      !/this\.#activeStatus\s*=\s*status/u.test(hostCore) ||
+      !/if\s*\(this\.#activeStatus\s*===\s*status\)\s*this\.#activeStatus\s*=\s*null/u.test(
+        hostCore,
+      ) ||
+      !/void\s+status\.then\(clear,\s*\(error:\s*unknown\)\s*=>\s*\{\s*this\.#latchIncompleteCleanupError\(error\);\s*clear\(\);\s*\}\)/u.test(
+        hostCore,
+      ) ||
+      !/const\s+activeStatus\s*=\s*this\.#activeStatus/u.test(hostCore) ||
+      !/await\s+Promise\.all\(\s*\[\s*this\.#awaitActiveWork\(activeRun\),\s*this\.#awaitActiveWork\(activeRecovery\),\s*this\.#awaitActiveWork\(activeStatus\),?\s*\]\s*\)/u.test(
+        hostCore,
+      ) ||
+      !/if\s*\(this\.#incompleteCleanupError\s*!==\s*null\)\s*throw\s+this\.#incompleteCleanupError/u.test(
+        hostCore,
+      ) ||
+      !/if\s*\(error\s+instanceof\s+IncompleteCanaryCleanupError\)\s*\{\s*this\.#closing\s*=\s*true;\s*this\.#incompleteCleanupError\s*\?\?=\s*error/u.test(
+        hostCore,
+      ) ||
+      abortActive.length === 0 ||
+      !/this\.#abortEpoch\s*\+=\s*1;\s*this\.#activeController\?\.abortActive\(\)/u.test(
+        abortActive,
+      ) ||
+      beginClosing.length === 0 ||
+      !/beginClosing\(\)\s*:\s*void\s*\{\s*if\s*\(this\.#closingBegan\)\s*return;\s*this\.#closingBegan\s*=\s*true;\s*this\.#closing\s*=\s*true;\s*try\s*\{\s*this\.abortActive\(\);\s*\}\s*catch\s*\(error\)\s*\{\s*this\.#latchIncompleteCleanupError\(error\);\s*this\.#admissionAbortFailure\s*\?\?=\s*error/u.test(
+        beginClosing,
+      ) ||
+      providerClose.length === 0 ||
+      !/async\s+close\(\)\s*:\s*Promise<void>\s*\{\s*this\.beginClosing\(\)/u.test(providerClose) ||
+      !/await\s+Promise\.all\([\s\S]{0,300}?activeRun[\s\S]{0,160}?activeRecovery[\s\S]{0,160}?activeStatus[\s\S]{0,200}?\);[\s\S]{0,160}?if\s*\(this\.#incompleteCleanupError\s*!==\s*null\)[\s\S]{0,200}?if\s*\(this\.#admissionAbortFailure\s*!==\s*undefined\)/u.test(
+        providerClose,
+      )
+    ) {
+      violations.push(
+        `${OPERATOR_HOST_CORE_FILE} must assert its authentic lease before storage, single-flight and drain status work, synchronously close provider admission and runtime control before STOP, drain server/provider/storage, then synchronously STOP-and-close runtime while retaining the lock across uncertain cleanup`,
       );
     }
   }
@@ -1743,6 +2302,7 @@ export function verifyOpenSeaReadCanaryBoundary(options = {}) {
   verifyControllerBoundary(root, graph, violations);
   verifyDashboardBoundary(root, graph, violations);
   verifyCredentialAndOperatorBoundary(root, graph, violations);
+  verifyProductionLaunchBoundary(root, graph, violations);
   const unique = [...new Set(violations)].sort();
   if (unique.length > 0) throw new OpenSeaReadCanaryVerificationFailure(unique);
   return Object.freeze({

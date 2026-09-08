@@ -165,6 +165,7 @@ const DEFAULT_EVENT_LIMIT = 50;
 const MAX_EVENT_LIMIT = 100;
 const MAX_REQUEST_TARGET_LENGTH = 2_048;
 const MAX_CONTROL_BODY_BYTES = 4_096;
+const CONTROL_BODY_TIMEOUT_MS = 5_000;
 const MAX_PROJECTION_DEPTH = 24;
 const MAX_PROJECTED_ARRAY_LENGTH = 1_000;
 const MAX_PROJECTED_OBJECT_KEYS = 512;
@@ -1296,6 +1297,12 @@ export function createOperatorServer(
       `HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(encoded)}\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\n\r\n${encoded}`,
     );
   });
+  server.headersTimeout = CONTROL_BODY_TIMEOUT_MS;
+  server.requestTimeout = CONTROL_BODY_TIMEOUT_MS;
+  server.keepAliveTimeout = 1_000;
+  server.maxHeadersCount = 32;
+  server.maxRequestsPerSocket = 25;
+  server.on("upgrade", (_request, socket) => socket.destroy());
 
   return server;
 }
@@ -1360,6 +1367,7 @@ export async function startOperatorServer(
       }
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error === undefined ? resolve() : reject(error)));
+        server.closeAllConnections();
       });
     },
   };

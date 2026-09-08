@@ -1325,13 +1325,23 @@ export class SnapshotVault {
         this.#drainOperation = resolveDrain;
       });
     }
+    const failures: unknown[] = [];
     try {
-      await this.#directoryHandle.sync().catch(() => undefined);
-      await this.#directoryHandle.close().catch(() => undefined);
-    } finally {
-      this.#state = "closed";
-      OPEN_DIRECTORIES.delete(this.directory);
+      await this.#directoryHandle.sync();
+    } catch (error) {
+      failures.push(error);
     }
+    try {
+      await this.#directoryHandle.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    this.#state = "closed";
+    if (failures.length === 0) {
+      OPEN_DIRECTORIES.delete(this.directory);
+      return;
+    }
+    throw new AggregateError(failures, "Capture vault close did not complete safely");
   }
 }
 

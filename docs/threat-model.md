@@ -21,9 +21,11 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 - Stage 0 exposes only one-shot research-collection and non-executable proposal-persistence
   authorizations. Payment, signing, policy approval, execution, broadcast, and publication are
   permanently denied and absent from the active operator dependency graph.
-- Each Stage 1 X or OpenSea canary requires both a revision-bound runtime authorization and a
+- Each Stage 1 X, OpenSea, or Base RPC canary requires both a revision-bound runtime authorization and a
   separately reserved durable network attempt. Provider-specific singleton claims prevent another
-  request ID, controller, or restarted process from silently issuing a second request.
+  request ID, controller, or restarted process from silently issuing a second request. Code-owned
+  production paths plus a separate create-once Keychain marker prevent ordinary path, working-directory,
+  or database-copy changes from minting a fresh application claim.
 - A transaction identifies assets by exact chain, contract, and token ID.
 - Destination, recipient, payment asset, maximum outflow, order hash, nonce, and expiry are committed before approval.
 - Unknown fields fail schema validation.
@@ -52,12 +54,12 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 
 ## Research storage and checkpoint threats
 
-- X and OpenSea read credentials use separate fixed account/service macOS Keychain lookups through zero-argument production hosts and are never accepted in command-line arguments, environment variables, dashboard fields, events, operator responses, demo output, or vault metadata. Executor/platform injection exists only behind test-only package and CLI entries that are unreachable from either production module graph. Both collectors reject redirects and response bodies containing their credential; transient command and decoded-key buffers are wiped best-effort.
+- X, OpenSea, and Base RPC read credentials use separate fixed account/service macOS Keychain lookups through zero-argument production hosts and are never accepted in command-line arguments, environment variables, dashboard fields, events, operator responses, demo output, or vault metadata. The Base API key is header-only and can never enter its URL. Executor/platform injection exists only behind test-only package and CLI entries that are unreachable from the production module graphs. All three collectors reject redirects and response bodies containing their credential; transient command and decoded-key buffers are wiped best-effort.
 - Exact external bytes and their metadata are encrypted before parsing. Malformed data has no retention exception: it follows the same bounded expiry, verified deletion, and content-free error path as every other capture.
 - Capture identifiers are opaque random values rather than content hashes. The encrypted registry keeps source identifiers and request bindings outside permanent events, and verified cleanup destroys its per-attempt key material.
-- Each Stage 1 controller persists sanitized result evidence before raw-capture deletion, then authenticates the exact runtime event, capture event, network closure, and keyed deletion tombstone before returning a receipt. Restart recovery reads storage keys only, has no collector, X bearer, OpenSea API key, or egress dependency, and cannot repeat egress.
+- Each Stage 1 controller persists sanitized result evidence before raw-capture deletion, then authenticates the exact runtime event, capture event, network closure, and keyed deletion tombstone before returning a receipt. Restart recovery reads storage keys only, has no collector, X bearer, OpenSea or Alchemy API key, or egress dependency, and cannot repeat egress. The Base recovery entry additionally has a statically collectorless and network-free dependency graph.
 - Vault compromise is contained with a dedicated directory, strict permissions, authenticated encryption, per-capture keys, bounded objects, and filesystem identity checks. A same-user process holding a live wrapping key can still decrypt active data, so production deployment requires process and Keychain isolation.
-- SQLite's internal hash chain cannot detect replacement with another internally consistent database. Signed checkpoints plus an independently retained hash or immutable remote receipt can prove a pinned suffix. Remote retention is an optional software control with scoped credentials; same-Mac restore drills and one durable authorization writer remain required before authority grows.
+- SQLite's internal hash chain cannot detect replacement with another internally consistent database. Production state paths are therefore code-owned, and each provider's create-once Keychain marker must be claimed before its credential is revealed. RSI contains no marker update, reset, or delete path. This protects against ordinary alternate-database replay, not a malicious same-user process that can alter code or Keychain state. Signed checkpoints plus an independently retained hash or immutable remote receipt can prove a pinned suffix. Remote retention is an optional software control with scoped credentials; same-Mac restore drills and one durable authorization writer remain required before authority grows.
 - The Stage 0 runtime and research ledger deliberately use separate SQLite files. Each detects
   invalid rows, edits, reordering, tail deletion, foreign aggregates, and semantically invalid
   hash-valid events, but neither claims rollback protection against replacement by a complete older
