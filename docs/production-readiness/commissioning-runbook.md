@@ -192,6 +192,14 @@ Base RPC has the same three distinct decisions: authorize its dedicated Keychain
 authorize startup/storage recovery, and separately authorize the one live provider request.
 OpenSea authorization never authorizes Base RPC.
 
+> **Base commissioning hold — 2026-09-07:** Do not authorize the Base provider request, press its
+> run button, or claim `base-mainnet-finalized-anchor-v1`. Alchemy's current public Base
+> block-response example contradicts Base's documented proof-of-stake response invariants, and
+> Base's omission of `totalDifficulty` does not authorize making RSI's required `0x0` field
+> optional. Resume only after the dated provider-contract evidence records reliable
+> Alchemy-on-Base response-shape confirmation and the owner has reviewed the account-specific quota
+> and billing state. This hold grants no credential, Keychain, account, or provider access.
+
 Immediately before live authorization, recheck Alchemy's current official Base endpoint,
 Bearer-header support, finalized-tag behavior, account limits, and pricing. The provider may bill or
 consume account credits even though RSI has no payment path; record that uncertainty without

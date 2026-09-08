@@ -12,6 +12,43 @@ Status: offline implementation evidence only. No Alchemy credential was read, no
 - [Alchemy JSON-RPC batch requests](https://www.alchemy.com/docs/reference/batch-requests)
 - [Alchemy throughput and HTTP 429 behavior](https://www.alchemy.com/docs/reference/throughput)
 
+## Public-documentation recheck — 2026-09-07
+
+Status: **live Base commissioning blocked**. This was an unauthenticated, read-only documentation
+review. No Alchemy account, credential, Keychain item, or RPC endpoint was accessed.
+
+The fixed destination and request remain supported by Alchemy's
+[Base endpoint directory](https://www.alchemy.com/docs/reference/node-supported-chains),
+[Bearer-header authentication guide](https://www.alchemy.com/docs/how-to-use-api-keys-in-http-headers),
+Base's
+[`eth_chainId` reference](https://docs.base.org/base-chain/api-reference/ethereum-json-rpc-api/eth_chainId),
+Base's
+[`eth_getBlockByNumber` reference](https://docs.base.org/base-chain/api-reference/ethereum-json-rpc-api/eth_getBlockByNumber),
+and Alchemy's [batch-request guide](https://www.alchemy.com/docs/reference/batch-requests).
+
+Public documentation does not, however, establish an internally consistent Alchemy-on-Base
+response contract. Alchemy's
+[Base-specific `eth_getBlockByNumber` page](https://www.alchemy.com/docs/chains/base/base-api-endpoints/eth-get-block-by-number)
+uses the Base endpoint but presents an example with proof-of-work values and withdrawals that
+contradict Base's documented proof-of-stake invariants. Separately, Base's current block field list
+and example omit `totalDifficulty`, while the general
+[Ethereum JSON-RPC reference](https://ethereum.org/developers/docs/apis/json-rpc/) and Alchemy
+examples include it. That omission is not evidence that the field is absent and does not authorize
+weakening RSI's parser. `totalDifficulty` remains required and must remain `0x0`.
+
+Because a response-shape failure consumes RSI's permanent one-shot attempt, do not authorize or
+execute the Base canary until a dated review records reliable Alchemy-on-Base response-shape
+confirmation. Unblocking requires either corrected or explicit official Alchemy documentation, or
+separately authorized sanitized compatibility evidence reviewed before execution.
+
+Alchemy's [compute-unit schedule](https://www.alchemy.com/docs/reference/compute-unit-costs)
+currently assigns zero billable compute units and five throughput compute units to `eth_chainId`,
+and 20 compute units to `eth_getBlockByNumber`. Its
+[pricing-plan documentation](https://www.alchemy.com/docs/reference/pricing-plans) and
+[public pricing page](https://www.alchemy.com/pricing) disagree on the free-tier throughput figure.
+Do not encode either public figure as an account limit; the owner must still review the actual
+account quota and billing state before any future authorization.
+
 ## Fixed RSI request
 
 The canary owns one request and accepts no destination, method, parameter, body, retry, redirect, or provider input:

@@ -21,7 +21,8 @@ persisted Stage 0 runtime always boots into `STOPPED`; `RESEARCH` and `PROPOSE_O
 one-shot collection and non-executable proposal-persistence boundaries. Payment, signing, policy
 approval, execution, broadcast, and publication are permanently denied. Exactly one X
 `READ_CANARY` was commissioned successfully on 2026-08-25 and returned to `STOPPED`; it did not
-authorize continuous collection or any other provider. OpenSea and Base RPC remain uncommissioned.
+authorize continuous collection or any other provider. OpenSea remains uncommissioned. Base RPC is
+implemented but commissioning-blocked by the 2026-09-07 provider-documentation recheck.
 
 ## Compatibility components are not gates
 
@@ -163,8 +164,8 @@ The fixed candidate contract is plan `opensea-base-trending-collections-v1`, pro
 `https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=base&limit=10`.
 It is Base-only, JSON-only, identity-encoded, limited to at most 10 collections, and permits no
 retry, redirect, pagination, alternate query, or alternate destination.
-The official provider contract was rechecked on 2026-09-05; the sources, verified facts, and RSI's
-deliberately narrower acceptance rules are recorded in the
+The official provider contract was rechecked again on 2026-09-07; the sources, verified facts, and
+RSI's deliberately narrower acceptance rules are recorded in the
 [OpenSea provider-contract review](./evidence/opensea-provider-contract-review-2026-09-05.md).
 
 The reviewed source parser, one-shot dual-authorized collector, separate macOS Keychain boundary,
@@ -185,14 +186,14 @@ This work has not created, accessed, or used an OpenSea API key; whether the own
 is unknown. No OpenSea provider request has been made or authorized.
 Credential creation or access and the first live request require separate explicit authorization
 after current official documentation, account limits, and RSI's stricter response acceptance
-policy have been reviewed. The 2026-09-05 provider-contract review satisfies only that read-only
+policy have been reviewed. The 2026-09-07 provider-contract recheck satisfies only that read-only
 documentation check; it did not commission the canary. The canary may produce a content-free
 commissioning receipt only. Before any later
 marketplace observation can become policy-eligible, trusted provenance must bind it to an exact
 commissioned endpoint, parser contract, request, capture lifecycle, and freshness proof;
 `source.kind = "opensea"` alone is never sufficient.
 
-## Base RPC read-canary implementation — complete but uncommissioned
+## Base RPC read-canary implementation — complete; commissioning blocked
 
 The fixed candidate contract is plan `base-mainnet-finalized-anchor-v1`: exactly one HTTP `POST`
 to `https://base-mainnet.g.alchemy.com/v2`, authenticated only by an
@@ -217,6 +218,12 @@ JSON-RPC ID, provider header, quota value, raw content, capture ID, attempt ID, 
 The provider contract, deliberate RSI narrowings, and remaining uncertainties are recorded in the
 [Base RPC provider-contract review](./evidence/base-rpc-provider-contract-review-2026-09-05.md).
 
+An unauthenticated public-documentation recheck on 2026-09-07 found no fixed-request drift, but
+found that Alchemy's Base block-response example contradicts Base's documented proof-of-stake
+shape. Base commissioning is blocked until reliable Alchemy-on-Base response-shape confirmation is
+recorded. The strict parser remains unchanged; a documentation omission alone does not authorize
+making `totalDifficulty` optional.
+
 This work has not created, accessed, or used an Alchemy credential; no Base RPC provider request
 has been made or authorized. The strict response shape has therefore not been compared with a live
 account response, and current account-specific quota and pricing remain unknown. Credential setup
@@ -228,9 +235,10 @@ claim and does not retry.
 
 First migrate the historical completed X receipt into the permanent one-shot marker with the
 receipt-verifying, typed-plan-acknowledged backfill CLI. Do not run it without separate explicit
-authorization for that Keychain write. OpenSea and Base RPC then remain separate, uncommissioned
-one-shot reads: each requires its own credential decision, current official-documentation and
-account-limit recheck, exact-plan acknowledgement, and explicit live-request authorization. Inspect
-each content-free receipt while its adapter remains quarantined. Only after live proposals are
-useful and auditable should the owner fund the tiny research wallet for one AgentCash/x402 paid
-read. Capital activation values remain local and unset in source.
+authorization for that Keychain write. OpenSea then remains a separate uncommissioned one-shot read
+requiring its own credential decision, current official-documentation and account-limit recheck,
+exact-plan acknowledgement, and explicit live-request authorization. Base RPC remains on hold
+until reliable Alchemy-on-Base response-shape confirmation is recorded. Inspect each content-free
+receipt while its adapter remains quarantined. Only after live proposals are useful and auditable
+should the owner fund the tiny research wallet for one AgentCash/x402 paid read. Capital activation
+values remain local and unset in source.

@@ -25,7 +25,7 @@ Exit: normal CI passes and RSI can run locally without credentials, funds, or ad
 
 ## Stage 1 — Live research and proposals
 
-Status: **X READ_CANARY commissioned; OpenSea and Base RPC READ_CANARY implementations complete and uncommissioned**
+Status: **X READ_CANARY commissioned; OpenSea READ_CANARY complete and uncommissioned; Base RPC READ_CANARY complete but commissioning-blocked**
 
 - [x] Build the signer-blind X read-canary path with a fixed query, dual one-shot authorization,
       durable singleton claim, Keychain isolation, encrypted capture, sanitized receipt, STOP races,
@@ -46,12 +46,15 @@ Status: **X READ_CANARY commissioned; OpenSea and Base RPC READ_CANARY implement
       inspect its content-free receipt without promoting continuous collection.
 - [ ] Separately authorize and commission the one Base Mainnet finalized-anchor read, then retain
       and inspect its content-free receipt without promoting continuous collection.
+      Blocked by the 2026-09-07 public-provider-documentation contradiction recorded in the dated
+      Base RPC provider-contract review; do not run or claim the one-shot marker until cleared.
 - Re-check current official documentation, authentication, pricing, schemas, and deployed addresses
   immediately before each bounded canary. The read-only
-  [2026-09-05 OpenSea provider-contract review](./production-readiness/evidence/opensea-provider-contract-review-2026-09-05.md)
+  [OpenSea provider-contract evidence, rechecked 2026-09-07](./production-readiness/evidence/opensea-provider-contract-review-2026-09-05.md)
   and
-  [2026-09-05 Base RPC provider-contract review](./production-readiness/evidence/base-rpc-provider-contract-review-2026-09-05.md)
-  record the latest checks without commissioning either canary.
+  [Base RPC provider-contract evidence, rechecked 2026-09-07](./production-readiness/evidence/base-rpc-provider-contract-review-2026-09-05.md)
+  record the latest checks without commissioning either canary; the Base recheck currently blocks
+  its live request.
 - Keep raw provider content inside quarantine and persist only typed, provenance-rich evidence.
 - Add opportunity scoring, outcome labels, source information-lift measurement, and explicit
   abstention reasons.
@@ -120,9 +123,10 @@ may create only the missing Keychain marker; it has no provider credential, tran
 override. Creating that marker is a separately authorized Keychain action and is not part of an
 offline build.
 
-The official OpenSea and Base/Alchemy contracts were rechecked on 2026-09-05 and recorded in their
-dated provider-contract evidence. Those documentation reviews created or accessed no API key,
-made no provider request, and did not commission either canary. Request separate explicit
-authorization for each first bounded read, inspect its content-free receipt, and keep continuous
-collection quarantined. Keep proposal persistence behind `PROPOSE_ONLY`; only after proposals are
-useful should the owner choose an expendable research-wallet balance for one AgentCash/x402 call.
+The OpenSea contract was rechecked again on 2026-09-07 without a credential or provider request and
+remains eligible for a separately authorized first bounded read. The Base/Alchemy public contract
+was also rechecked on 2026-09-07. Its fixed request remains supported, but contradictory provider
+response documentation blocks Base commissioning. Keep its strict parser and one-shot marker
+untouched until the hold conditions in the provider-contract review are satisfied. Keep proposal
+persistence behind `PROPOSE_ONLY`; only after proposals are useful should the owner choose an
+expendable research-wallet balance for one AgentCash/x402 call.
