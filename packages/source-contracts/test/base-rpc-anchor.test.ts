@@ -228,6 +228,39 @@ describe("isolated Base RPC anchor source contract", () => {
     );
   });
 
+  it("keeps ambiguous provider block shapes outside the reviewed contract", () => {
+    const mutations: ReadonlyArray<(block: Record<string, unknown>) => void> = [
+      (block) => {
+        delete block.totalDifficulty;
+      },
+      (block) => {
+        block.difficulty = "0x1";
+      },
+      (block) => {
+        block.nonce = "0x0000000000000001";
+      },
+      (block) => {
+        block.withdrawals = [
+          {
+            address: `0x${"55".repeat(20)}`,
+            amount: "0x1",
+            index: "0x0",
+            validatorIndex: "0x0",
+          },
+        ];
+      },
+    ];
+
+    for (const mutate of mutations) {
+      const response = validResponse();
+      const block = response[1] as { result: Record<string, unknown> };
+      mutate(block.result);
+      expect(() => parseBaseRpcFinalizedAnchor(bytes(response), ACQUIRED_AT)).toThrowError(
+        expect.objectContaining({ code: "RESPONSE_INVALID" }),
+      );
+    }
+  });
+
   it("rejects malformed inputs and forged anchor instances", () => {
     expect(() => parseBaseRpcFinalizedAnchor(new Uint8Array(), ACQUIRED_AT)).toThrowError(
       expect.objectContaining({ code: "RESPONSE_INVALID" }),

@@ -41,6 +41,19 @@ GET https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=
   concerns legacy order endpoints and collection-stat fields, not this endpoint. No current
   deprecation or migration notice was found for the trending-collections endpoint.
 
+## Public-documentation recheck — 2026-09-07
+
+Status: **no public-documentation blocker found**. This was another unauthenticated, read-only
+review; it did not access an OpenSea account, credential, Keychain item, or API endpoint.
+
+The endpoint, parameters, Base chain identifier, `x-api-key` authentication, and documented
+response shape remain compatible with RSI's fixed one-request contract. The relevant subset of
+OpenSea's current published OpenAPI at commit
+[`14a6bb3`](https://github.com/ProjectOpenSea/api-types/blob/14a6bb34f24dc0cdc50c09b4901e9c87aea4d66a/opensea-api.json)
+is semantically unchanged from the pinned 2026-09-05 review. Public quota examples remain advisory,
+and the actual account limit and provider charge remain unknown until separately authorized account
+review. This recheck does not commission the canary or grant credential or provider access.
+
 ## Deliberate RSI narrowings
 
 RSI's parser is an intentionally stricter local acceptance policy, not a verbatim model of every
