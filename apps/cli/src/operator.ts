@@ -26,6 +26,7 @@ import {
   resolveProspectiveStoragePath,
 } from "./operator-options.js";
 import { productionXCanaryHostOptions } from "./production-canary-config.js";
+import { createRecordedResearchReplayProvider } from "./research-replay-provider.js";
 
 interface DatabaseIdentity {
   readonly path: string;
@@ -298,9 +299,15 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
     }
     const runtimeControls = createClosingAwareRuntimeControls(runtime, () => hostClosing);
     const provider = new RuntimeOperatorSnapshotProvider(runtime, research);
+    const researchReplay = createRecordedResearchReplayProvider({
+      runtime,
+      research,
+      isClosing: () => hostClosing,
+    });
     operator = await startOperatorServer(provider, {
       port: options.port,
       research: provider,
+      researchReplay,
       runtime: runtimeControls,
     });
     if (shutdownRequested) {

@@ -28,8 +28,7 @@ const REQUIRED_PACKAGES = Object.freeze([
 const REVIEWED_WORKSPACE_IMPORTS = new Set([
   ...REQUIRED_PACKAGES,
   "@rsi/credential-host/one-shot-claim",
-  // These two signer-blind support surfaces are already part of the operator and
-  // research-ledger implementation. The executable @rsi/domain root is denied.
+  "@rsi/domain/evidence",
   "@rsi/domain/proposals",
   "@rsi/session-lifecycle",
 ]);
@@ -61,6 +60,7 @@ const EXACT_ALLOWED_SOURCE_FILES = new Set([
   "apps/cli/src/x-canary-operator-host.ts",
   "apps/cli/src/x-canary-operator-host-core.ts",
   "packages/domain/src/proposals.ts",
+  "packages/domain/src/evidence.ts",
 ]);
 const FORBIDDEN_EXACT_SOURCE_FILES = new Map([
   ["packages/x-collector/src/testing.ts", "test-only transport injection source"],
@@ -994,7 +994,9 @@ function classifyModuleSpecifier(specifier, relativeFile, names) {
     return undefined;
   }
   if (specifier === "@rsi/domain" || specifier.startsWith("@rsi/domain/")) {
-    if (specifier === "@rsi/domain/proposals") return undefined;
+    if (specifier === "@rsi/domain/evidence" || specifier === "@rsi/domain/proposals") {
+      return undefined;
+    }
     return `executable domain import ${specifier}`;
   }
   if (specifier === "@rsi/adapters" || specifier.startsWith("@rsi/adapters/")) {

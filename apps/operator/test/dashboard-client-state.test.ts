@@ -101,7 +101,7 @@ function createFakeDocument(): {
   };
 }
 
-function runtimeSnapshot(mode: "RESEARCH" | "STOPPED", revision: number): unknown {
+function runtimeSnapshot(mode: "PROPOSE_ONLY" | "RESEARCH" | "STOPPED", revision: number): unknown {
   return {
     schemaVersion: 1,
     mode,
@@ -111,7 +111,7 @@ function runtimeSnapshot(mode: "RESEARCH" | "STOPPED", revision: number): unknow
     auditHead: { sequence: revision, hash: "a".repeat(64) },
     capabilities: {
       researchCollection: mode !== "STOPPED",
-      proposalPersistence: false,
+      proposalPersistence: mode === "PROPOSE_ONLY",
       policyApproval: false,
       paidRead: false,
       walletSign: false,
@@ -344,6 +344,105 @@ describe("operator dashboard runtime controls", () => {
     expect(stop.disabled).toBe(false);
   });
 
+  it("enables only the closed recorded replay in PROPOSE_ONLY and refreshes its projection", async () => {
+    const { document, elements } = createFakeDocument();
+    const replayCommands: Array<Record<string, unknown>> = [];
+    let proposalCount = 0;
+    const response = (body: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(body),
+      });
+    const fetch = (path: string, init?: Readonly<{ body?: string; method?: string }>) => {
+      if (path === "/api/runtime") {
+        return response({ runtime: runtimeSnapshot("PROPOSE_ONLY", 3) });
+      }
+      if (path === "/api/research") {
+        return response({
+          research: {
+            schemaVersion: 1,
+            candidateCount: 0,
+            abstentionCount: proposalCount,
+            proposals: [],
+          },
+        });
+      }
+      if (path === "/api/read-canary") {
+        return Promise.resolve({
+          ok: false,
+          json: () =>
+            Promise.resolve({
+              error: { code: "read_canary_unavailable", message: "Not configured." },
+            }),
+        });
+      }
+      if (path === "/api/summary") return response({ summary: {} });
+      if (path === "/api/events?limit=12") return response({ events: [] });
+      if (path === "/api/control/capabilities") {
+        return response({
+          controls: {
+            legacy: { enabled: false, actions: [] },
+            runtime: { enabled: true, actions: ["runtime-stop"] },
+            researchReplay: {
+              enabled: true,
+              scenarios: [
+                "safe",
+                "prompt-injection",
+                "coordinated-shill",
+                "stale-evidence",
+                "contract-substitution",
+              ],
+            },
+          },
+        });
+      }
+      if (path === "/api/research/replay" && init?.method === "POST" && init.body) {
+        const command = JSON.parse(init.body) as Record<string, unknown>;
+        replayCommands.push(command);
+        proposalCount = 1;
+        return response({
+          result: {
+            schemaVersion: 1,
+            kind: "recorded_fixture_replay",
+            requestId: command.requestId,
+            scenario: command.scenario,
+            proposalId: `rsi-proposal:${String(command.scenario)}-${String(command.requestId)}`,
+            disposition: { kind: "abstain", reason: "market_uncertainty" },
+            replayEvaluatedAt: "2026-08-11T12:00:00.000Z",
+            persistedAt: "2026-09-30T03:30:00.000Z",
+            duplicate: false,
+          },
+        });
+      }
+      return Promise.reject(new Error(`Unexpected dashboard request: ${path}`));
+    };
+
+    runInNewContext(OPERATOR_DASHBOARD_JS, {
+      crypto: { randomUUID: () => "11111111-1111-4111-8111-111111111111" },
+      document,
+      fetch,
+    });
+    await flushClientTasks();
+
+    const scenario = elements.get("research-replay-scenario")!;
+    const run = elements.get("research-replay-run")!;
+    scenario.value = "safe";
+    scenario.dispatch("change");
+    expect(run.disabled).toBe(false);
+    run.click();
+    await flushClientTasks();
+
+    expect(replayCommands).toEqual([
+      {
+        action: "run-recorded-replay",
+        requestId: "11111111-1111-4111-8111-111111111111",
+        scenario: "safe",
+      },
+    ]);
+    expect(elements.get("research-abstentions")!.textContent).toBe("1");
+    expect(elements.get("research-replay-message")!.textContent).toContain("market_uncertainty");
+  });
+
   it("contains no search expression, credential input, or source-content field", () => {
     expect(OPERATOR_DASHBOARD_HTML).toContain("x-nft-market-pulse-v1");
     expect(OPERATOR_DASHBOARD_HTML).toContain("$0.05");
@@ -352,5 +451,7 @@ describe("operator dashboard runtime controls", () => {
       /<input[^>]*id="[^"]*(?:token|credential|query)[^"]*"/i,
     );
     expect(OPERATOR_DASHBOARD_JS).not.toContain("NFT OR OpenSea");
+    expect(OPERATOR_DASHBOARD_HTML).toContain("recorded fictional replay");
+    expect(OPERATOR_DASHBOARD_HTML).toContain("not a live market signal or trade recommendation");
   });
 });

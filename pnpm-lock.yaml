@@ -55,6 +55,9 @@ importers:
       "@rsi/read-canary":
         specifier: workspace:*
         version: link:../../packages/read-canary
+      "@rsi/research":
+        specifier: workspace:*
+        version: link:../../packages/research
       "@rsi/research-ledger":
         specifier: workspace:*
         version: link:../../packages/research-ledger

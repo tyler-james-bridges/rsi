@@ -25,6 +25,7 @@
     "@rsi/policy": "workspace:*",
     "@rsi/research-ledger": "workspace:*",
     "@rsi/read-canary": "workspace:*",
+    "@rsi/research": "workspace:*",
     "@rsi/runtime": "workspace:*",
     "@rsi/store": "workspace:*",
     "@rsi/vault": "workspace:*",
