@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { link, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SqliteRuntimeController } from "@rsi/runtime";
+import { SqliteResearchLedger } from "@rsi/research-ledger";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -154,7 +155,10 @@ describe("Stage 0 operator process", () => {
       method: "POST",
     });
     expect(transition.status).toBe(200);
-    expect(await transition.json()).toMatchObject({
+    const researchMode = (await transition.json()) as {
+      result: { mode: string; revision: number };
+    };
+    expect(researchMode).toMatchObject({
       result: {
         mode: "RESEARCH",
         capabilities: {
@@ -168,9 +172,181 @@ describe("Stage 0 operator process", () => {
       },
     });
 
+    const proposeOnly = await fetch(`${startup.origin}/api/control`, {
+      body: JSON.stringify({
+        action: "runtime-enter-propose-only",
+        expectedMode: "RESEARCH",
+        expectedRevision: researchMode.result.revision,
+        requestId: randomUUID(),
+      }),
+      headers: {
+        "content-type": "application/json",
+        origin: startup.origin,
+        "sec-fetch-site": "same-origin",
+        "x-rsi-operator-request": "1",
+      },
+      method: "POST",
+    });
+    expect(proposeOnly.status).toBe(200);
+    expect(await proposeOnly.json()).toMatchObject({
+      result: {
+        mode: "PROPOSE_ONLY",
+        capabilities: {
+          researchCollection: true,
+          proposalPersistence: true,
+          policyApproval: false,
+          paidRead: false,
+          walletSign: false,
+          transactionBroadcast: false,
+        },
+      },
+    });
+
+    const replayRequestId = randomUUID();
+    const replayHeaders = {
+      "content-type": "application/json",
+      origin: startup.origin,
+      "sec-fetch-site": "same-origin",
+      "x-rsi-operator-request": "1",
+    };
+    const runReplay = (scenario: string, requestId: string) =>
+      fetch(`${startup.origin}/api/research/replay`, {
+        body: JSON.stringify({ action: "run-recorded-replay", requestId, scenario }),
+        headers: replayHeaders,
+        method: "POST",
+      });
+    const replay = await runReplay("safe", replayRequestId);
+    const replayBody = (await replay.json()) as { result: Record<string, unknown> };
+    expect(replay.status).toBe(200);
+    expect(replayBody).toMatchObject({
+      result: {
+        kind: "recorded_fixture_replay",
+        scenario: "safe",
+        disposition: { kind: "abstain", reason: "market_uncertainty" },
+        replayEvaluatedAt: "2026-08-11T12:00:00.000Z",
+        duplicate: false,
+      },
+    });
+    const duplicate = await runReplay("safe", replayRequestId);
+    expect(await duplicate.json()).toEqual({
+      result: { ...replayBody.result, duplicate: true },
+    });
+
+    const hostile = await runReplay("prompt-injection", randomUUID());
+    const hostileBody = await hostile.json();
+    expect(hostile.status).toBe(200);
+    expect(hostileBody).toMatchObject({
+      result: {
+        scenario: "prompt-injection",
+        disposition: { kind: "abstain", reason: "integrity_risk" },
+      },
+    });
+    expect(JSON.stringify(hostileBody)).not.toContain("Ignore all previous");
+    expect(JSON.stringify(hostileBody)).not.toContain("private key");
+
+    const populatedResearch = await fetch(`${startup.origin}/api/research`);
+    expect(await populatedResearch.json()).toMatchObject({
+      research: { schemaVersion: 1, candidateCount: 0, abstentionCount: 2 },
+    });
+
     const exited = waitForExit(child);
     child.kill("SIGINT");
     expect(await exited).toBe(0);
+
+    child = spawn(
+      process.execPath,
+      [TSX_CLI, OPERATOR_ENTRY, "--db", runtimePath, "--research-db", researchPath, "--port", "0"],
+      {
+        cwd: ROOT,
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    const restarted = await waitForStartup(child);
+    const restartedHeaders = {
+      "content-type": "application/json",
+      origin: restarted.origin,
+      "sec-fetch-site": "same-origin",
+      "x-rsi-operator-request": "1",
+    };
+    const stoppedDuplicate = await fetch(`${restarted.origin}/api/research/replay`, {
+      body: JSON.stringify({
+        action: "run-recorded-replay",
+        requestId: replayRequestId,
+        scenario: "safe",
+      }),
+      headers: restartedHeaders,
+      method: "POST",
+    });
+    expect(stoppedDuplicate.status).toBe(409);
+    expect(await stoppedDuplicate.json()).toEqual({
+      error: {
+        code: "runtime_conflict",
+        message: "Runtime mode changed; refresh and try again.",
+      },
+    });
+
+    const restartedRuntimeResponse = await fetch(`${restarted.origin}/api/runtime`);
+    const restartedRuntimeBody = (await restartedRuntimeResponse.json()) as {
+      runtime: { mode: string; revision: number };
+    };
+    expect(restartedRuntimeBody.runtime.mode).toBe("STOPPED");
+    const restartedResearchMode = await fetch(`${restarted.origin}/api/control`, {
+      body: JSON.stringify({
+        action: "runtime-enter-research",
+        expectedMode: "STOPPED",
+        expectedRevision: restartedRuntimeBody.runtime.revision,
+        requestId: randomUUID(),
+      }),
+      headers: restartedHeaders,
+      method: "POST",
+    });
+    const restartedResearchModeBody = (await restartedResearchMode.json()) as {
+      result: { revision: number };
+    };
+    expect(restartedResearchMode.status).toBe(200);
+    const researchModeDuplicate = await fetch(`${restarted.origin}/api/research/replay`, {
+      body: JSON.stringify({
+        action: "run-recorded-replay",
+        requestId: replayRequestId,
+        scenario: "safe",
+      }),
+      headers: restartedHeaders,
+      method: "POST",
+    });
+    expect(researchModeDuplicate.status).toBe(409);
+    const restartedProposeOnly = await fetch(`${restarted.origin}/api/control`, {
+      body: JSON.stringify({
+        action: "runtime-enter-propose-only",
+        expectedMode: "RESEARCH",
+        expectedRevision: restartedResearchModeBody.result.revision,
+        requestId: randomUUID(),
+      }),
+      headers: restartedHeaders,
+      method: "POST",
+    });
+    expect(restartedProposeOnly.status).toBe(200);
+    const restartedDuplicate = await fetch(`${restarted.origin}/api/research/replay`, {
+      body: JSON.stringify({
+        action: "run-recorded-replay",
+        requestId: replayRequestId,
+        scenario: "safe",
+      }),
+      headers: restartedHeaders,
+      method: "POST",
+    });
+    expect(restartedDuplicate.status).toBe(200);
+    expect(await restartedDuplicate.json()).toEqual({
+      result: { ...replayBody.result, duplicate: true },
+    });
+    const restartedProjection = await fetch(`${restarted.origin}/api/research`);
+    expect(await restartedProjection.json()).toMatchObject({
+      research: { schemaVersion: 1, candidateCount: 0, abstentionCount: 2 },
+    });
+
+    const restartedExit = waitForExit(child);
+    child.kill("SIGINT");
+    expect(await restartedExit).toBe(0);
 
     const reopened = SqliteRuntimeController.open({
       openedAt: new Date().toISOString(),
@@ -184,6 +360,17 @@ describe("Stage 0 operator process", () => {
     });
     expect(reopened.getSnapshot().mode).toBe("STOPPED");
     reopened.close();
+
+    const reopenedResearch = SqliteResearchLedger.open(researchPath);
+    expect(reopenedResearch.getProjection()).toMatchObject({
+      schemaVersion: 1,
+      candidateCount: 0,
+      abstentionCount: 2,
+    });
+    reopenedResearch.close();
+    const researchBytes = await readFile(researchPath);
+    expect(researchBytes.includes(Buffer.from("Ignore all previous"))).toBe(false);
+    expect(researchBytes.includes(Buffer.from("private key"))).toBe(false);
   });
 
   it("creates fresh default Stage 0 directories owner-only without poisoning Stage 1", async () => {

@@ -2,8 +2,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { BlockList, isIP } from "node:net";
 import { types as utilTypes } from "node:util";
 
-import { ResearchProposalV1Schema, type ResearchProposalV1 } from "@rsi/domain/proposals";
-import { RuntimeConflictError } from "@rsi/runtime";
+import {
+  ResearchProposalDispositionSchema,
+  ResearchProposalV1Schema,
+  type ResearchProposalDisposition,
+  type ResearchProposalV1,
+} from "@rsi/domain/proposals";
+import { RuntimeBoundaryDeniedError, RuntimeConflictError } from "@rsi/runtime";
 
 import {
   OPERATOR_DASHBOARD_CSS,
@@ -73,6 +78,38 @@ export interface OperatorRuntimeProvider {
 
 export interface OperatorResearchProvider {
   getResearchProjection(): Promise<unknown> | unknown;
+}
+
+export const OPERATOR_RECORDED_REPLAY_SCENARIOS = Object.freeze([
+  "safe",
+  "prompt-injection",
+  "coordinated-shill",
+  "stale-evidence",
+  "contract-substitution",
+] as const);
+
+export type OperatorRecordedReplayScenario = (typeof OPERATOR_RECORDED_REPLAY_SCENARIOS)[number];
+
+export interface OperatorResearchReplayCommand {
+  readonly action: "run-recorded-replay";
+  readonly requestId: string;
+  readonly scenario: OperatorRecordedReplayScenario;
+}
+
+export interface OperatorResearchReplayProvider {
+  executeResearchReplay(command: OperatorResearchReplayCommand): Promise<unknown> | unknown;
+}
+
+export interface OperatorResearchReplayReceiptV1 {
+  readonly schemaVersion: 1;
+  readonly kind: "recorded_fixture_replay";
+  readonly requestId: string;
+  readonly scenario: OperatorRecordedReplayScenario;
+  readonly proposalId: string;
+  readonly disposition: Readonly<ResearchProposalDisposition>;
+  readonly replayEvaluatedAt: "2026-08-11T12:00:00.000Z";
+  readonly persistedAt: string;
+  readonly duplicate: boolean;
 }
 
 export interface OperatorResearchProposalRecordV1 {
@@ -149,6 +186,8 @@ export interface OperatorServerOptions {
   readonly runtime?: OperatorRuntimeProvider;
   /** Omit when no content-free research ledger is configured. */
   readonly research?: OperatorResearchProvider;
+  /** Omit when the closed recorded-fixture replay is not configured. */
+  readonly researchReplay?: OperatorResearchReplayProvider;
   /** Omit when the bounded Stage 1 X read canary is not configured. */
   readonly readCanary?: OperatorReadCanaryProvider;
 }
@@ -169,6 +208,9 @@ const CONTROL_BODY_TIMEOUT_MS = 5_000;
 const MAX_PROJECTION_DEPTH = 24;
 const MAX_PROJECTED_ARRAY_LENGTH = 1_000;
 const MAX_PROJECTED_OBJECT_KEYS = 512;
+const PROPOSAL_ID = /^rsi-proposal:[A-Za-z0-9._-]{1,96}$/;
+const RECORDED_REPLAY_SCENARIO_SET = new Set<string>(OPERATOR_RECORDED_REPLAY_SCENARIOS);
+const RECORDED_REPLAY_EVALUATED_AT = "2026-08-11T12:00:00.000Z" as const;
 
 const BASE_HEADERS = Object.freeze({
   "cache-control": "no-store, max-age=0",
@@ -531,6 +573,64 @@ export function parseOperatorResearchProjection(value: unknown): OperatorResearc
     candidateCount,
     abstentionCount,
     proposals: Object.freeze(proposals),
+  });
+}
+
+export function parseOperatorResearchReplayReceipt(
+  value: unknown,
+): OperatorResearchReplayReceiptV1 {
+  const record = strictDataRecord(
+    value,
+    [
+      "schemaVersion",
+      "kind",
+      "requestId",
+      "scenario",
+      "proposalId",
+      "disposition",
+      "replayEvaluatedAt",
+      "persistedAt",
+      "duplicate",
+    ],
+    "Recorded replay receipt",
+  );
+  if (
+    record.schemaVersion !== 1 ||
+    record.kind !== "recorded_fixture_replay" ||
+    typeof record.requestId !== "string" ||
+    !UUID_V4.test(record.requestId) ||
+    typeof record.scenario !== "string" ||
+    !RECORDED_REPLAY_SCENARIO_SET.has(record.scenario) ||
+    typeof record.proposalId !== "string" ||
+    !PROPOSAL_ID.test(record.proposalId) ||
+    record.replayEvaluatedAt !== RECORDED_REPLAY_EVALUATED_AT ||
+    !canonicalTimestamp(record.persistedAt) ||
+    typeof record.duplicate !== "boolean"
+  ) {
+    throw new TypeError("Recorded replay receipt is invalid");
+  }
+  const dispositionRecord =
+    record.disposition !== null &&
+    typeof record.disposition === "object" &&
+    !Array.isArray(record.disposition) &&
+    !utilTypes.isProxy(record.disposition) &&
+    Object.getPrototypeOf(record.disposition) === Object.prototype &&
+    (record.disposition as { kind?: unknown }).kind === "candidate"
+      ? strictDataRecord(record.disposition, ["kind"], "Recorded replay disposition")
+      : strictDataRecord(record.disposition, ["kind", "reason"], "Recorded replay disposition");
+  const disposition = ResearchProposalDispositionSchema.safeParse(dispositionRecord);
+  if (!disposition.success) throw new TypeError("Recorded replay disposition is invalid");
+
+  return Object.freeze({
+    schemaVersion: 1,
+    kind: "recorded_fixture_replay",
+    requestId: record.requestId,
+    scenario: record.scenario as OperatorRecordedReplayScenario,
+    proposalId: record.proposalId,
+    disposition: Object.freeze(disposition.data),
+    replayEvaluatedAt: RECORDED_REPLAY_EVALUATED_AT,
+    persistedAt: record.persistedAt,
+    duplicate: record.duplicate,
   });
 }
 
@@ -954,6 +1054,25 @@ function parseControlCommand(
   badRequest("Control action is unsupported.");
 }
 
+function parseResearchReplayCommand(value: unknown): OperatorResearchReplayCommand {
+  const record = exactJsonRecord(value);
+  assertExactKeys(record, ["action", "requestId", "scenario"]);
+  if (
+    record.action !== "run-recorded-replay" ||
+    typeof record.requestId !== "string" ||
+    !UUID_V4.test(record.requestId) ||
+    typeof record.scenario !== "string" ||
+    !RECORDED_REPLAY_SCENARIO_SET.has(record.scenario)
+  ) {
+    badRequest("Recorded replay command is invalid.");
+  }
+  return Object.freeze({
+    action: "run-recorded-replay",
+    requestId: record.requestId,
+    scenario: record.scenario as OperatorRecordedReplayScenario,
+  });
+}
+
 function isRuntimeControlCommand(
   command: OperatorControlCommand | RuntimeOperatorControlCommand,
 ): command is RuntimeOperatorControlCommand {
@@ -1036,8 +1155,10 @@ async function route(
   controls: OperatorControlProvider | undefined,
   runtime: OperatorRuntimeProvider | undefined,
   research: OperatorResearchProvider | undefined,
+  researchReplay: OperatorResearchReplayProvider | undefined,
   readCanary: OperatorReadCanaryProvider | undefined,
   readCanaryRouteState: { running: boolean },
+  researchReplayRouteState: { running: boolean },
 ): Promise<void> {
   assertLoopbackLocalSocket(request);
   const origin = assertLoopbackHost(request);
@@ -1104,6 +1225,37 @@ async function route(
       sendJson(response, 200, { result });
     } finally {
       readCanaryRouteState.running = false;
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/research/replay") {
+    if (url.search !== "")
+      badRequest("The recorded replay route does not accept query parameters.");
+    assertSameOriginControl(request, origin);
+    if (researchReplay === undefined) {
+      throw new HttpError(
+        501,
+        "research_replay_unavailable",
+        "The recorded research replay is not configured.",
+      );
+    }
+    const command = parseResearchReplayCommand(await readControlBody(request));
+    if (researchReplayRouteState.running) {
+      throw new HttpError(
+        409,
+        "research_replay_conflict",
+        "A recorded research replay is already running.",
+      );
+    }
+    researchReplayRouteState.running = true;
+    try {
+      const result = parseOperatorResearchReplayReceipt(
+        await researchReplay.executeResearchReplay(command),
+      );
+      sendJson(response, 200, { result });
+    } finally {
+      researchReplayRouteState.running = false;
     }
     return;
   }
@@ -1201,6 +1353,10 @@ async function route(
           actions: runtimeActions,
           enabled: runtime !== undefined,
         },
+        researchReplay: {
+          enabled: researchReplay !== undefined,
+          scenarios: researchReplay === undefined ? [] : OPERATOR_RECORDED_REPLAY_SCENARIOS,
+        },
       },
     });
     return;
@@ -1242,8 +1398,10 @@ export function createOperatorServer(
   runtime?: OperatorRuntimeProvider,
   research?: OperatorResearchProvider,
   readCanary?: OperatorReadCanaryProvider,
+  researchReplay?: OperatorResearchReplayProvider,
 ): Server {
   const readCanaryRouteState = { running: false };
+  const researchReplayRouteState = { running: false };
   const server = createServer((request, response) => {
     void route(
       request,
@@ -1252,8 +1410,10 @@ export function createOperatorServer(
       controls,
       runtime,
       research,
+      researchReplay,
       readCanary,
       readCanaryRouteState,
+      researchReplayRouteState,
     ).catch((error: unknown) => {
       if (response.headersSent) {
         response.destroy();
@@ -1265,7 +1425,7 @@ export function createOperatorServer(
         });
         return;
       }
-      if (error instanceof RuntimeConflictError) {
+      if (error instanceof RuntimeConflictError || error instanceof RuntimeBoundaryDeniedError) {
         sendJson(response, 409, {
           error: {
             code: "runtime_conflict",
@@ -1330,6 +1490,7 @@ export async function startOperatorServer(
     options.runtime,
     options.research,
     options.readCanary,
+    options.researchReplay,
   );
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => {

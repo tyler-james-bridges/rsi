@@ -128,6 +128,27 @@ export const OPERATOR_DASHBOARD_HTML = `<!doctype html>
             <div class="metric"><dt>Candidates</dt><dd id="research-candidates">—</dd></div>
             <div class="metric"><dt>Abstentions</dt><dd id="research-abstentions">—</dd></div>
           </dl>
+          <div class="stack replay-controls">
+            <p class="help">
+              Run a fixed recorded fictional replay through the local integrity pipeline. It is historical
+              test evidence, not a live market signal or trade recommendation. Opportunity remains
+              zero because the fixtures contain no price or return data.
+            </p>
+            <label>
+              Recorded scenario
+              <select id="research-replay-scenario">
+                <option value="safe">Safe corroboration</option>
+                <option value="prompt-injection">Prompt injection</option>
+                <option value="coordinated-shill">Coordinated shill</option>
+                <option value="stale-evidence">Stale evidence</option>
+                <option value="contract-substitution">Contract substitution</option>
+              </select>
+            </label>
+            <button id="research-replay-run" type="button" disabled>Run recorded replay</button>
+            <p id="research-replay-message" class="message" aria-live="polite">
+              Enable proposals to persist a replay abstention.
+            </p>
+          </div>
           <ol id="research-proposals" class="proposal-list">
             <li>No content-free research projection loaded.</li>
           </ol>
@@ -288,6 +309,7 @@ pre { overflow: auto; max-height: 28rem; border-radius: 12px; background: #080a0
 .event-type { color: var(--acid); font: .74rem ui-monospace, SFMono-Regular, Menlo, monospace; }
 .event-data { overflow: hidden; color: var(--muted); font: .74rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .research-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.replay-controls { margin: 1rem 0; }
 .proposal-list { display: grid; gap: .8rem; margin: 1rem 0 0; padding: 0; list-style: none; }
 .proposal-card { display: grid; gap: .65rem; border: 1px solid var(--line); border-radius: 12px; background: #080a0a; padding: .9rem; }
 .proposal-title { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; }
@@ -322,6 +344,9 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
   let pendingRuntimeControls = 0;
   let readCanaryProjection = null;
   let pendingReadCanary = false;
+  let researchReplayEnabled = false;
+  let researchReplayScenarios = new Set();
+  let pendingResearchReplay = false;
 
   const text = (value) => typeof value === "string" ? value : JSON.stringify(value);
   const safeSessionId = () => byId("session-id").value.trim();
@@ -359,6 +384,23 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
       !supportedRuntimeActions.has("runtime-enter-propose-only") || mode !== "RESEARCH";
     // Emergency STOP does not depend on a successful snapshot or capabilities read.
     byId("runtime-stop").disabled = false;
+    updateResearchReplayButton();
+  }
+
+  function updateResearchReplayButton() {
+    const scenario = byId("research-replay-scenario").value;
+    byId("research-replay-run").disabled = pendingResearchReplay ||
+      !researchReplayEnabled ||
+      !runtimeSnapshot || runtimeSnapshot.mode !== "PROPOSE_ONLY" ||
+      !researchReplayScenarios.has(scenario);
+  }
+
+  function setResearchReplayCapabilities(capability) {
+    researchReplayEnabled = capability && capability.enabled === true;
+    researchReplayScenarios = new Set(
+      capability && Array.isArray(capability.scenarios) ? capability.scenarios : [],
+    );
+    updateResearchReplayButton();
   }
 
   function setRuntimeCapabilities(actions) {
@@ -538,6 +580,13 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
       title.append(proposalId, disposition);
       card.append(title);
 
+      if (proposal.strategyVersion === "rsi-recorded-replay-v1") {
+        const replay = document.createElement("div");
+        replay.className = "proposal-detail";
+        replay.textContent = "Context: recorded fictional replay · not a live market signal";
+        card.append(replay);
+      }
+
       const asset = document.createElement("div");
       asset.className = "proposal-asset";
       asset.textContent = "Asset: chain " + String(proposal.asset.chainId) +
@@ -640,9 +689,11 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
       const controls = capabilities.value.controls || {};
       setLegacyControls(controls.legacy && controls.legacy.enabled === true ? controls.legacy.actions : []);
       setRuntimeCapabilities(controls.runtime && controls.runtime.enabled === true ? controls.runtime.actions : []);
+      setResearchReplayCapabilities(controls.researchReplay || null);
     } else {
       setLegacyControls([]);
       setRuntimeCapabilities([]);
+      setResearchReplayCapabilities(null);
     }
 
     const successfulReads = [runtime, research, summary, events, capabilities].filter((result) => result.status === "fulfilled").length;
@@ -778,6 +829,39 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
     }
   }
 
+  async function runResearchReplay() {
+    if (byId("research-replay-run").disabled) return;
+    const message = byId("research-replay-message");
+    const command = {
+      action: "run-recorded-replay",
+      requestId: crypto.randomUUID(),
+      scenario: byId("research-replay-scenario").value,
+    };
+    pendingResearchReplay = true;
+    message.className = "message";
+    message.textContent = "Running the recorded fictional replay…";
+    updateResearchReplayButton();
+    try {
+      const body = await requestJson("/api/research/replay", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-rsi-operator-request": "1" },
+        body: JSON.stringify(command),
+      });
+      const disposition = body.result && body.result.disposition;
+      message.textContent = disposition && disposition.kind === "abstain"
+        ? "Replay persisted an abstention: " + disposition.reason + "."
+        : "Replay persisted a candidate for further research.";
+      message.className = "message";
+      await refresh();
+    } catch (error) {
+      message.textContent = error instanceof Error ? error.message : "Recorded replay failed.";
+      message.className = "message error";
+    } finally {
+      pendingResearchReplay = false;
+      updateResearchReplayButton();
+    }
+  }
+
   byId("refresh").addEventListener("click", refresh);
   for (const button of legacyButtons) {
     button.addEventListener("click", () => runLegacyControl(button.dataset.action));
@@ -789,8 +873,11 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
   byId("canary-one-request-ack").addEventListener("change", updateReadCanaryButton);
   byId("canary-charge-ack").addEventListener("change", updateReadCanaryButton);
   byId("canary-run").addEventListener("click", runReadCanary);
+  byId("research-replay-scenario").addEventListener("change", updateResearchReplayButton);
+  byId("research-replay-run").addEventListener("click", runResearchReplay);
   updateRuntimeButtons();
   updateReadCanaryButton();
+  updateResearchReplayButton();
   void refresh();
 })();
 `;

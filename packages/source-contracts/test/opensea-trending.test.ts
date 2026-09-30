@@ -273,6 +273,47 @@ describe("OpenSea trending-collections response contract", () => {
     );
   });
 
+  it.each([
+    "banner_image_url",
+    "category",
+    "description",
+    "discord_url",
+    "image_url",
+    "instagram_username",
+    "owner",
+    "project_url",
+    "telegram_url",
+    "twitter_username",
+    "wiki_url",
+  ] as const)("accepts null for documented nullable metadata field %s", (field) => {
+    const collection = collectionFixture(`nullable-${field.replaceAll("_", "-")}`, [FIRST_ADDRESS]);
+    collection[field] = null;
+
+    expect(
+      parseOpenSeaTrendingResponse(jsonBytes(trendingFixture([collection])), ACQUIRED_AT),
+    ).toMatchObject({ collections: [{ slug: collection.collection }] });
+  });
+
+  it.each([
+    "collection",
+    "collection_offers_enabled",
+    "contracts",
+    "is_disabled",
+    "is_nsfw",
+    "name",
+    "opensea_url",
+    "safelist_status",
+    "trait_offers_enabled",
+  ] as const)("keeps required collection field %s non-null", (field) => {
+    const collection = collectionFixture("null-required-field", [FIRST_ADDRESS]);
+    const untypedCollection: Record<string, unknown> = collection;
+    untypedCollection[field] = null;
+
+    expectInvalid(() =>
+      parseOpenSeaTrendingResponse(jsonBytes(trendingFixture([collection])), ACQUIRED_AT),
+    );
+  });
+
   it("rejects malformed, nonordinary, oversized, and invalid-time inputs", () => {
     expectInvalid(() => parseOpenSeaTrendingResponse(new Uint8Array(), ACQUIRED_AT));
     expectInvalid(() => parseOpenSeaTrendingResponse(new TextEncoder().encode("{"), ACQUIRED_AT));

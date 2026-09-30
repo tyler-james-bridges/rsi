@@ -1,48 +1,10 @@
 import { readFile } from "node:fs/promises";
 
 import { captureRawFixture, type RawFixtureCapture } from "./capture.js";
+import { RECORDED_FIXTURE_SCENARIOS, type RecordedFixtureScenario } from "./recorded-scenarios.js";
 
-function freezeCatalog<T extends Record<string, object>>(catalog: T): Readonly<T> {
-  for (const entry of Object.values(catalog)) Object.freeze(entry);
-  return Object.freeze(catalog);
-}
-
-export const RECORDED_FIXTURE_SCENARIOS = freezeCatalog({
-  safeSocial: {
-    file: "safe-social.json",
-    category: "safe",
-  },
-  safeMarketplace: {
-    file: "safe-opensea.json",
-    category: "canonical",
-  },
-  safeOnchain: {
-    file: "safe-onchain.json",
-    category: "canonical",
-  },
-  coordinatedShillA: {
-    file: "coordinated-shill-a.json",
-    category: "coordinated-shill",
-  },
-  coordinatedShillB: {
-    file: "coordinated-shill-b.json",
-    category: "coordinated-shill",
-  },
-  promptInjection: {
-    file: "prompt-injection.json",
-    category: "prompt-injection",
-  },
-  staleSocial: {
-    file: "stale-social.json",
-    category: "stale",
-  },
-  contractSubstitution: {
-    file: "contract-substitution.json",
-    category: "contract-substitution",
-  },
-} as const);
-
-export type RecordedFixtureScenario = keyof typeof RECORDED_FIXTURE_SCENARIOS;
+export { RECORDED_FIXTURE_SCENARIOS } from "./recorded-scenarios.js";
+export type { RecordedFixtureScenario } from "./recorded-scenarios.js";
 
 export async function loadRecordedFixture(
   scenario: RecordedFixtureScenario,

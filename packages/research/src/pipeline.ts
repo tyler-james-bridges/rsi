@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { ObservationSchema, type EvidenceClaim, type Observation } from "@rsi/domain";
+import { ObservationSchema, type EvidenceClaim, type Observation } from "@rsi/domain/evidence";
 
 import { MAX_RAW_FIXTURE_BYTES, sha256Id, type RawFixtureCapture } from "./capture.js";
 import {

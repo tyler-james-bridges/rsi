@@ -30,7 +30,7 @@ const FORBIDDEN_WORKSPACE_PACKAGES = new Map([
   ["@rsi/domain", "executable intent and EIP-712 transaction modules"],
   ["@rsi/policy", "policy approval authority"],
 ]);
-const REVIEWED_SIGNER_BLIND_SUBPATHS = new Set(["@rsi/domain/proposals"]);
+const REVIEWED_SIGNER_BLIND_SUBPATHS = new Set(["@rsi/domain/evidence", "@rsi/domain/proposals"]);
 const FORBIDDEN_LOCAL_PREFIXES = new Map([
   ["packages/adapters/", "execution-adapter package"],
   ["packages/policy/", "policy approval package"],
@@ -59,6 +59,11 @@ const SPECIAL_PLATFORM_IMPORTS = new Map([
     Object.freeze({
       files: new Map([
         ["apps/cli/src/operator.ts", Object.freeze(["randomUUID"])],
+        ["apps/cli/src/research-replay-provider.ts", Object.freeze(["randomUUID"])],
+        ["packages/research/src/capture.ts", Object.freeze(["createHash"])],
+        ["packages/research/src/coordination.ts", Object.freeze(["createHash"])],
+        ["packages/research/src/pipeline.ts", Object.freeze(["createHash"])],
+        ["packages/research/src/signals.ts", Object.freeze(["createHash"])],
         [
           "packages/session-lifecycle/src/sqlite-session-coordinator.ts",
           Object.freeze(["createHmac", "hkdfSync", "timingSafeEqual"]),
@@ -71,6 +76,7 @@ const SPECIAL_PLATFORM_IMPORTS = new Map([
     "node:fs",
     Object.freeze({
       files: new Map([
+        ["packages/research/src/replay.ts", Object.freeze(["readFileSync"])],
         [
           "packages/session-lifecycle/src/sqlite-session-coordinator.ts",
           Object.freeze(["chmodSync", "existsSync", "lstatSync", "mkdirSync"]),

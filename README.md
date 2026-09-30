@@ -49,6 +49,10 @@ RSI researches markets, converts adversarial internet activity into typed eviden
 - An optional read-only compatibility preflight that reports runtime and host facts without reading secret values or changing the host. Its earlier all-provider profile is not a staged-readiness verdict.
 - A signer-blind, SQLite-backed Stage 0 runtime with exact `STOPPED`, `RESEARCH`, and `PROPOSE_ONLY` modes. Every process boot persists a new STOP, transitions use compare-and-swap revisions, STOP is universal, and one-shot boundary authorizations are invalidated by any transition or restart.
 - A separate typed research ledger for non-executable proposal scorecards. It accepts only a genuine `proposal_persist` authorization in `PROPOSE_ONLY`, rejects raw or executable fields, and exposes exact assets, provenance, scam flags, bounded scores, candidates, and abstentions.
+- A closed recorded-fixture product loop for five adversarial scenarios. It runs the real quarantine,
+  extraction, and correlation path, derives an abstention reason from the resulting evidence, fixes
+  opportunity at zero, and persists only a content-free proposal through the authorized research
+  ledger. Scenario names are not verdict inputs.
 - A loopback-only operator dashboard/API with fixed same-origin assets, defensive headers, strict runtime/research projections, and closed Stage 0 controls. STOP remains independently available when another dashboard read fails.
 - An optional Stage 1 X read-canary operator with a code-owned query, durable singleton claim, fixed one-request/ten-result/$0.05 ceiling, macOS Keychain boundary, STOP-linearized dispatch/completion, encrypted raw capture, verified crypto-shredding before receipt, and credential-free/no-egress restart recovery. Its single authenticated canary completed successfully on 2026-08-25 and returned to `STOPPED`.
 - A separate optional OpenSea read-canary operator with a fixed Base trending-collections plan, one-request/ten-result/no-payment acknowledgements, its own Keychain account, the same STOP/deletion/recovery guarantees, and a dedicated executable authority-graph gate. It remains uncommissioned.
@@ -108,7 +112,12 @@ curl http://127.0.0.1:8787/api/summary
 curl 'http://127.0.0.1:8787/api/events?limit=20'
 ```
 
-The operator service binds to IPv4 loopback and has no network authentication. Do not expose it to a network. Every launch begins in persisted `STOPPED`; the dashboard can enter research, enter proposal-only mode, de-escalate, or STOP, but it has no financial authority. Its development-only runtime and research databases live under `.local/stage0/`; the command refuses canonical Stage 1 storage namespaces before creating or opening a path. Stop it with `Ctrl-C`, which persists STOP before closing.
+Open `http://127.0.0.1:8787/`, enter `RESEARCH`, then enter `PROPOSE_ONLY`. Choose one of the five
+recorded scenarios and run it. The result appears in the proposal ledger as an abstention; rerunning
+the same request is idempotent after re-entering `PROPOSE_ONLY`. Restarting the process preserves
+the ledger while booting the runtime back into `STOPPED`.
+
+The operator service binds to IPv4 loopback and has no network authentication. Do not expose it to a network. Every launch begins in persisted `STOPPED`; the dashboard can enter research, enter proposal-only mode, run only the closed recorded-fixture replay, de-escalate, or STOP, but it has no financial authority. Its development-only runtime and research databases live under `.local/stage0/`; the command refuses canonical Stage 1 storage namespaces before creating or opening a path. Stop it with `Ctrl-C`, which persists STOP before closing.
 
 The production-shaped Stage 1 host is `pnpm operator:x-canary`. It also boots `STOPPED` and cannot
 sign, pay, trade, publish, or paginate. Its local data directory must be owner-only (`0700`), which
@@ -177,6 +186,10 @@ Any future paid-read and execution stages use two separate, deliberately low-bal
 
 ## Current limits
 
+- The Stage 0 replay is historical fictional evidence, not a live market signal, price model, trade
+  recommendation, or proof of profit. Every replay currently abstains. Its purpose is to exercise
+  the complete signer-blind research-to-ledger product loop and adversarial defenses before live
+  proposal inputs are connected.
 - X recent-search has a credential-injected live implementation, a production-shaped one-shot operator path, and an offline synthetic replay path. The single 2026-08-25 canary validated exactly one ten-result request with no retry or pagination; it did not approve a continuously enabled adapter. The request deliberately used only the minimum `id`/`text` response and no optional field dialect. There is no live recording/cassette mode.
 - OpenSea now has a production-shaped but uncommissioned one-shot path for `GET https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=base&limit=10`. Offline tests cover the singleton claim, retained runtime authorization, STOP races, deletion-before-receipt, storage-only recovery, operator process, and static authority graph. This work has not created, accessed, or used an OpenSea API key; whether the owner already has one is unknown. No OpenSea provider request has been made or authorized. Orders, Stream, wallets, payment, x402, policy approval, and execution are excluded; legacy Get Order/Stream schemas remain synthetic-only and quarantined.
 - Base RPC now has a separate production-shaped but uncommissioned one-shot path for one fixed Alchemy `POST` batch. Offline tests cover strict Base/freshness parsing, exact runtime and durable-attempt authorization, singleton and permanent claims, STOP races, deletion-before-receipt, statically collector-free storage-only recovery, operator process, and the authority graph. This work has not created, accessed, or used an Alchemy credential and made no Base RPC request. A 2026-09-07 review found contradictory Alchemy-on-Base response documentation, so commissioning is blocked without weakening the strict parser. The one provider-reported `finalized` response is not independent canonical-chain proof. Robinhood Chain remains an offline request/fixture contract with no provider credential or live-schema claim.

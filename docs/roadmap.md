@@ -18,8 +18,9 @@ Status: **complete**
       contract.
 - [x] Add a persisted runtime mode: `STOPPED → RESEARCH → PROPOSE_ONLY`. Startup defaults to
       `STOPPED`, and STOP is checked at every authority boundary.
-- [x] Show findings, exact assets, provenance, scam flags, abstentions, and candidate-strategy
-      scorecards in the local dashboard.
+- [x] Run five closed recorded scenarios through quarantine, evidence-derived abstention scoring,
+      genuine `PROPOSE_ONLY` authorization, durable proposal persistence, and the local dashboard.
+      Recorded evidence has zero opportunity and cannot become a trade recommendation.
 
 Exit: normal CI passes and RSI can run locally without credentials, funds, or additional hardware.
 
@@ -56,8 +57,9 @@ Status: **X READ_CANARY commissioned; OpenSea READ_CANARY complete and uncommiss
   record the latest checks without commissioning either canary; the Base recheck currently blocks
   its live request.
 - Keep raw provider content inside quarantine and persist only typed, provenance-rich evidence.
-- Add opportunity scoring, outcome labels, source information-lift measurement, and explicit
-  abstention reasons.
+- [ ] Add live opportunity scoring, outcome labels, source information-lift measurement, and
+      explicit abstention reasons. The completed recorded replay deliberately supplies no price or
+      return input and therefore always abstains.
 - Keep all wallet, payment, and transaction authority absent.
 
 Exit: RSI produces useful live NFT proposals and can be stopped durably, but cannot spend or sign.

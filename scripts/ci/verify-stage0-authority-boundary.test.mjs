@@ -170,14 +170,26 @@ test("allows only the isolated proposal subpath and still traverses its implemen
       manifest(
         "@rsi/domain",
         { viem: "1.0.0", zod: "1.0.0" },
-        { ".": "./src/index.ts", "./proposals": "./src/proposals.ts" },
+        {
+          ".": "./src/index.ts",
+          "./evidence": "./src/evidence.ts",
+          "./proposals": "./src/proposals.ts",
+        },
       ),
     );
     write(root, "packages/domain/src/index.ts", `import "viem";\nexport const intent = true;\n`);
     write(
       root,
+      "packages/domain/src/evidence.ts",
+      `import { z } from "zod";\nexport const evidence = z.literal("observation");\n`,
+    );
+    write(
+      root,
       "packages/domain/src/proposals.ts",
-      `import { z } from "zod";\nexport const proposal = z.literal("candidate");\n`,
+      `import { evidence } from "@rsi/domain/evidence";
+import { z } from "zod";
+export const proposal = z.tuple([evidence, z.literal("candidate")]);
+`,
     );
     write(
       root,
@@ -191,8 +203,46 @@ void runtime;
 
     assert.equal(verifyStage0AuthorityBoundary({ root }).status, "pass");
 
-    write(root, "packages/domain/src/proposals.ts", `import "viem";\n`);
+    write(root, "packages/domain/src/evidence.ts", `import "viem";\n`);
     expectFailure(root, /wallet\/transaction-capable package viem/u);
+  });
+});
+
+test("keeps recorded replay platform authority exact", () => {
+  withFixture((root) => {
+    write(
+      root,
+      "packages/research/package.json",
+      manifest("@rsi/research", {}, { "./replay": "./src/replay.ts" }),
+    );
+    write(
+      root,
+      "packages/research/src/replay.ts",
+      `import { readFileSync } from "node:fs";
+export const replay = () => readFileSync(new URL("../fixtures/safe.json", import.meta.url));
+`,
+    );
+    write(
+      root,
+      "apps/cli/src/operator.ts",
+      `import { replay } from "@rsi/research/replay";
+import { runtime } from "@rsi/runtime";
+void replay;
+void runtime;
+`,
+    );
+    assert.equal(verifyStage0AuthorityBoundary({ root }).status, "pass");
+
+    write(
+      root,
+      "packages/research/src/replay.ts",
+      `import { readFileSync, writeFileSync } from "node:fs";
+void readFileSync;
+void writeFileSync;
+export const replay = true;
+`,
+    );
+    expectFailure(root, /node:fs imports must be exactly readFileSync/u);
   });
 });
 
@@ -326,7 +376,7 @@ export const safeStore = import("./late-loader.ts");
     write(root, "packages/store/src/late-loader.ts", `export const initiallyBenign = true;\n`);
     expectFailure(
       root,
-      /node:fs is allowed only in packages\/session-lifecycle\/src\/sqlite-session-coordinator\.ts/u,
+      /node:fs is allowed only in .*packages\/session-lifecycle\/src\/sqlite-session-coordinator\.ts/u,
     );
     expectFailure(root, /contains a runtime import\(\) expression/u);
   });

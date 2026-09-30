@@ -31,11 +31,12 @@ const OPENSEA_TRENDING_MAXIMUM_CURSOR_CHARACTERS = 2_048;
 
 const CollectionSlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,127}$/);
 const RequiredNameSchema = z.string().max(512);
-const DiscardedCategorySchema = z.string().max(256);
-const DiscardedDescriptionSchema = z.string().max(25_000);
-const DiscardedOwnerSchema = z.string().max(256);
 const DiscardedUrlSchema = z.string().max(4_096);
-const DiscardedUsernameSchema = z.string().max(256);
+const OptionalDiscardedCategorySchema = z.string().max(256).nullable().optional();
+const OptionalDiscardedDescriptionSchema = z.string().max(25_000).nullable().optional();
+const OptionalDiscardedOwnerSchema = z.string().max(256).nullable().optional();
+const OptionalDiscardedUrlSchema = DiscardedUrlSchema.nullable().optional();
+const OptionalDiscardedUsernameSchema = z.string().max(256).nullable().optional();
 const NextCursorSchema = z
   .string()
   .min(1)
@@ -55,26 +56,26 @@ const ContractSchema = z.strictObject({
  * boundary.
  */
 const CollectionResponseSchema = z.strictObject({
-  banner_image_url: DiscardedUrlSchema.optional(),
-  category: DiscardedCategorySchema.optional(),
+  banner_image_url: OptionalDiscardedUrlSchema,
+  category: OptionalDiscardedCategorySchema,
   collection: CollectionSlugSchema,
   collection_offers_enabled: z.boolean(),
   contracts: z.array(ContractSchema).min(1).max(OPENSEA_TRENDING_MAXIMUM_CONTRACTS_PER_COLLECTION),
-  description: DiscardedDescriptionSchema.optional(),
-  discord_url: DiscardedUrlSchema.optional(),
-  image_url: DiscardedUrlSchema.optional(),
-  instagram_username: DiscardedUsernameSchema.optional(),
+  description: OptionalDiscardedDescriptionSchema,
+  discord_url: OptionalDiscardedUrlSchema,
+  image_url: OptionalDiscardedUrlSchema,
+  instagram_username: OptionalDiscardedUsernameSchema,
   is_disabled: z.literal(false),
   is_nsfw: z.literal(false),
   name: RequiredNameSchema,
   opensea_url: DiscardedUrlSchema,
-  owner: DiscardedOwnerSchema.optional(),
-  project_url: DiscardedUrlSchema.optional(),
+  owner: OptionalDiscardedOwnerSchema,
+  project_url: OptionalDiscardedUrlSchema,
   safelist_status: z.literal("verified"),
-  telegram_url: DiscardedUrlSchema.optional(),
+  telegram_url: OptionalDiscardedUrlSchema,
   trait_offers_enabled: z.boolean(),
-  twitter_username: DiscardedUsernameSchema.optional(),
-  wiki_url: DiscardedUrlSchema.optional(),
+  twitter_username: OptionalDiscardedUsernameSchema,
+  wiki_url: OptionalDiscardedUrlSchema,
 });
 
 const TrendingResponseSchema = z.strictObject({

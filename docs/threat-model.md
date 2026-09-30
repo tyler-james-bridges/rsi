@@ -21,6 +21,9 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 - Stage 0 exposes only one-shot research-collection and non-executable proposal-persistence
   authorizations. Payment, signing, policy approval, execution, broadcast, and publication are
   permanently denied and absent from the active operator dependency graph.
+- Recorded replay scenarios are closed and code-owned, but their names cannot select a verdict.
+  Dispositions are derived from extracted evidence, opportunity remains zero, and hostile fixture
+  text cannot enter the proposal ledger or operator response.
 - Each Stage 1 X, OpenSea, or Base RPC canary requires both a revision-bound runtime authorization and a
   separately reserved durable network attempt. Provider-specific singleton claims prevent another
   request ID, controller, or restarted process from silently issuing a second request. Code-owned

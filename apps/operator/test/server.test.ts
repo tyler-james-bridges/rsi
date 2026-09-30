@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createOperatorServer,
   parseOperatorResearchProjection,
+  parseOperatorResearchReplayReceipt,
   parseOperatorRuntimeSnapshot,
   projectPublicJson,
   startOperatorServer,
@@ -14,6 +15,7 @@ import {
   type OperatorEventQuery,
   type OperatorReadCanaryProvider,
   type OperatorResearchProvider,
+  type OperatorResearchReplayProvider,
   type OperatorRuntimeProvider,
   type OperatorSnapshotProvider,
   type RunningOperatorServer,
@@ -107,6 +109,26 @@ function researchProjection() {
         proposal: researchProposal(),
       },
     ],
+  };
+}
+
+function researchReplayReceipt(
+  scenario: "safe" | "prompt-injection" = "safe",
+  requestId = "11111111-1111-4111-8111-111111111111",
+) {
+  return {
+    schemaVersion: 1 as const,
+    kind: "recorded_fixture_replay" as const,
+    requestId,
+    scenario,
+    proposalId: `rsi-proposal:${scenario}-${requestId}`,
+    disposition:
+      scenario === "safe"
+        ? ({ kind: "abstain", reason: "market_uncertainty" } as const)
+        : ({ kind: "abstain", reason: "integrity_risk" } as const),
+    replayEvaluatedAt: "2026-08-11T12:00:00.000Z" as const,
+    persistedAt: "2026-08-23T12:01:00.000Z",
+    duplicate: false,
   };
 }
 
@@ -289,6 +311,13 @@ describe("operator HTTP API", () => {
     running = await startOperatorServer(provider, { port: 0, research });
   }
 
+  async function restartWithResearchReplay(
+    researchReplay: OperatorResearchReplayProvider,
+  ): Promise<void> {
+    await running.close();
+    running = await startOperatorServer(provider, { port: 0, researchReplay });
+  }
+
   async function restartWithReadCanary(
     readCanary: OperatorReadCanaryProvider,
     runtime?: OperatorRuntimeProvider,
@@ -347,6 +376,7 @@ describe("operator HTTP API", () => {
         enabled: false,
         legacy: { actions: [], enabled: false },
         runtime: { actions: [], enabled: false },
+        researchReplay: { enabled: false, scenarios: [] },
       },
     });
   });
@@ -374,6 +404,7 @@ describe("operator HTTP API", () => {
           actions: ["runtime-enter-research", "runtime-enter-propose-only", "runtime-stop"],
           enabled: true,
         },
+        researchReplay: { enabled: false, scenarios: [] },
       },
     });
   });
@@ -664,6 +695,130 @@ describe("operator HTTP API", () => {
     }
   });
 
+  it("runs only a closed same-origin recorded replay and returns a strict receipt", async () => {
+    const executeResearchReplay = vi.fn((command) =>
+      researchReplayReceipt(command.scenario, command.requestId),
+    );
+    await restartWithResearchReplay({ executeResearchReplay });
+    const requestId = "11111111-1111-4111-8111-111111111111";
+    const response = await fetch(`${running.origin}/api/research/replay`, {
+      body: JSON.stringify({ action: "run-recorded-replay", requestId, scenario: "safe" }),
+      headers: {
+        "content-type": "application/json",
+        origin: running.origin,
+        "sec-fetch-site": "same-origin",
+        "x-rsi-operator-request": "1",
+      },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ result: researchReplayReceipt("safe", requestId) });
+    expect(executeResearchReplay).toHaveBeenCalledWith(
+      Object.freeze({ action: "run-recorded-replay", requestId, scenario: "safe" }),
+    );
+    expect(await (await get("/api/control/capabilities")).json()).toMatchObject({
+      controls: {
+        researchReplay: {
+          enabled: true,
+          scenarios: [
+            "safe",
+            "prompt-injection",
+            "coordinated-shill",
+            "stale-evidence",
+            "contract-substitution",
+          ],
+        },
+      },
+    });
+  });
+
+  it("rejects unavailable, cross-origin, and open-ended recorded replay requests", async () => {
+    const valid = {
+      action: "run-recorded-replay",
+      requestId: "11111111-1111-4111-8111-111111111111",
+      scenario: "safe",
+    };
+    const headers = {
+      "content-type": "application/json",
+      origin: running.origin,
+      "sec-fetch-site": "same-origin",
+      "x-rsi-operator-request": "1",
+    };
+    const unavailable = await fetch(`${running.origin}/api/research/replay`, {
+      body: JSON.stringify(valid),
+      headers,
+      method: "POST",
+    });
+    expect(unavailable.status).toBe(501);
+
+    const executeResearchReplay = vi.fn(() => researchReplayReceipt());
+    await restartWithResearchReplay({ executeResearchReplay });
+    const invalid = [
+      { ...valid, scenario: "../../arbitrary.json" },
+      { ...valid, path: "/tmp/input.json" },
+      { ...valid, url: "https://example.invalid/replay" },
+      { ...valid, asset: { chainId: 1 } },
+      { ...valid, requestId: "not-a-uuid" },
+    ];
+    for (const body of invalid) {
+      const response = await fetch(`${running.origin}/api/research/replay`, {
+        body: JSON.stringify(body),
+        headers: { ...headers, origin: running.origin },
+        method: "POST",
+      });
+      expect(response.status).toBe(400);
+    }
+    const crossOrigin = await fetch(`${running.origin}/api/research/replay`, {
+      body: JSON.stringify(valid),
+      headers: { ...headers, origin: "https://example.invalid" },
+      method: "POST",
+    });
+    expect(crossOrigin.status).toBe(403);
+    expect(executeResearchReplay).not.toHaveBeenCalled();
+  });
+
+  it("rejects concurrent recorded replays and unsafe provider receipts", async () => {
+    let release: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const executeResearchReplay = vi.fn(async () => {
+      await pending;
+      return researchReplayReceipt();
+    });
+    await restartWithResearchReplay({ executeResearchReplay });
+    const init = {
+      body: JSON.stringify({
+        action: "run-recorded-replay",
+        requestId: "11111111-1111-4111-8111-111111111111",
+        scenario: "safe",
+      }),
+      headers: {
+        "content-type": "application/json",
+        origin: running.origin,
+        "x-rsi-operator-request": "1",
+      },
+      method: "POST",
+    } as const;
+    const first = fetch(`${running.origin}/api/research/replay`, init);
+    await vi.waitFor(() => expect(executeResearchReplay).toHaveBeenCalledOnce());
+    const conflict = await fetch(`${running.origin}/api/research/replay`, init);
+    expect(conflict.status).toBe(409);
+    release?.();
+    expect((await first).status).toBe(200);
+
+    await restartWithResearchReplay({
+      executeResearchReplay: () => ({ ...researchReplayReceipt(), raw: "source material" }),
+    });
+    const unsafe = await fetch(`${running.origin}/api/research/replay`, {
+      ...init,
+      headers: { ...init.headers, origin: running.origin },
+    });
+    expect(unsafe.status).toBe(500);
+    expect(JSON.stringify(await unsafe.json())).not.toContain("source material");
+  });
+
   it("serves only the closed Stage 1 read-canary projection", async () => {
     const readCanary: OperatorReadCanaryProvider = {
       abortActive: vi.fn(),
@@ -938,6 +1093,7 @@ describe("operator HTTP API", () => {
           enabled: true,
         },
         runtime: { actions: [], enabled: false },
+        researchReplay: { enabled: false, scenarios: [] },
       },
     });
   });

@@ -7,6 +7,10 @@ export {
   type OperatorResearchProjectionV1,
   type OperatorResearchProposalRecordV1,
   type OperatorResearchProvider,
+  type OperatorResearchReplayCommand,
+  type OperatorResearchReplayProvider,
+  type OperatorResearchReplayReceiptV1,
+  type OperatorRecordedReplayScenario,
   type OperatorControlCommand,
   type OperatorControlProvider,
   type OperatorRuntimeProvider,
@@ -18,7 +22,12 @@ export {
   type RuntimeOperatorControlCommand,
   type RunningOperatorServer,
 } from "./server.js";
-export { parseOperatorResearchProjection, parseOperatorRuntimeSnapshot } from "./server.js";
+export {
+  OPERATOR_RECORDED_REPLAY_SCENARIOS,
+  parseOperatorResearchProjection,
+  parseOperatorResearchReplayReceipt,
+  parseOperatorRuntimeSnapshot,
+} from "./server.js";
 export {
   createSessionLifecycleOperatorControls,
   isSessionLifecycleOperatorControls,
