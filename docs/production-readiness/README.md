@@ -19,7 +19,9 @@ RSI currently has no live transaction authority. State-changing adapters are dis
 credentials are absent, activation caps are unset, and the operator UI is loopback-only. Its
 persisted Stage 0 runtime always boots into `STOPPED`; `RESEARCH` and `PROPOSE_ONLY` grant only
 one-shot collection and non-executable proposal-persistence boundaries. Payment, signing, policy
-approval, execution, broadcast, and publication are permanently denied. Exactly one X
+approval, execution, broadcast, and publication are permanently denied. The local recorded replay
+exercises the complete signer-blind path with fictional fixtures, evidence-derived abstentions, and
+zero opportunity; it is not a live signal or recommendation. Exactly one X
 `READ_CANARY` was commissioned successfully on 2026-08-25 and returned to `STOPPED`; it did not
 authorize continuous collection or any other provider. OpenSea remains uncommissioned. Base RPC is
 implemented but commissioning-blocked by the 2026-09-07 provider-documentation recheck.

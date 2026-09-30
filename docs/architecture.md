@@ -27,6 +27,14 @@ action, target, selector, calldata, recipient, payment asset, spend, order, nonc
 signature field. The active operator module graph is mechanically checked so it cannot reach the
 future policy, adapter, wallet, x402, transaction, or deployment paths.
 
+The local product loop admits only five code-owned recorded scenarios. Each scenario traverses raw
+fixture capture, strict extraction, and correlation before a pure disposition function examines
+asset mismatches, integrity flags, freshness, independent clusters, and canonical evidence. The
+function cannot receive a scenario label. Because the historical fictional corpus has no current
+price or expected-return evidence, opportunity is exactly zero and every result is an abstention.
+Persistence still requires a genuine one-shot `proposal_persist` authorization in
+`PROPOSE_ONLY`.
+
 ## Trust boundaries
 
 ```text
