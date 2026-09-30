@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { MediaTypeSchema, Sha256IdSchema, type Observation } from "@rsi/domain";
+import { MediaTypeSchema, Sha256IdSchema, type Observation } from "@rsi/domain/evidence";
 
 export const MAX_RAW_FIXTURE_BYTES = 128 * 1024;
 const RAW_FIXTURE_CAPTURE_CONSTRUCTION_TOKEN = Object.freeze({});

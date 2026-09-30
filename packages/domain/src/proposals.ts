@@ -1,31 +1,12 @@
 import { z } from "zod";
 
-// This module is a deliberately isolated, signer-blind package subpath. Keep
-// its minimal primitives local so importing @rsi/domain/proposals never
-// evaluates the executable-intent or EIP-712 modules from the domain root.
-const SafeLabelSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
-const Sha256IdSchema = z
-  .string()
-  .regex(/^sha256:[0-9a-f]{64}$/, "expected a sha256:<lowercase hex> identifier");
-const TimestampSchema = z.string().datetime({ offset: true });
-const ObservationSourceKindSchema = z.enum([
-  "x",
-  "x402",
-  "opensea",
-  "onchain",
-  "robinhood",
-  "manual",
-]);
-const MAX_UINT256 = (1n << 256n) - 1n;
-const NftAssetSchema = z.strictObject({
-  chainId: z.number().int().positive(),
-  address: z.string().regex(/^0x[0-9a-fA-F]{40}$/, "expected a 20-byte EVM address"),
-  tokenId: z
-    .string()
-    .max(78, "token identifier exceeds uint256")
-    .regex(/^(0|[1-9][0-9]*)$/, "expected an unsigned integer")
-    .refine((value) => BigInt(value) <= MAX_UINT256, "token identifier exceeds uint256"),
-});
+import {
+  NftAssetSchema,
+  ObservationSourceKindSchema,
+  SafeLabelSchema,
+  Sha256IdSchema,
+  TimestampSchema,
+} from "./evidence.js";
 
 const uniqueValues = <T>(values: readonly T[]): boolean => new Set(values).size === values.length;
 

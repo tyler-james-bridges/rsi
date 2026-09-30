@@ -5,7 +5,7 @@ import {
   NftAssetSchema,
   TimestampSchema,
   XStableIdSchema,
-} from "@rsi/domain";
+} from "@rsi/domain/evidence";
 import { z } from "zod";
 
 const HttpUrlSchema = z

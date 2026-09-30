@@ -3,7 +3,7 @@ import {
   ObservationSchema,
   type EvidenceClaim,
   type Observation,
-} from "@rsi/domain";
+} from "@rsi/domain/evidence";
 
 const CANONICAL_CLAIM_TYPES = new Set<EvidenceClaim["type"]>([
   "collection_identity",
