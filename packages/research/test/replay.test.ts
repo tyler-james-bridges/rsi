@@ -9,6 +9,7 @@ import {
   RecordedReplayScenarioSchema,
   assessRecordedReplay,
   buildRecordedReplayProposal,
+  deriveRecordedReplayDisposition,
   type RecordedReplayScenario,
 } from "../src/replay.js";
 
@@ -49,12 +50,13 @@ const EXPECTED_ASSESSMENTS: Record<RecordedReplayScenario, unknown> = {
     asset: EXPECTED_ASSET,
     evidenceIds: [
       "sha256:1525407ea181be35494e79410b4f833be736e5af92a8bdaaf852f348dd7a0b24",
+      "sha256:28d5dd84f508c1b51cdc0aa405be1d30564152f5ef471ab8bd99d49d103c433b",
       "sha256:45072991163b3e95f3a5676a93620f76e8ed747f4cd973691f008469f71d4314",
     ],
     provenance: {
-      providerIds: ["fixture.x.archive"],
-      sourceKinds: ["x"],
-      independentClusterCount: 1,
+      providerIds: ["fixture.opensea.archive", "fixture.x.archive"],
+      sourceKinds: ["opensea", "x"],
+      independentClusterCount: 2,
     },
     flags: {
       scam: [
@@ -70,10 +72,10 @@ const EXPECTED_ASSESSMENTS: Record<RecordedReplayScenario, unknown> = {
       homograph: ["url:mixed-script-label"],
     },
     scorecard: {
-      confidence: 0.99,
-      marketSupport: 0,
+      confidence: 0.9867,
+      marketSupport: 0.3333,
       opportunity: 0,
-      provenanceQuality: 0.3333,
+      provenanceQuality: 0.6667,
       risk: 1,
     },
     disposition: { kind: "abstain", reason: "integrity_risk" },
@@ -82,11 +84,15 @@ const EXPECTED_ASSESSMENTS: Record<RecordedReplayScenario, unknown> = {
     scenario: "prompt-injection",
     strategyVersion: "rsi-recorded-replay-v1",
     asset: EXPECTED_ASSET,
-    evidenceIds: ["sha256:8a6c625aeec6ce749fc4976ba6c89629e03a959781b0aa8563904b9ac5f828ba"],
+    evidenceIds: [
+      "sha256:1dcad684e85b86f721cc6d36dba4edf12392bb56ed3ada99686d4894eba2ba46",
+      "sha256:28d5dd84f508c1b51cdc0aa405be1d30564152f5ef471ab8bd99d49d103c433b",
+      "sha256:8a6c625aeec6ce749fc4976ba6c89629e03a959781b0aa8563904b9ac5f828ba",
+    ],
     provenance: {
-      providerIds: ["fixture.x.archive"],
-      sourceKinds: ["x"],
-      independentClusterCount: 1,
+      providerIds: ["fixture.opensea.archive", "fixture.rpc.archive", "fixture.x.archive"],
+      sourceKinds: ["onchain", "opensea", "x"],
+      independentClusterCount: 3,
     },
     flags: {
       scam: [],
@@ -101,10 +107,10 @@ const EXPECTED_ASSESSMENTS: Record<RecordedReplayScenario, unknown> = {
       homograph: [],
     },
     scorecard: {
-      confidence: 0.95,
-      marketSupport: 0,
+      confidence: 0.9767,
+      marketSupport: 0.6667,
       opportunity: 0,
-      provenanceQuality: 0.3333,
+      provenanceQuality: 1,
       risk: 1,
     },
     disposition: { kind: "abstain", reason: "integrity_risk" },
@@ -113,18 +119,22 @@ const EXPECTED_ASSESSMENTS: Record<RecordedReplayScenario, unknown> = {
     scenario: "stale-evidence",
     strategyVersion: "rsi-recorded-replay-v1",
     asset: EXPECTED_ASSET,
-    evidenceIds: ["sha256:80cb0699bface40b342e199afd17922bba98be6c9c95ab04cdbbbb28e62c2a1d"],
+    evidenceIds: [
+      "sha256:1dcad684e85b86f721cc6d36dba4edf12392bb56ed3ada99686d4894eba2ba46",
+      "sha256:28d5dd84f508c1b51cdc0aa405be1d30564152f5ef471ab8bd99d49d103c433b",
+      "sha256:80cb0699bface40b342e199afd17922bba98be6c9c95ab04cdbbbb28e62c2a1d",
+    ],
     provenance: {
-      providerIds: ["fixture.x.archive"],
-      sourceKinds: ["x"],
-      independentClusterCount: 0,
+      providerIds: ["fixture.opensea.archive", "fixture.rpc.archive", "fixture.x.archive"],
+      sourceKinds: ["onchain", "opensea", "x"],
+      independentClusterCount: 2,
     },
     flags: { scam: [], injection: [], homograph: [] },
     scorecard: {
-      confidence: 0.2,
-      marketSupport: 0,
+      confidence: 0.7267,
+      marketSupport: 0.6667,
       opportunity: 0,
-      provenanceQuality: 0,
+      provenanceQuality: 0.6667,
       risk: 0,
     },
     disposition: { kind: "abstain", reason: "stale_evidence" },
@@ -133,11 +143,15 @@ const EXPECTED_ASSESSMENTS: Record<RecordedReplayScenario, unknown> = {
     scenario: "contract-substitution",
     strategyVersion: "rsi-recorded-replay-v1",
     asset: EXPECTED_ASSET,
-    evidenceIds: ["sha256:fe74982221ea5f69b1b41d7986c6cc82f57b2b7f880b3b894208fe6bcacfbcf1"],
+    evidenceIds: [
+      "sha256:1dcad684e85b86f721cc6d36dba4edf12392bb56ed3ada99686d4894eba2ba46",
+      "sha256:28d5dd84f508c1b51cdc0aa405be1d30564152f5ef471ab8bd99d49d103c433b",
+      "sha256:fe74982221ea5f69b1b41d7986c6cc82f57b2b7f880b3b894208fe6bcacfbcf1",
+    ],
     provenance: {
-      providerIds: ["fixture.x.archive"],
-      sourceKinds: ["x"],
-      independentClusterCount: 0,
+      providerIds: ["fixture.opensea.archive", "fixture.rpc.archive", "fixture.x.archive"],
+      sourceKinds: ["onchain", "opensea", "x"],
+      independentClusterCount: 2,
     },
     flags: {
       scam: [
@@ -152,10 +166,10 @@ const EXPECTED_ASSESSMENTS: Record<RecordedReplayScenario, unknown> = {
       homograph: [],
     },
     scorecard: {
-      confidence: 0,
-      marketSupport: 0,
+      confidence: 0.99,
+      marketSupport: 1,
       opportunity: 0,
-      provenanceQuality: 0,
+      provenanceQuality: 0.6667,
       risk: 1,
     },
     disposition: { kind: "abstain", reason: "identity_ambiguity" },
@@ -204,6 +218,52 @@ describe("recorded research replay", () => {
       expectDeeplyFrozen(first);
     },
   );
+
+  it.each([
+    [
+      "identity mismatch",
+      { assetMismatchCount: 1, integrityFlagCount: 1, staleEvidenceCount: 1 },
+      "identity_ambiguity",
+    ],
+    ["integrity flag", { integrityFlagCount: 1, staleEvidenceCount: 1 }, "integrity_risk"],
+    ["stale evidence", { staleEvidenceCount: 1 }, "stale_evidence"],
+    ["future evidence", { futureEvidenceCount: 1 }, "stale_evidence"],
+    ["weak provenance", { freshIndependentClusterCount: 1 }, "insufficient_evidence"],
+    ["no canonical source", { freshCanonicalEvidenceCount: 0 }, "insufficient_evidence"],
+    ["adequate bounded evidence", {}, "market_uncertainty"],
+  ] as const)(
+    "derives %s from evidence rather than the scenario label",
+    (_label, overrides, reason) => {
+      const disposition = deriveRecordedReplayDisposition({
+        assetMismatchCount: 0,
+        integrityFlagCount: 0,
+        staleEvidenceCount: 0,
+        futureEvidenceCount: 0,
+        freshIndependentClusterCount: 2,
+        freshCanonicalEvidenceCount: 1,
+        ...overrides,
+      });
+
+      expect(disposition).toEqual({ kind: "abstain", reason });
+      expect(Object.isFrozen(disposition)).toBe(true);
+    },
+  );
+
+  it("rejects scenario labels at the disposition boundary", () => {
+    expect(() =>
+      Reflect.apply(deriveRecordedReplayDisposition, undefined, [
+        {
+          assetMismatchCount: 0,
+          integrityFlagCount: 0,
+          staleEvidenceCount: 0,
+          futureEvidenceCount: 0,
+          freshIndependentClusterCount: 2,
+          freshCanonicalEvidenceCount: 1,
+          scenario: "prompt-injection",
+        },
+      ]),
+    ).toThrow();
+  });
 
   it("builds a strict five-minute proposal envelope without leaking the scenario field", () => {
     const assessment = assessRecordedReplay("safe");
