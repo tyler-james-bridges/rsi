@@ -35,8 +35,9 @@ GET https://api.opensea.io/api/v2/collections/trending?timeframe=one_day&chains=
 - A successful response contains a required `collections` array and optional string `next`. Each
   collection requires `collection`, `name`, `safelist_status`, `is_disabled`, `is_nsfw`,
   `trait_offers_enabled`, `collection_offers_enabled`, `opensea_url`, and `contracts`. Each contract
-  requires string `address` and `chain`. Other documented collection metadata is optional. The
-  response does not include sales-volume or trending-score metrics.
+  requires string `address` and `chain`. The other eleven documented collection-metadata fields are
+  optional and accept either a string or `null`. The response does not include sales-volume or
+  trending-score metrics.
 - OpenSea announced the trending-collections endpoint on 2026-05-13. The 2026-05-07 removal notice
   concerns legacy order endpoints and collection-stat fields, not this endpoint. No current
   deprecation or migration notice was found for the trending-collections endpoint.
