@@ -60,6 +60,8 @@ const SPECIAL_PLATFORM_IMPORTS = new Map([
       files: new Map([
         ["apps/cli/src/operator.ts", Object.freeze(["randomUUID"])],
         ["apps/cli/src/research-replay-provider.ts", Object.freeze(["randomUUID"])],
+        ["apps/cli/src/watchlist-provider.ts", Object.freeze(["randomUUID"])],
+        ["packages/watchlist/src/snapshot.ts", Object.freeze(["createHash"])],
         ["packages/research/src/capture.ts", Object.freeze(["createHash"])],
         ["packages/research/src/coordination.ts", Object.freeze(["createHash"])],
         ["packages/research/src/pipeline.ts", Object.freeze(["createHash"])],
@@ -725,6 +727,14 @@ function analyzeSource(source) {
 
     if (token.kind === ts.SyntaxKind.ImportKeyword) {
       const next = source.tokens[index + 1];
+      if (source.tokens[index - 1]?.kind === ts.SyntaxKind.DotToken) continue;
+      const watchlistMethodDeclaration =
+        source.path.endsWith(`${sep}packages${sep}watchlist${sep}src${sep}history.ts`) &&
+        source.tokens
+          .slice(index + 1, index + 8)
+          .map((part) => part.text)
+          .join(" ") === "( command : WatchlistImportCommand ) : WatchlistImportResult";
+      if (watchlistMethodDeclaration) continue;
       if (next?.kind === ts.SyntaxKind.DotToken) continue;
       if (next?.kind === ts.SyntaxKind.OpenParenToken) {
         runtimeDynamicImportIndexes.push(index);

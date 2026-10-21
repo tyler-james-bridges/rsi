@@ -50,3 +50,4 @@ export {
   parseOperatorReadCanaryReceipt,
   type OperatorReadCanaryProvider,
 } from "./read-canary.js";
+export type { OperatorWatchlistProvider } from "./watchlist.js";

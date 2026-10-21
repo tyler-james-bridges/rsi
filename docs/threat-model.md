@@ -18,9 +18,14 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 - No raw external content reaches a signer or transaction builder.
 - Every Stage 0 process boot persists a fresh `STOPPED` revision. A prior `RESEARCH` or
   `PROPOSE_ONLY` mode is audit history and never resumes authority.
-- Stage 0 exposes only one-shot research-collection and non-executable proposal-persistence
+- Stage 0 exposes only one-shot research-collection, offline-watchlist-import, and non-executable proposal-persistence
   authorizations. Payment, signing, policy approval, execution, broadcast, and publication are
   permanently denied and absent from the active operator dependency graph.
+- Offline watchlist imports accept only a strict collection projection, not raw provider responses.
+  Operator-supplied timestamps and contract groups remain unverified facts. Confirmation binds the
+  digest, predecessor, process, and revision. The `watchlist_import` commit holds the runtime write
+  lock against STOP and requires a previously committed authorization receipt. History replay
+  detects hash and semantic corruption, but not replacement with a complete older database.
 - Recorded replay scenarios are closed and code-owned, but their names cannot select a verdict.
   Dispositions are derived from extracted evidence, opportunity remains zero, and hostile fixture
   text cannot enter the proposal ledger or operator response.

@@ -59,6 +59,9 @@ export function assertPlainData(value: unknown, depth = 0): void {
   if (value === null || typeof value !== "object") return;
   if (utilTypes.isProxy(value)) throw new TypeError("Watchlist data must be plain");
   const array = Array.isArray(value);
+  if (array && Object.getPrototypeOf(value) !== Array.prototype) {
+    throw new TypeError("Watchlist arrays must be plain");
+  }
   if (
     !array &&
     Object.getPrototypeOf(value) !== Object.prototype &&

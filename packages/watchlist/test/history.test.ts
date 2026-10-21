@@ -7,8 +7,13 @@ import { DatabaseSync } from "node:sqlite";
 import { SqliteRuntimeController } from "@rsi/runtime";
 import { SqliteEventStore } from "@rsi/store";
 import { afterEach, describe, expect, it } from "vitest";
-import { OfflineBaseWatchlist } from "../src/index.js";
-import { fixture } from "./snapshot.test.js";
+import {
+  OfflineBaseWatchlist,
+  parseOfflineBaseWatchlistSnapshot,
+  snapshotId,
+  type SnapshotId,
+} from "../src/index.js";
+import { fixture } from "./fixtures.js";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -60,6 +65,62 @@ function setup() {
 }
 
 describe("watchlist event history", () => {
+  it("bounds history at 1000 while accepting an exact old retry and returning 20 headers", () => {
+    const s = setup();
+    const first = fixture();
+    const expected = s.preview(first).binding;
+    s.history.import({ input: first, expected, authorization: s.permit(expected.snapshotId) });
+    const store = new SqliteEventStore(s.path);
+    let predecessor: SnapshotId = expected.snapshotId;
+    store.withExclusiveTransaction(() => {
+      for (let index = 1; index < 1000; index += 1) {
+        const raw = fixture();
+        raw.acquiredAt = new Date(Date.parse(first.acquiredAt) + index * 1000).toISOString();
+        raw.validUntil = new Date(Date.parse(raw.acquiredAt) + 120000).toISOString();
+        const normalized = parseOfflineBaseWatchlistSnapshot(raw);
+        const id = snapshotId(normalized);
+        store.append({
+          aggregateId: "watchlist:base",
+          type: "watchlist.snapshot.recorded.v1",
+          idempotencyKey: `watchlist-snapshot-v1:${id}`,
+          occurredAt: raw.acquiredAt,
+          payload: {
+            snapshotId: id,
+            predecessorId: predecessor,
+            snapshot: raw,
+            importedAt: raw.acquiredAt,
+            authorization: {
+              boundary: "watchlist_import",
+              authorizationId: randomUUID(),
+              processInstanceId: s.runtime.processInstanceId,
+              mode: "RESEARCH",
+              modeRevision: 2,
+              checkedAt: raw.acquiredAt,
+              eventHash: "a".repeat(64),
+            },
+          },
+        });
+        predecessor = id;
+      }
+    });
+    store.close();
+    expect(s.history.read(first.acquiredAt).history).toHaveLength(20);
+    expect(
+      s.history.import({ input: first, expected, authorization: s.permit(expected.snapshotId) })
+        .duplicate,
+    ).toBe(true);
+    const next = fixture();
+    next.acquiredAt = "2026-10-20T01:00:00.000Z";
+    next.validUntil = "2026-10-20T01:02:00.000Z";
+    const preview = s.preview(next).binding;
+    expect(() =>
+      s.history.import({
+        input: next,
+        expected: preview,
+        authorization: s.permit(preview.snapshotId),
+      }),
+    ).toThrow("full");
+  });
   it("previews without writes, imports once, retries after lost response, and reopens", () => {
     const s = setup();
     const input = fixture();

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { OPENSEA_TRENDING_CONTRACT_VERSION } from "@rsi/source-contracts/opensea-trending";
 import {
   collectionId,
   compareSnapshots,
@@ -7,21 +6,25 @@ import {
   snapshotId,
 } from "../src/index.js";
 
-export function fixture() {
-  return {
-    schemaVersion: 1,
-    kind: "offline_opensea_trending",
-    sourceContractVersion: OPENSEA_TRENDING_CONTRACT_VERSION,
-    acquiredAt: "2026-10-20T00:00:00.000Z",
-    validUntil: "2026-10-20T00:02:00.000Z",
-    hasNextPage: false,
-    collections: [
-      { rank: 1, slug: "alpha", baseAddresses: ["0x" + "ab".repeat(20), "0x" + "cd".repeat(20)] },
-    ],
-  };
-}
+import { fixture } from "./fixtures.js";
 
 describe("offline watchlist shape and identity", () => {
+  it("rejects array subclasses and accessors without invoking them", () => {
+    const value = fixture();
+    Object.setPrototypeOf(value.collections, { custom: true });
+    expect(() => parse(value)).toThrow("plain");
+    const getterInput = fixture();
+    let invoked = false;
+    Object.defineProperty(getterInput, "collections", {
+      enumerable: true,
+      get: () => {
+        invoked = true;
+        return [];
+      },
+    });
+    expect(() => parse(getterInput)).toThrow();
+    expect(invoked).toBe(false);
+  });
   it("normalizes case, address order, key order and whitespace", () => {
     const original = parse(fixture());
     const changed = fixture();
@@ -29,9 +32,15 @@ describe("offline watchlist shape and identity", () => {
     changed.collections[0]!.baseAddresses = changed.collections[0]!.baseAddresses.map(
       (address) => "0x" + address.slice(2).toUpperCase(),
     );
-    expect(snapshotId(parse(JSON.parse(JSON.stringify(changed, null, 2))))).toBe(
-      snapshotId(original),
-    );
+    expect(
+      snapshotId(
+        parse(
+          JSON.parse(
+            JSON.stringify(Object.fromEntries(Object.entries(changed).reverse()), null, 2),
+          ),
+        ),
+      ),
+    ).toBe(snapshotId(original));
     expect(collectionId(parse(changed).collections[0]!)).toBe(
       collectionId(original.collections[0]!),
     );
@@ -116,5 +125,16 @@ describe("offline watchlist shape and identity", () => {
       "left_window",
     ]);
     expect(compareSnapshots(parse(before), null).map((row) => row.change)).toEqual(["new", "new"]);
+    const swapped = fixture();
+    swapped.collections = [
+      { ...before.collections[1]!, rank: 1 },
+      { ...before.collections[0]!, rank: 2 },
+    ];
+    expect(
+      compareSnapshots(parse(swapped), parse(before)).map((row) => [row.change, row.previousRank]),
+    ).toEqual([
+      ["rank_changed", 2],
+      ["rank_changed", 1],
+    ]);
   });
 });

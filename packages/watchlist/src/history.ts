@@ -1,3 +1,5 @@
+import { types as utilTypes } from "node:util";
+
 import { isRuntimeBoundaryAuthorization, type RuntimeBoundaryAuthorization } from "@rsi/runtime";
 import { canonicalJson, SqliteEventStore } from "@rsi/store";
 import { z } from "zod";
@@ -33,6 +35,10 @@ export const PreviewBindingSchema = z.strictObject({
 });
 export type PreviewContext = z.infer<typeof PreviewContextSchema>;
 export type WatchlistPreviewBinding = z.infer<typeof PreviewBindingSchema>;
+export function parseWatchlistPreviewBinding(input: unknown): WatchlistPreviewBinding {
+  assertPlainData(input);
+  return PreviewBindingSchema.parse(input);
+}
 
 const RecordedSchema = z.strictObject({
   snapshotId: SnapshotIdSchema,
@@ -118,7 +124,8 @@ function replay(store: SqliteEventStore): readonly Recorded[] {
       parsed.snapshotId !== snapshotId(snapshot) ||
       serialize(snapshot) !== canonicalJson(parsed.snapshot) ||
       parsed.predecessorId !== (prior?.snapshotId ?? null) ||
-      (prior !== undefined && snapshot.acquiredAt <= prior.snapshot.acquiredAt) ||
+      (prior !== undefined &&
+        Date.parse(snapshot.acquiredAt) <= Date.parse(prior.snapshot.acquiredAt)) ||
       ids.has(parsed.snapshotId) ||
       authorizations.has(parsed.authorization.authorizationId)
     ) {
@@ -165,13 +172,20 @@ export class OfflineBaseWatchlist {
         }),
         snapshot,
         rows: compareSnapshots(snapshot, previous?.snapshot ?? null),
-        stale: parsedContext.evaluatedAt >= snapshot.validUntil,
+        stale: Date.parse(parsedContext.evaluatedAt) >= Date.parse(snapshot.validUntil),
         partial: snapshot.hasNextPage,
       });
     });
   }
 
   import(command: WatchlistImportCommand): WatchlistImportResult {
+    if (
+      command === null ||
+      typeof command !== "object" ||
+      utilTypes.isProxy(command) ||
+      Object.getPrototypeOf(command) !== Object.prototype
+    )
+      throw new TypeError("Invalid watchlist command");
     const descriptors = Object.getOwnPropertyDescriptors(command);
     if (
       Reflect.ownKeys(command).length !== 3 ||
@@ -218,7 +232,10 @@ export class OfflineBaseWatchlist {
         const head = records.at(-1);
         if (expected.predecessorId !== (head?.snapshotId ?? null))
           throw new WatchlistConflictError("Watchlist preview head is stale");
-        if (head !== undefined && snapshot.acquiredAt <= head.snapshot.acquiredAt)
+        if (
+          head !== undefined &&
+          Date.parse(snapshot.acquiredAt) <= Date.parse(head.snapshot.acquiredAt)
+        )
           throw new WatchlistConflictError("Acquisition time must increase");
         if (records.length >= 1000) throw new WatchlistConflictError("Watchlist history is full");
         const payload = RecordedSchema.parse({
@@ -265,7 +282,9 @@ export class OfflineBaseWatchlist {
         provenance: "operator_supplied_unverified",
         evaluatedAt,
         head: current?.snapshotId ?? null,
-        stale: current !== undefined && evaluatedAt >= current.snapshot.validUntil,
+        stale:
+          current !== undefined &&
+          Date.parse(evaluatedAt) >= Date.parse(current.snapshot.validUntil),
         partial: current?.snapshot.hasNextPage ?? false,
         rows:
           current === undefined

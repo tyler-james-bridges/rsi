@@ -208,7 +208,16 @@ The public runtime capability projection is unchanged. Import permission is repr
 new boundary and the operator's RESEARCH-only command. Exact retries retain the original import
 time and predecessor, including after another snapshot becomes the head.
 
+Unit 3 implements `/api/watchlist`, `/api/watchlist/preview`, and `/api/watchlist/confirm` on the
+existing loopback server. Only the two watchlist command bodies have a 32,768-byte limit; existing
+control limits remain unchanged. The browser accepts local files up to 30,000 bytes, keeps the
+preview input in memory, and sends the exact binding on confirmation. No path or URL is accepted.
+The third database defaults beside the research database and can be selected with `--watchlist-db`.
+The authority gate allows only `createHash` in the snapshot module and `randomUUID` in the host
+provider. Its scanner distinguishes the typed `OfflineBaseWatchlist.import` method from dynamic
+module imports; mutation tests still reject an actual `import()` inside that method.
+
 ## Next implementation step
 
-Implement the strict input schema, normalized identities, pure comparison function, and their
-table-driven tests before adding persistence, runtime authority, or HTTP routes.
+The offline vertical slice is implemented. Live provider reads, commissioning, durable rollback
+anchors, and any financial action require separate decisions and authorization.

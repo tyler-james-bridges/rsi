@@ -433,6 +433,7 @@ describe("Stage 0 operator process", () => {
       const runtimeClose = vi.fn(() => undefined);
       const runtimeSnapshot = vi.fn(() => ({ mode: "STOPPED" as const }));
       const researchClose = vi.fn(() => undefined);
+      const watchlistClose = vi.fn(() => undefined);
       const runtime = {
         close: runtimeClose,
         getSnapshot: runtimeSnapshot,
@@ -474,6 +475,10 @@ describe("Stage 0 operator process", () => {
       vi.doMock("@rsi/research-ledger", () => ({
         SqliteResearchLedger: { open: vi.fn(() => research) },
       }));
+      vi.doMock("@rsi/watchlist", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("@rsi/watchlist")>()),
+        OfflineBaseWatchlist: { open: vi.fn(() => ({ close: watchlistClose })) },
+      }));
       vi.doMock("@rsi/operator", () => ({
         createRuntimeOperatorControls: vi.fn(() => ({
           executeRuntimeControl: vi.fn(),
@@ -489,6 +494,7 @@ describe("Stage 0 operator process", () => {
           databasePath: runtimePath,
           port: 0,
           researchDatabasePath: researchPath,
+          watchlistDatabasePath: join(directory!, "watchlist.sqlite"),
         })),
         resolveProspectiveStoragePath: vi.fn(async (path: string) => path),
       }));
@@ -523,6 +529,7 @@ describe("Stage 0 operator process", () => {
 
         expect(serverClose).toHaveBeenCalledOnce();
         expect(researchClose).toHaveBeenCalledOnce();
+        expect(watchlistClose).toHaveBeenCalledOnce();
         expect(runtimeStop).toHaveBeenCalledTimes(2);
         expect(runtimeClose).toHaveBeenCalledOnce();
         expect(runtimeSnapshot).not.toHaveBeenCalled();
@@ -536,6 +543,7 @@ describe("Stage 0 operator process", () => {
         process.exitCode = originalExitCode;
         vi.doUnmock("@rsi/runtime");
         vi.doUnmock("@rsi/research-ledger");
+        vi.doUnmock("@rsi/watchlist");
         vi.doUnmock("@rsi/operator");
         vi.doUnmock("../src/operator-options.js");
         vi.doUnmock("../src/production-canary-config.js");

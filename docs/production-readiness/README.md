@@ -18,7 +18,9 @@ steps below.
 RSI currently has no live transaction authority. State-changing adapters are disabled, financial
 credentials are absent, activation caps are unset, and the operator UI is loopback-only. Its
 persisted Stage 0 runtime always boots into `STOPPED`; `RESEARCH` and `PROPOSE_ONLY` grant only
-one-shot collection and non-executable proposal-persistence boundaries. Payment, signing, policy
+one-shot collection, offline watchlist import, and non-executable proposal-persistence boundaries.
+The watchlist accepts only operator-supplied JSON in `RESEARCH`; it grants no provider egress or
+credentials and does not commission OpenSea. Payment, signing, policy
 approval, execution, broadcast, and publication are permanently denied. The local recorded replay
 exercises the complete signer-blind path with fictional fixtures, evidence-derived abstentions, and
 zero opportunity; it is not a live signal or recommendation. Exactly one X

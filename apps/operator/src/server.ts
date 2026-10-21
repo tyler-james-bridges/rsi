@@ -9,6 +9,15 @@ import {
   type ResearchProposalV1,
 } from "@rsi/domain/proposals";
 import { RuntimeBoundaryDeniedError, RuntimeConflictError } from "@rsi/runtime";
+import { WatchlistConflictError } from "@rsi/watchlist";
+import {
+  parseWatchlistPreviewCommand,
+  parseWatchlistConfirmCommand,
+  parseWatchlistPreview,
+  parseWatchlistResult,
+  parseWatchlistView,
+  type OperatorWatchlistProvider,
+} from "./watchlist.js";
 
 import {
   OPERATOR_DASHBOARD_CSS,
@@ -176,6 +185,7 @@ export interface OperatorControlProvider {
 }
 
 export interface OperatorServerOptions {
+  readonly watchlist?: OperatorWatchlistProvider;
   /** Defaults to IPv4 loopback. Only 127.0.0.1 and ::1 are accepted. */
   readonly host?: string;
   /** Defaults to 8787. Use 0 to ask the operating system for an ephemeral port. */
@@ -1098,16 +1108,16 @@ function validatedRuntimeActions(
   return Object.freeze([...actions]) as readonly RuntimeOperatorAction[];
 }
 
-async function readControlBody(request: IncomingMessage): Promise<unknown> {
+async function readControlBody(
+  request: IncomingMessage,
+  maximumBytes = MAX_CONTROL_BODY_BYTES,
+): Promise<unknown> {
   const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType !== "application/json") {
     throw new HttpError(415, "unsupported_media_type", "Control requests require JSON.");
   }
   const declared = request.headers["content-length"];
-  if (
-    declared !== undefined &&
-    (!/^\d{1,5}$/.test(declared) || Number(declared) > MAX_CONTROL_BODY_BYTES)
-  ) {
+  if (declared !== undefined && (!/^\d{1,5}$/.test(declared) || Number(declared) > maximumBytes)) {
     throw new HttpError(413, "request_too_large", "Control request is too large.");
   }
   const chunks: Buffer[] = [];
@@ -1115,7 +1125,7 @@ async function readControlBody(request: IncomingMessage): Promise<unknown> {
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += bytes.byteLength;
-    if (total > MAX_CONTROL_BODY_BYTES) {
+    if (total > maximumBytes) {
       throw new HttpError(413, "request_too_large", "Control request is too large.");
     }
     chunks.push(bytes);
@@ -1159,6 +1169,7 @@ async function route(
   readCanary: OperatorReadCanaryProvider | undefined,
   readCanaryRouteState: { running: boolean },
   researchReplayRouteState: { running: boolean },
+  watchlist: OperatorWatchlistProvider | undefined,
 ): Promise<void> {
   assertLoopbackLocalSocket(request);
   const origin = assertLoopbackHost(request);
@@ -1167,6 +1178,38 @@ async function route(
     throw new HttpError(414, "request_target_too_long", "Request target is too long.");
   }
   const url = new URL(target, "http://operator.invalid");
+
+  if (url.pathname === "/api/watchlist/preview" || url.pathname === "/api/watchlist/confirm") {
+    if (request.method !== "POST")
+      throw new HttpError(405, "method_not_allowed", "Watchlist commands require POST.");
+    if (url.search !== "") badRequest("Watchlist commands do not accept query parameters.");
+    assertSameOriginControl(request, origin);
+    if (watchlist === undefined)
+      throw new HttpError(501, "watchlist_unavailable", "Offline watchlist is not configured.");
+    const body = await readControlBody(request, 32_768);
+    if (url.pathname === "/api/watchlist/preview") {
+      let command;
+      try {
+        command = parseWatchlistPreviewCommand(body);
+      } catch {
+        badRequest("Invalid offline watchlist input.");
+      }
+      sendJson(response, 200, {
+        preview: parseWatchlistPreview(watchlist.previewWatchlist(command.input)),
+      });
+    } else {
+      let command;
+      try {
+        command = parseWatchlistConfirmCommand(body);
+      } catch {
+        badRequest("Invalid offline watchlist confirmation.");
+      }
+      sendJson(response, 200, {
+        result: parseWatchlistResult(watchlist.confirmWatchlist(command.input, command.expected)),
+      });
+    }
+    return;
+  }
 
   if (request.method === "POST" && url.pathname === "/api/control") {
     if (url.search !== "") badRequest("The control route does not accept query parameters.");
@@ -1273,6 +1316,14 @@ async function route(
   if (url.pathname === "/") {
     if (url.search !== "") badRequest("The dashboard route does not accept query parameters.");
     sendAsset(response, "text/html; charset=utf-8", OPERATOR_DASHBOARD_HTML);
+    return;
+  }
+
+  if (url.pathname === "/api/watchlist") {
+    if (url.search !== "") badRequest("Watchlist reads do not accept query parameters.");
+    if (watchlist === undefined)
+      throw new HttpError(501, "watchlist_unavailable", "Offline watchlist is not configured.");
+    sendJson(response, 200, { watchlist: parseWatchlistView(watchlist.readWatchlist()) });
     return;
   }
 
@@ -1399,6 +1450,7 @@ export function createOperatorServer(
   research?: OperatorResearchProvider,
   readCanary?: OperatorReadCanaryProvider,
   researchReplay?: OperatorResearchReplayProvider,
+  watchlist?: OperatorWatchlistProvider,
 ): Server {
   const readCanaryRouteState = { running: false };
   const researchReplayRouteState = { running: false };
@@ -1414,6 +1466,7 @@ export function createOperatorServer(
       readCanary,
       readCanaryRouteState,
       researchReplayRouteState,
+      watchlist,
     ).catch((error: unknown) => {
       if (response.headersSent) {
         response.destroy();
@@ -1425,7 +1478,11 @@ export function createOperatorServer(
         });
         return;
       }
-      if (error instanceof RuntimeConflictError || error instanceof RuntimeBoundaryDeniedError) {
+      if (
+        error instanceof RuntimeConflictError ||
+        error instanceof RuntimeBoundaryDeniedError ||
+        error instanceof WatchlistConflictError
+      ) {
         sendJson(response, 409, {
           error: {
             code: "runtime_conflict",
@@ -1491,6 +1548,7 @@ export async function startOperatorServer(
     options.research,
     options.readCanary,
     options.researchReplay,
+    options.watchlist,
   );
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => {

@@ -39,6 +39,9 @@ importers:
 
   apps/cli:
     dependencies:
+      "@rsi/watchlist":
+        specifier: workspace:*
+        version: link:../../packages/watchlist
       "@rsi/capture-registry":
         specifier: workspace:*
         version: link:../../packages/capture-registry
@@ -93,6 +96,12 @@ importers:
 
   apps/operator:
     dependencies:
+      "@rsi/watchlist":
+        specifier: workspace:*
+        version: link:../../packages/watchlist
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
       "@rsi/domain":
         specifier: workspace:*
         version: link:../../packages/domain
