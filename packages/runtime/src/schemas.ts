@@ -27,6 +27,7 @@ export const RuntimeModeSchema = z.enum(["STOPPED", "RESEARCH", "PROPOSE_ONLY"])
 export const RuntimeBoundarySchema = z.enum([
   "research_collection",
   "proposal_persist",
+  "watchlist_import",
   "policy_approval",
   "paid_read",
   "wallet_sign",

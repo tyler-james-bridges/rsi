@@ -12,6 +12,7 @@ export type RuntimeBoundary =
   | "paid_read"
   | "policy_approval"
   | "proposal_persist"
+  | "watchlist_import"
   | "research_collection"
   | "transaction_broadcast"
   | "wallet_sign";
@@ -127,16 +128,20 @@ export type RuntimeBoundaryDispatch = (receipt: Readonly<RuntimeBoundaryReceipt>
 export type RuntimeBoundaryCompletion = (facts: Readonly<RuntimeBoundaryCompletionFacts>) => void;
 
 type RuntimeBoundaryAuthorizationMethods<TBoundary extends RuntimeBoundary> =
-  TBoundary extends "research_collection"
+  TBoundary extends "watchlist_import"
     ? Readonly<{
-        consumeAndDispatch(dispatch: RuntimeBoundaryDispatch): Readonly<RuntimeBoundaryReceipt>;
-        guardCompletion(
-          completion: RuntimeBoundaryCompletion,
-        ): Readonly<RuntimeBoundaryCompletionFacts>;
+        consumeAndCommit(commit: RuntimeBoundaryDispatch): Readonly<RuntimeBoundaryReceipt>;
       }>
-    : Readonly<{
-        consume(): Readonly<RuntimeBoundaryReceipt>;
-      }>;
+    : TBoundary extends "research_collection"
+      ? Readonly<{
+          consumeAndDispatch(dispatch: RuntimeBoundaryDispatch): Readonly<RuntimeBoundaryReceipt>;
+          guardCompletion(
+            completion: RuntimeBoundaryCompletion,
+          ): Readonly<RuntimeBoundaryCompletionFacts>;
+        }>
+      : Readonly<{
+          consume(): Readonly<RuntimeBoundaryReceipt>;
+        }>;
 
 /**
  * Network collection authority can only be consumed around a synchronous

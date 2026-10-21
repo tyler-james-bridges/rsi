@@ -201,6 +201,13 @@ not import the provider request descriptor. The provider parser re-exports the s
 Ranks must follow array order from one through the result count, matching the existing parser
 projection. Contract-address overlap also rejects duplicate contract groups.
 
+Unit 2 keeps authorization and snapshot commits separate. `consumeAndCommit` first commits the
+runtime receipt, then rechecks authority under a second runtime write lock around the synchronous
+watchlist transaction. The history stores that committed receipt's check time as `importedAt`.
+The public runtime capability projection is unchanged. Import permission is represented by the
+new boundary and the operator's RESEARCH-only command. Exact retries retain the original import
+time and predecessor, including after another snapshot becomes the head.
+
 ## Next implementation step
 
 Implement the strict input schema, normalized identities, pure comparison function, and their

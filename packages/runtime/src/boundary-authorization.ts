@@ -26,6 +26,7 @@ interface RuntimeBoundaryAuthorizationParts<TBoundary extends RuntimeBoundary> {
   readonly requestedMode: RuntimeMode;
   readonly requestedRevision: number;
   readonly consume: () => Readonly<RuntimeBoundaryReceipt>;
+  readonly consumeAndCommit: (commit: RuntimeBoundaryDispatch) => Readonly<RuntimeBoundaryReceipt>;
   readonly consumeAndDispatch: (
     dispatch: RuntimeBoundaryDispatch,
   ) => Readonly<RuntimeBoundaryReceipt>;
@@ -49,6 +50,14 @@ export function createRuntimeBoundaryAuthorization<TBoundary extends RuntimeBoun
 ): RuntimeBoundaryAuthorization<TBoundary> {
   const authorization = Object.create(null) as RuntimeBoundaryAuthorization<TBoundary>;
   const consumeBoundary = parts.consume;
+  const consumeAndCommit = (...arguments_: unknown[]): Readonly<RuntimeBoundaryReceipt> => {
+    claim();
+    const commit = arguments_[0];
+    if (arguments_.length !== 1 || !isSynchronousCallback(commit)) {
+      throw new RuntimeValidationError("Watchlist commit requires one synchronous callback");
+    }
+    return parts.consumeAndCommit(commit);
+  };
   const consumeBoundaryAndDispatch = parts.consumeAndDispatch;
   const guardBoundaryCompletion = parts.guardCompletion;
   const claim = (): void => {
@@ -138,7 +147,9 @@ export function createRuntimeBoundaryAuthorization<TBoundary extends RuntimeBoun
     requestedMode: { enumerable: true, value: parts.requestedMode },
     requestedRevision: { enumerable: true, value: parts.requestedRevision },
   };
-  if (parts.boundary === "research_collection") {
+  if (parts.boundary === "watchlist_import") {
+    properties.consumeAndCommit = { enumerable: true, value: consumeAndCommit };
+  } else if (parts.boundary === "research_collection") {
     properties.consumeAndDispatch = { enumerable: true, value: consumeAndDispatch };
     properties.guardCompletion = { enumerable: true, value: guardCompletion };
   } else {

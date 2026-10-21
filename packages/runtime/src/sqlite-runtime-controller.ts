@@ -228,6 +228,7 @@ function isPermanentlyDeniedBoundary(boundary: RuntimeBoundary): boolean {
 }
 
 function modeAllowsBoundary(mode: RuntimeMode, boundary: RuntimeBoundary): boolean {
+  if (boundary === "watchlist_import") return mode === "RESEARCH";
   if (boundary === "research_collection") return mode !== "STOPPED";
   if (boundary === "proposal_persist") return mode === "PROPOSE_ONLY";
   return false;
@@ -963,6 +964,7 @@ export class SqliteRuntimeController {
       requestedMode: requested.requestedMode,
       requestedRevision: requested.requestedRevision,
       consume: () => this.#consumeBoundaryAuthorization(requested),
+      consumeAndCommit: (commit) => this.#consumeWatchlistCommit(requested, commit),
       consumeAndDispatch: (dispatch) =>
         this.#consumeBoundaryAuthorizationAndDispatch(requested, dispatch),
       guardCompletion: (completion) => this.#guardBoundaryCompletion(requested, completion),
@@ -1003,6 +1005,43 @@ export class SqliteRuntimeController {
     });
     if (receipt.decision === "denied") throw new RuntimeBoundaryDeniedError(receipt);
     return receipt;
+  }
+
+  #consumeWatchlistCommit(
+    requested: IssuedBoundary,
+    commit: RuntimeBoundaryDispatch,
+  ): Readonly<RuntimeBoundaryReceipt> {
+    // Commit the receipt first. A crash in the second transaction may leave an
+    // unused authorization, but can never roll back authority behind a saved snapshot.
+    const receipt = this.#consumeBoundaryAuthorization(requested);
+    return this.#store.withExclusiveTransaction(() => {
+      const replay = replayRuntimeStore(this.#store);
+      const state = replay.state;
+      if (state === null || requested.boundary !== "watchlist_import") {
+        throw new RuntimeIntegrityError("Watchlist authority is unavailable");
+      }
+      const durable = this.#store.getByIdempotencyKey(
+        `runtime-boundary-v1:${requested.authorizationId}`,
+      );
+      if (durable?.eventHash !== receipt.eventHash)
+        throw new RuntimeIntegrityError("Watchlist receipt changed");
+      const checkedAt = nonRegressingBoundaryTime(
+        readRuntimeClock(this.#clock),
+        replay,
+        requested.requestedAt,
+      );
+      const monotonicAt = readMonotonicClock(this.#monotonicClock);
+      const reason = boundaryReason(requested, state, checkedAt);
+      if (
+        reason !== "ALLOWED" ||
+        monotonicAt < requested.monotonicIssuedAt ||
+        monotonicAt >= requested.monotonicExpiresAt
+      ) {
+        throw new RuntimeConflictError("STALE_STATE", "Watchlist authority changed before commit");
+      }
+      commit(receipt);
+      return receipt;
+    });
   }
 
   #consumeBoundaryAuthorizationAndDispatch(

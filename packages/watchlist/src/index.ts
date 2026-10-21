@@ -10,3 +10,12 @@ export {
   type CollectionId,
   type WatchlistRow,
 } from "./snapshot.js";
+export {
+  OfflineBaseWatchlist,
+  type PreviewContext,
+  type WatchlistPreviewBinding,
+  type WatchlistImportPreview,
+  type WatchlistImportCommand,
+  type WatchlistImportResult,
+  type WatchlistView,
+} from "./history.js";
