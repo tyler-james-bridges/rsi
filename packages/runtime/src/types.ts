@@ -94,6 +94,11 @@ export interface RuntimeBoundaryReceipt {
   readonly reason: RuntimeBoundaryDecisionReason;
 }
 
+export interface RuntimeBoundaryCommitCheckpointFacts {
+  readonly schemaVersion: 1;
+  readonly checkedAt: string;
+}
+
 /**
  * Current authority facts sampled while the runtime write lock is held for a
  * network completion checkpoint. This intentionally carries no external
@@ -125,12 +130,17 @@ interface RuntimeBoundaryAuthorizationBase<TBoundary extends RuntimeBoundary> {
 }
 
 export type RuntimeBoundaryDispatch = (receipt: Readonly<RuntimeBoundaryReceipt>) => void;
+export type RuntimeBoundaryCommitCheckpoint = () => Readonly<RuntimeBoundaryCommitCheckpointFacts>;
+export type RuntimeBoundaryCommit = (
+  receipt: Readonly<RuntimeBoundaryReceipt>,
+  checkpoint: RuntimeBoundaryCommitCheckpoint,
+) => void;
 export type RuntimeBoundaryCompletion = (facts: Readonly<RuntimeBoundaryCompletionFacts>) => void;
 
 type RuntimeBoundaryAuthorizationMethods<TBoundary extends RuntimeBoundary> =
   TBoundary extends "watchlist_import"
     ? Readonly<{
-        consumeAndCommit(commit: RuntimeBoundaryDispatch): Readonly<RuntimeBoundaryReceipt>;
+        consumeAndCommit(commit: RuntimeBoundaryCommit): Readonly<RuntimeBoundaryReceipt>;
       }>
     : TBoundary extends "research_collection"
       ? Readonly<{
@@ -144,9 +154,8 @@ type RuntimeBoundaryAuthorizationMethods<TBoundary extends RuntimeBoundary> =
         }>;
 
 /**
- * Network collection authority can only be consumed around a synchronous
- * dispatch invocation. Non-network boundaries retain the ordinary one-shot
- * consume method.
+ * Network collection authority wraps synchronous dispatch. Watchlist authority wraps a
+ * synchronous commit with a final checkpoint. Other boundaries expose one-shot consumption.
  */
 export type RuntimeBoundaryAuthorization<TBoundary extends RuntimeBoundary = RuntimeBoundary> =
   TBoundary extends RuntimeBoundary

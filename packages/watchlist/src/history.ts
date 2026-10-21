@@ -22,6 +22,8 @@ const Uuid = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 const Revision = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
+const EventSequence = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
+const AUTHENTIC_WATCHLISTS = new WeakSet<object>();
 export const PreviewContextSchema = z.strictObject({
   processInstanceId: Uuid,
   modeRevision: Revision,
@@ -32,6 +34,7 @@ export const PreviewBindingSchema = z.strictObject({
   predecessorId: SnapshotIdSchema.nullable(),
   processInstanceId: Uuid,
   modeRevision: Revision,
+  previewedAt: Timestamp,
 });
 export type PreviewContext = z.infer<typeof PreviewContextSchema>;
 export type WatchlistPreviewBinding = z.infer<typeof PreviewBindingSchema>;
@@ -46,13 +49,18 @@ const RecordedSchema = z.strictObject({
   snapshot: SnapshotSchema,
   importedAt: Timestamp,
   authorization: z.strictObject({
+    schemaVersion: z.literal(1),
+    actionId: SnapshotIdSchema,
     boundary: z.literal("watchlist_import"),
     authorizationId: Uuid,
-    processInstanceId: Uuid,
+    checkedAt: Timestamp,
+    decision: z.literal("allowed"),
+    eventHash: z.string().regex(/^[0-9a-f]{64}$/),
+    eventSequence: EventSequence,
     mode: z.literal("RESEARCH"),
     modeRevision: Revision,
-    checkedAt: Timestamp,
-    eventHash: z.string().regex(/^[0-9a-f]{64}$/),
+    processInstanceId: Uuid,
+    reason: z.literal("ALLOWED"),
   }),
 });
 type Recorded = Omit<z.infer<typeof RecordedSchema>, "snapshot"> & {
@@ -111,6 +119,7 @@ function replay(store: SqliteEventStore): readonly Recorded[] {
   const records: Recorded[] = [];
   const ids = new Set<string>();
   const authorizations = new Set<string>();
+  const authorizationEvents = new Set<string>();
   for (const event of events) {
     const parsed = RecordedSchema.parse(event.payload);
     const snapshot = parseOfflineBaseWatchlistSnapshot(parsed.snapshot);
@@ -121,18 +130,24 @@ function replay(store: SqliteEventStore): readonly Recorded[] {
       event.idempotencyKey !== `watchlist-snapshot-v1:${parsed.snapshotId}` ||
       event.occurredAt !== parsed.importedAt ||
       parsed.authorization.checkedAt !== parsed.importedAt ||
+      parsed.authorization.actionId !== parsed.snapshotId ||
       parsed.snapshotId !== snapshotId(snapshot) ||
       serialize(snapshot) !== canonicalJson(parsed.snapshot) ||
       parsed.predecessorId !== (prior?.snapshotId ?? null) ||
+      Date.parse(snapshot.acquiredAt) > Date.parse(parsed.importedAt) ||
       (prior !== undefined &&
         Date.parse(snapshot.acquiredAt) <= Date.parse(prior.snapshot.acquiredAt)) ||
+      (prior !== undefined &&
+        parsed.authorization.eventSequence <= prior.authorization.eventSequence) ||
       ids.has(parsed.snapshotId) ||
-      authorizations.has(parsed.authorization.authorizationId)
+      authorizations.has(parsed.authorization.authorizationId) ||
+      authorizationEvents.has(parsed.authorization.eventHash)
     ) {
       throw new WatchlistConflictError("Watchlist history is inconsistent");
     }
     ids.add(parsed.snapshotId);
     authorizations.add(parsed.authorization.authorizationId);
+    authorizationEvents.add(parsed.authorization.eventHash);
     records.push(
       Object.freeze({ ...parsed, authorization: Object.freeze(parsed.authorization), snapshot }),
     );
@@ -146,7 +161,10 @@ export class OfflineBaseWatchlist {
     const store = new SqliteEventStore(path);
     try {
       store.withExclusiveTransaction(() => replay(store));
-      return new OfflineBaseWatchlist(store);
+      const watchlist = new OfflineBaseWatchlist(store);
+      AUTHENTIC_WATCHLISTS.add(watchlist);
+      Object.freeze(watchlist);
+      return watchlist;
     } catch (error) {
       store.close();
       throw error;
@@ -157,9 +175,13 @@ export class OfflineBaseWatchlist {
   }
 
   preview(input: unknown, context: PreviewContext): WatchlistImportPreview {
+    this.#assertAuthentic();
     const snapshot = parseOfflineBaseWatchlistSnapshot(input);
     assertPlainData(context);
     const parsedContext = PreviewContextSchema.parse(context);
+    if (Date.parse(snapshot.acquiredAt) > Date.parse(parsedContext.evaluatedAt)) {
+      throw new WatchlistConflictError("Snapshot acquisition time is in the future");
+    }
     return this.#store.withExclusiveTransaction(() => {
       const records = replay(this.#store);
       const previous = records.at(-1);
@@ -169,6 +191,7 @@ export class OfflineBaseWatchlist {
           predecessorId: previous?.snapshotId ?? null,
           processInstanceId: parsedContext.processInstanceId,
           modeRevision: parsedContext.modeRevision,
+          previewedAt: parsedContext.evaluatedAt,
         }),
         snapshot,
         rows: compareSnapshots(snapshot, previous?.snapshot ?? null),
@@ -178,7 +201,8 @@ export class OfflineBaseWatchlist {
     });
   }
 
-  import(command: WatchlistImportCommand): WatchlistImportResult {
+  importSnapshot(command: WatchlistImportCommand): WatchlistImportResult {
+    this.#assertAuthentic();
     if (
       command === null ||
       typeof command !== "object" ||
@@ -212,9 +236,17 @@ export class OfflineBaseWatchlist {
       );
     }
     let result: WatchlistImportResult | undefined;
-    authorization.consumeAndCommit((receipt) => {
+    authorization.consumeAndCommit((receipt, checkpoint) => {
       result = this.#store.withExclusiveTransaction(() => {
         const records = replay(this.#store);
+        const checkpointFacts = checkpoint();
+        if (
+          Date.parse(snapshot.acquiredAt) > Date.parse(expected.previewedAt) ||
+          Date.parse(expected.previewedAt) > Date.parse(receipt.checkedAt) ||
+          Date.parse(receipt.checkedAt) > Date.parse(checkpointFacts.checkedAt)
+        ) {
+          throw new WatchlistConflictError("Snapshot acquisition time is in the future");
+        }
         const existing = records.find((record) => record.snapshotId === expected.snapshotId);
         if (existing !== undefined) {
           if (
@@ -229,6 +261,12 @@ export class OfflineBaseWatchlist {
             duplicate: true,
           });
         }
+        if (
+          Date.parse(expected.previewedAt) >= Date.parse(snapshot.validUntil) !==
+          Date.parse(checkpointFacts.checkedAt) >= Date.parse(snapshot.validUntil)
+        ) {
+          throw new WatchlistConflictError("Watchlist freshness changed after preview");
+        }
         const head = records.at(-1);
         if (expected.predecessorId !== (head?.snapshotId ?? null))
           throw new WatchlistConflictError("Watchlist preview head is stale");
@@ -238,20 +276,18 @@ export class OfflineBaseWatchlist {
         )
           throw new WatchlistConflictError("Acquisition time must increase");
         if (records.length >= 1000) throw new WatchlistConflictError("Watchlist history is full");
+        if (head !== undefined && receipt.eventSequence <= head.authorization.eventSequence) {
+          throw new WatchlistConflictError("Runtime authorization history moved backward");
+        }
+        if (records.some((record) => record.authorization.eventHash === receipt.eventHash)) {
+          throw new WatchlistConflictError("Runtime authorization event was already used");
+        }
         const payload = RecordedSchema.parse({
           snapshotId: expected.snapshotId,
           predecessorId: expected.predecessorId,
           snapshot,
           importedAt: receipt.checkedAt,
-          authorization: {
-            boundary: receipt.boundary,
-            authorizationId: receipt.authorizationId,
-            processInstanceId: receipt.processInstanceId,
-            mode: receipt.mode,
-            modeRevision: receipt.modeRevision,
-            checkedAt: receipt.checkedAt,
-            eventHash: receipt.eventHash,
-          },
+          authorization: receipt,
         });
         this.#store.append({
           type: "watchlist.snapshot.recorded.v1",
@@ -273,6 +309,7 @@ export class OfflineBaseWatchlist {
   }
 
   read(evaluatedAt: string): WatchlistView {
+    this.#assertAuthentic();
     Timestamp.parse(evaluatedAt);
     return this.#store.withExclusiveTransaction(() => {
       const records = replay(this.#store);
@@ -309,6 +346,23 @@ export class OfflineBaseWatchlist {
     });
   }
   close(): void {
+    this.#assertAuthentic();
     this.#store.close();
   }
+
+  [Symbol.dispose](): void {
+    this.close();
+  }
+
+  #assertAuthentic(): void {
+    if (
+      !AUTHENTIC_WATCHLISTS.has(this) ||
+      Object.getPrototypeOf(this) !== OfflineBaseWatchlist.prototype
+    ) {
+      throw new TypeError("Offline watchlist is unavailable");
+    }
+  }
 }
+
+Object.freeze(OfflineBaseWatchlist.prototype);
+Object.freeze(OfflineBaseWatchlist);

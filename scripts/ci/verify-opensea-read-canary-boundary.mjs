@@ -15,6 +15,7 @@ const DEFAULT_ROOT = resolve(dirname(THIS_FILE), "../..");
 const ENTRY = "apps/cli/src/opensea-canary-operator.ts";
 
 const SOURCE_CONTRACT_FILE = "packages/source-contracts/src/opensea-trending.ts";
+const SOURCE_CONTRACT_VERSION_FILE = "packages/source-contracts/src/opensea-trending-version.ts";
 const COLLECTOR_INDEX_FILE = "packages/opensea-collector/src/index.ts";
 const COLLECTOR_FILE = "packages/opensea-collector/src/collector.ts";
 const COLLECTOR_CONSTANTS_FILE = "packages/opensea-collector/src/constants.ts";
@@ -105,6 +106,7 @@ const REVIEWED_EXACT_FILES = new Set([
   "packages/read-canary/src/opensea-errors.ts",
   "packages/read-canary/src/opensea-types.ts",
   SOURCE_CONTRACT_FILE,
+  SOURCE_CONTRACT_VERSION_FILE,
   "packages/source-contracts/src/common.ts",
   "packages/source-contracts/src/errors.ts",
 ]);

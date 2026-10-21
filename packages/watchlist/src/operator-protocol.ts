@@ -1,12 +1,7 @@
-import { types as utilTypes } from "node:util";
-
 import { z } from "zod";
-import {
-  parseOfflineBaseWatchlistSnapshot,
-  parseWatchlistPreviewBinding,
-  snapshotId,
-  type WatchlistPreviewBinding,
-} from "@rsi/watchlist";
+
+import { parseWatchlistPreviewBinding } from "./history.js";
+import { assertPlainData, parseOfflineBaseWatchlistSnapshot, snapshotId } from "./snapshot.js";
 
 const Timestamp = z.string().refine((value) => {
   const time = Date.parse(value);
@@ -69,41 +64,11 @@ const View = z.strictObject({
 const PreviewCommand = z.strictObject({ input: Snapshot });
 const ConfirmCommand = z.strictObject({ input: Snapshot, expected: Binding });
 
-export interface OperatorWatchlistProvider {
-  previewWatchlist(input: unknown): unknown;
-  confirmWatchlist(input: unknown, expected: WatchlistPreviewBinding): unknown;
-  readWatchlist(): unknown;
-}
-function assertPlainResponse(input: unknown, depth = 0): void {
-  if (depth > 12) throw new TypeError("Watchlist response is too deeply nested");
-  if (input === null || typeof input !== "object") return;
-  if (utilTypes.isProxy(input)) throw new TypeError("Watchlist response must be plain data");
-  const array = Array.isArray(input);
-  if (
-    Object.getPrototypeOf(input) !== (array ? Array.prototype : Object.prototype) &&
-    !(Object.getPrototypeOf(input) === null && !array)
-  )
-    throw new TypeError("Watchlist response must be plain data");
-  const keys = Reflect.ownKeys(input);
-  if (keys.length > 1000 || (array && keys.length !== input.length + 1))
-    throw new TypeError("Watchlist response exceeds its bounds");
-  for (const key of keys) {
-    if (array && key === "length") continue;
-    const descriptor = Object.getOwnPropertyDescriptor(input, key);
-    if (
-      typeof key !== "string" ||
-      descriptor === undefined ||
-      !("value" in descriptor) ||
-      !descriptor.enumerable
-    )
-      throw new TypeError("Watchlist response must be plain data");
-    assertPlainResponse(descriptor.value, depth + 1);
-  }
-}
 function parse<T>(schema: z.ZodType<T>, input: unknown): T {
-  assertPlainResponse(input);
+  assertPlainData(input);
   return schema.parse(input);
 }
+
 export const parseWatchlistPreviewCommand = (input: unknown) => parse(PreviewCommand, input);
 export const parseWatchlistConfirmCommand = (input: unknown) => parse(ConfirmCommand, input);
 export const parseWatchlistPreview = (input: unknown) => parse(Preview, input);

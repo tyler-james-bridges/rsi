@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+
 import {
-  parseWatchlistView,
   parseWatchlistPreviewCommand,
   parseWatchlistResult,
-} from "../src/watchlist.js";
+  parseWatchlistView,
+} from "../src/operator-protocol.js";
 
 describe("watchlist HTTP protocol", () => {
   const view = {
@@ -16,6 +17,7 @@ describe("watchlist HTTP protocol", () => {
     rows: [],
     history: [],
   };
+
   it("rejects unknown output and command fields", () => {
     expect(parseWatchlistView(view)).toEqual(view);
     expect(() => parseWatchlistView({ ...view, secret: "not-permitted" })).toThrow();
@@ -30,6 +32,7 @@ describe("watchlist HTTP protocol", () => {
       }),
     ).toThrow();
   });
+
   it("rejects accessor and proxy responses without invoking them", () => {
     let invoked = false;
     const accessor = { ...view };
@@ -52,5 +55,12 @@ describe("watchlist HTTP protocol", () => {
       ),
     ).toThrow();
     expect(invoked).toBe(false);
+  });
+
+  it("rejects shared response objects before schema traversal", () => {
+    const shared: unknown[] = [];
+    expect(() => parseWatchlistView({ ...view, rows: [shared, shared] })).toThrow(
+      "shared references",
+    );
   });
 });

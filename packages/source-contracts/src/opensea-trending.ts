@@ -8,12 +8,12 @@ import {
   parseJsonBytes,
   parsePlain,
 } from "./common.js";
+import { OPENSEA_TRENDING_CONTRACT_VERSION } from "./opensea-trending-version.js";
 
 /**
  * Contract reviewed against the official OpenSea API v2 OpenAPI description on 2026-09-05.
  * Bump this version only after a deliberate review of an upstream contract change.
  */
-import { OPENSEA_TRENDING_CONTRACT_VERSION } from "./opensea-trending-version.js";
 export { OPENSEA_TRENDING_CONTRACT_VERSION } from "./opensea-trending-version.js";
 export const OPENSEA_TRENDING_CONTRACT_REVIEW_DATE = "2026-09-05" as const;
 export const OPENSEA_TRENDING_ORIGIN = "https://api.opensea.io" as const;

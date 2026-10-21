@@ -1566,6 +1566,9 @@ function verifyXContract(root, graph, violations) {
       completionSetName !== undefined &&
       guardSource.includes(`${completionSetName}.has(authorization)`) &&
       guardSource.includes(`${completionSetName}.add(authorization)`);
+    const completionIsAuthentic = /AUTHENTIC_AUTHORIZATIONS\.has\s*\(\s*authorization\s*\)/u.test(
+      guardSource,
+    );
     const completionValidationPatterns = [
       /AUTHENTIC_AUTHORIZATIONS\.has\s*\(\s*authorization\s*\)/u,
       /arguments_\.length\s*!==\s*1/u,
@@ -1586,7 +1589,9 @@ function verifyXContract(root, graph, violations) {
       /arguments_\.length\s*!==\s*1\s*\|\|\s*!isSynchronousCallback\s*\(\s*completion\s*\)/u.test(
         guardSource,
       ) &&
-      /guardBoundaryCompletion\s*\(\s*completion/u.test(guardSource);
+      /let\s+callbackResult\s*:\s*unknown[\s\S]{0,300}?const\s+facts\s*=\s*guardBoundaryCompletion\s*\(\s*\(\s*facts\s*\)\s*=>\s*\{\s*callbackResult\s*=\s*completion\s*\(\s*facts\s*\);?\s*\}\s*\)[\s\S]{0,200}?assertSynchronousResult\s*\(\s*callbackResult\s*,\s*message\s*\)[\s\S]{0,100}?return\s+facts/u.test(
+        guardSource,
+      );
     const completionValidation = inlineCompletionValidation || helperCompletionValidation;
     if (
       networkBranch < 0 ||
@@ -1605,7 +1610,7 @@ function verifyXContract(root, graph, violations) {
         `${RUNTIME_AUTHORIZATION_FILE} must expose dispatch and completion guards only for network collection authority`,
       );
     }
-    if (!completionSetIsTerminal || !completionValidation) {
+    if (!completionIsAuthentic || !completionSetIsTerminal || !completionValidation) {
       violations.push(
         `${RUNTIME_AUTHORIZATION_FILE} must make completion guarding authentic, terminal, synchronous, and proxy-resistant`,
       );
@@ -2714,21 +2719,53 @@ function verifyStage0StorageIsolation(root, violations) {
       "createClosingAwareRuntimeControls",
     );
     const requestedGuard = stage0Run.search(
-      /assertStage0StorageIsolation\(\s*requestedDatabasePath,\s*requestedResearchDatabasePath,\s*requestedProductionDataDirectory,?\s*\)/u,
+      /assertStage0StorageIsolation\(\s*requestedDatabasePath,\s*requestedResearchDatabasePath,\s*requestedProductionDataDirectory,\s*requestedWatchlistDatabasePath,?\s*\)/u,
     );
-    const prospectiveResolution = stage0Run.indexOf(
+    const prospectiveRuntimeResolution = stage0Run.indexOf(
       "resolveProspectiveStoragePath(requestedDatabasePath)",
       requestedGuard,
     );
-    const prospectiveGuard = stage0Run.search(
-      /assertStage0StorageIsolation\(\s*prospectiveRuntimePath,\s*prospectiveResearchPath,\s*productionDataDirectory,?\s*\)/u,
+    const prospectiveResearchResolution = stage0Run.indexOf(
+      "resolveProspectiveStoragePath(requestedResearchDatabasePath)",
+      prospectiveRuntimeResolution,
     );
-    const databaseInspection = stage0Run.indexOf(
+    const prospectiveProductionResolution = stage0Run.indexOf(
+      "resolveProspectiveStoragePath(requestedProductionDataDirectory)",
+      prospectiveResearchResolution,
+    );
+    const prospectiveWatchlistResolution = stage0Run.indexOf(
+      "resolveProspectiveStoragePath(requestedWatchlistDatabasePath)",
+      prospectiveProductionResolution,
+    );
+    const prospectiveGuard = stage0Run.search(
+      /assertStage0StorageIsolation\(\s*prospectiveRuntimePath,\s*prospectiveResearchPath,\s*productionDataDirectory,\s*prospectiveWatchlistPath,?\s*\)/u,
+    );
+    const runtimeInspection = stage0Run.indexOf(
       "resolveDatabaseIdentity(prospectiveRuntimePath)",
       Math.max(0, prospectiveGuard),
     );
+    const researchInspection = stage0Run.indexOf(
+      "resolveDatabaseIdentity(prospectiveResearchPath)",
+      runtimeInspection,
+    );
+    const watchlistInspection = stage0Run.indexOf(
+      "resolveDatabaseIdentity(prospectiveWatchlistPath)",
+      researchInspection,
+    );
     const identityGuard = stage0Run.search(
-      /assertStage0StorageIsolation\(\s*runtimeIdentity\.path,\s*researchIdentity\.path,\s*productionDataDirectory,?\s*\)/u,
+      /assertStage0StorageIsolation\(\s*runtimeIdentity\.path,\s*researchIdentity\.path,\s*productionDataDirectory,\s*watchlistIdentity\.path,?\s*\)/u,
+    );
+    const runtimeResearchSeparation = stage0Run.indexOf(
+      "assertSeparateDatabases(runtimeIdentity, researchIdentity)",
+      identityGuard,
+    );
+    const runtimeWatchlistSeparation = stage0Run.indexOf(
+      "assertSeparateDatabases(runtimeIdentity, watchlistIdentity)",
+      runtimeResearchSeparation,
+    );
+    const researchWatchlistSeparation = stage0Run.indexOf(
+      "assertSeparateDatabases(researchIdentity, watchlistIdentity)",
+      runtimeWatchlistSeparation,
     );
     const runtimeOpen = stage0Run.indexOf("SqliteRuntimeController.open(");
     if (
@@ -2738,12 +2775,20 @@ function verifyStage0StorageIsolation(root, violations) {
       ) ||
       !/productionXCanaryHostOptions\(\)\.databasePath/u.test(operator) ||
       requestedGuard < 0 ||
-      prospectiveResolution < requestedGuard ||
-      prospectiveGuard < prospectiveResolution ||
-      databaseInspection < prospectiveGuard ||
-      identityGuard < databaseInspection ||
-      runtimeOpen < identityGuard ||
-      countMatches(operator, /resolveProspectiveStoragePath\s*\(/gu) !== 3 ||
+      prospectiveRuntimeResolution < requestedGuard ||
+      prospectiveResearchResolution < prospectiveRuntimeResolution ||
+      prospectiveProductionResolution < prospectiveResearchResolution ||
+      prospectiveWatchlistResolution < prospectiveProductionResolution ||
+      prospectiveGuard < prospectiveWatchlistResolution ||
+      runtimeInspection < prospectiveGuard ||
+      researchInspection < runtimeInspection ||
+      watchlistInspection < researchInspection ||
+      identityGuard < watchlistInspection ||
+      runtimeResearchSeparation < identityGuard ||
+      runtimeWatchlistSeparation < runtimeResearchSeparation ||
+      researchWatchlistSeparation < runtimeWatchlistSeparation ||
+      runtimeOpen < researchWatchlistSeparation ||
+      countMatches(operator, /resolveProspectiveStoragePath\s*\(/gu) !== 4 ||
       countMatches(operator, /assertStage0StorageIsolation\s*\(/gu) !== 3
     ) {
       violations.push(
@@ -2760,7 +2805,8 @@ function verifyStage0StorageIsolation(root, violations) {
     const initialStop = closeSource.indexOf("activeRuntime.stop(", closePromiseStart);
     const drainServer = closeSource.indexOf("await operator?.close()", initialStop);
     const closeResearch = closeSource.indexOf("research?.close()", drainServer);
-    const finalStop = closeSource.indexOf("activeRuntime.stop(", initialStop + 1);
+    const closeWatchlist = closeSource.indexOf("watchlist?.close()", closeResearch);
+    const finalStop = closeSource.indexOf("activeRuntime.stop(", closeWatchlist);
     const closeRuntime = closeSource.indexOf("activeRuntime.close()", finalStop);
     const finalRuntimeSection = closeSource.slice(closeSource.lastIndexOf("try {", finalStop));
     const signalHandlerStart = stage0Run.indexOf("const handleSignal = (): void => {");
@@ -2780,13 +2826,14 @@ function verifyStage0StorageIsolation(root, violations) {
     );
     const installSigint = stage0Run.indexOf('process.once("SIGINT", handleSignal)');
     const installSigterm = stage0Run.indexOf('process.once("SIGTERM", handleSignal)');
-    const postIdentityShutdown = stage0Run.indexOf("if (shutdownRequested)", databaseInspection);
+    const postIdentityShutdown = stage0Run.indexOf("if (shutdownRequested)", watchlistInspection);
     const identityGuardInRun = stage0Run.indexOf(
       "assertStage0StorageIsolation(",
       postIdentityShutdown,
     );
     const researchOpen = stage0Run.indexOf("SqliteResearchLedger.open(", runtimeOpen);
-    const postOpenShutdown = stage0Run.indexOf("if (shutdownRequested)", researchOpen);
+    const watchlistOpen = stage0Run.indexOf("OfflineBaseWatchlist.open(", researchOpen);
+    const postOpenShutdown = stage0Run.indexOf("if (shutdownRequested)", watchlistOpen);
     const controlConstruction = stage0Run.indexOf(
       "createClosingAwareRuntimeControls(runtime, () => hostClosing)",
       runtimeOpen,
@@ -2823,7 +2870,8 @@ function verifyStage0StorageIsolation(root, violations) {
       initialStop < closePromiseStart ||
       drainServer < initialStop ||
       closeResearch < drainServer ||
-      finalStop < closeResearch ||
+      closeWatchlist < closeResearch ||
+      finalStop < closeWatchlist ||
       closeRuntime < finalStop ||
       /\bawait\b/u.test(closeSource.slice(finalStop, closeRuntime)) ||
       countMatches(closeSource, /activeRuntime\.stop\s*\(/gu) !== 2 ||
@@ -2837,12 +2885,13 @@ function verifyStage0StorageIsolation(root, violations) {
       deferredResource < latchRuntimeControls ||
       installSigint < 0 ||
       installSigterm < installSigint ||
-      databaseInspection < installSigterm ||
-      postIdentityShutdown < databaseInspection ||
+      runtimeInspection < installSigterm ||
+      postIdentityShutdown < watchlistInspection ||
       identityGuardInRun < postIdentityShutdown ||
       runtimeOpen < identityGuardInRun ||
       researchOpen < runtimeOpen ||
-      postOpenShutdown < researchOpen ||
+      watchlistOpen < researchOpen ||
+      postOpenShutdown < watchlistOpen ||
       controlConstruction < postOpenShutdown ||
       controlConstruction < runtimeOpen ||
       serverStart < controlConstruction ||
@@ -2855,7 +2904,7 @@ function verifyStage0StorageIsolation(root, violations) {
       countMatches(operator, /createClosingAwareRuntimeControls\s*\(/gu) !== 2
     ) {
       violations.push(
-        `${STAGE0_OPERATOR_FILE} must install and latch shutdown before mutable startup, share one close promise, synchronously gate runtime control and persist STOP, drain the server/research store, then synchronously STOP-and-close runtime`,
+        `${STAGE0_OPERATOR_FILE} must install and latch shutdown before mutable startup, share one close promise, synchronously gate runtime control and persist STOP, drain the server and local stores, then synchronously STOP-and-close runtime`,
       );
     }
   }

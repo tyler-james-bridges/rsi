@@ -54,39 +54,49 @@ export type NormalizedOfflineBaseWatchlistSnapshotV1 = Readonly<
   }
 >;
 
-export function assertPlainData(value: unknown, depth = 0): void {
-  if (depth > 12) throw new TypeError("Watchlist data is too deeply nested");
-  if (value === null || typeof value !== "object") return;
-  if (utilTypes.isProxy(value)) throw new TypeError("Watchlist data must be plain");
-  const array = Array.isArray(value);
-  if (array && Object.getPrototypeOf(value) !== Array.prototype) {
-    throw new TypeError("Watchlist arrays must be plain");
-  }
-  if (
-    !array &&
-    Object.getPrototypeOf(value) !== Object.prototype &&
-    Object.getPrototypeOf(value) !== null
-  ) {
-    throw new TypeError("Watchlist data must be plain");
-  }
-  const keys = Reflect.ownKeys(value);
-  if (array && (value.length > 1000 || keys.length !== value.length + 1)) {
-    throw new TypeError("Watchlist arrays must be dense and bounded");
-  }
-  for (const key of keys) {
-    if (array && key === "length") continue;
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (
-      typeof key !== "string" ||
-      !descriptor ||
-      !("value" in descriptor) ||
-      !descriptor.enumerable ||
-      (array && (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length))
-    ) {
-      throw new TypeError("Watchlist data must contain only plain values");
+export function assertPlainData(value: unknown): void {
+  const seen = new WeakSet<object>();
+  let visitedObjects = 0;
+  const visit = (current: unknown, depth: number): void => {
+    if (depth > 12) throw new TypeError("Watchlist data is too deeply nested");
+    if (current === null || typeof current !== "object") return;
+    if (utilTypes.isProxy(current) || seen.has(current)) {
+      throw new TypeError("Watchlist data must be acyclic plain data without shared references");
     }
-    assertPlainData(descriptor.value, depth + 1);
-  }
+    seen.add(current);
+    visitedObjects += 1;
+    if (visitedObjects > 4_096) throw new TypeError("Watchlist data exceeds its work bound");
+    const array = Array.isArray(current);
+    if (array && Object.getPrototypeOf(current) !== Array.prototype) {
+      throw new TypeError("Watchlist arrays must be plain");
+    }
+    if (
+      !array &&
+      Object.getPrototypeOf(current) !== Object.prototype &&
+      Object.getPrototypeOf(current) !== null
+    ) {
+      throw new TypeError("Watchlist data must be plain");
+    }
+    const keys = Reflect.ownKeys(current);
+    if (array && (current.length > 1000 || keys.length !== current.length + 1)) {
+      throw new TypeError("Watchlist arrays must be dense and bounded");
+    }
+    for (const key of keys) {
+      if (array && key === "length") continue;
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (
+        typeof key !== "string" ||
+        !descriptor ||
+        !("value" in descriptor) ||
+        !descriptor.enumerable ||
+        (array && (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= current.length))
+      ) {
+        throw new TypeError("Watchlist data must contain only plain values");
+      }
+      visit(descriptor.value, depth + 1);
+    }
+  };
+  visit(value, 0);
 }
 
 export function parseOfflineBaseWatchlistSnapshot(
@@ -162,16 +172,31 @@ export function compareSnapshots(
     prior.delete(id);
     return Object.freeze({
       ...row,
+      baseAddresses: Object.freeze([...row.baseAddresses]),
       collectionId: id,
       previousRank: before?.rank ?? null,
       change:
         before === undefined ? "new" : before.rank === row.rank ? "unchanged" : "rank_changed",
     });
   });
-  rows.sort((a, b) => a.rank - b.rank || a.collectionId.localeCompare(b.collectionId));
-  const left = [...prior].map(([id, row]): WatchlistRow =>
-    Object.freeze({ ...row, collectionId: id, previousRank: row.rank, change: "left_window" }),
+  rows.sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      (a.collectionId < b.collectionId ? -1 : a.collectionId > b.collectionId ? 1 : 0),
   );
-  left.sort((a, b) => a.rank - b.rank || a.collectionId.localeCompare(b.collectionId));
+  const left = [...prior].map(([id, row]): WatchlistRow =>
+    Object.freeze({
+      ...row,
+      baseAddresses: Object.freeze([...row.baseAddresses]),
+      collectionId: id,
+      previousRank: row.rank,
+      change: "left_window",
+    }),
+  );
+  left.sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      (a.collectionId < b.collectionId ? -1 : a.collectionId > b.collectionId ? 1 : 0),
+  );
   return Object.freeze([...rows, ...left]);
 }

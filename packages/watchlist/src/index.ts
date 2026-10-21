@@ -1,4 +1,5 @@
 export {
+  assertPlainData,
   parseOfflineBaseWatchlistSnapshot,
   collectionId,
   snapshotId,
@@ -20,3 +21,10 @@ export {
   type WatchlistImportResult,
   type WatchlistView,
 } from "./history.js";
+export {
+  parseWatchlistConfirmCommand,
+  parseWatchlistPreview,
+  parseWatchlistPreviewCommand,
+  parseWatchlistResult,
+  parseWatchlistView,
+} from "./operator-protocol.js";

@@ -163,6 +163,7 @@ describe("operator dashboard runtime controls", () => {
       predecessorId: null,
       processInstanceId: snapshot.processInstanceId,
       modeRevision: 2,
+      previewedAt: "2026-10-20T00:00:30.000Z",
     };
     const commands: unknown[] = [];
     const response = (value: unknown) => Promise.resolve({ ok: true, json: async () => value });

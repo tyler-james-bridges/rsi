@@ -5,20 +5,6 @@ settings:
   excludeLinksFromLockfile: false
 
 importers:
-  packages/watchlist:
-    dependencies:
-      "@rsi/runtime":
-        specifier: workspace:*
-        version: link:../runtime
-      "@rsi/source-contracts":
-        specifier: workspace:*
-        version: link:../source-contracts
-      "@rsi/store":
-        specifier: workspace:*
-        version: link:../store
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
   .:
     devDependencies:
       "@types/node":
@@ -39,9 +25,6 @@ importers:
 
   apps/cli:
     dependencies:
-      "@rsi/watchlist":
-        specifier: workspace:*
-        version: link:../../packages/watchlist
       "@rsi/capture-registry":
         specifier: workspace:*
         version: link:../../packages/capture-registry
@@ -87,6 +70,9 @@ importers:
       "@rsi/vault":
         specifier: workspace:*
         version: link:../../packages/vault
+      "@rsi/watchlist":
+        specifier: workspace:*
+        version: link:../../packages/watchlist
       "@rsi/x-collector":
         specifier: workspace:*
         version: link:../../packages/x-collector
@@ -96,12 +82,6 @@ importers:
 
   apps/operator:
     dependencies:
-      "@rsi/watchlist":
-        specifier: workspace:*
-        version: link:../../packages/watchlist
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
       "@rsi/domain":
         specifier: workspace:*
         version: link:../../packages/domain
@@ -409,6 +389,21 @@ importers:
   packages/store: {}
 
   packages/vault: {}
+
+  packages/watchlist:
+    dependencies:
+      "@rsi/runtime":
+        specifier: workspace:*
+        version: link:../runtime
+      "@rsi/source-contracts":
+        specifier: workspace:*
+        version: link:../source-contracts
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/x-collector:
     dependencies:

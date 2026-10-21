@@ -9,8 +9,6 @@
     "./opensea": "./src/opensea.ts"
   },
   "dependencies": {
-    "@rsi/watchlist": "workspace:*",
-    "zod": "^4.4.3",
     "@rsi/domain": "workspace:*",
     "@rsi/read-canary": "workspace:*",
     "@rsi/runtime": "workspace:*",

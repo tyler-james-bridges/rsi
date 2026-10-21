@@ -248,6 +248,27 @@ test("pins the OpenSea profile lease, cleanup decision, and shutdown ordering", 
 
 test("rejects request, chain, retry, fetch-count, and payment mutations", () => {
   withFixture((root) => {
+    writeFileSync(
+      join(root, "packages/source-contracts/src/opensea-trending-version-rogue.ts"),
+      'export const OPENSEA_TRENDING_CONTRACT_VERSION = "rogue";\n',
+    );
+    replace(
+      root,
+      "packages/source-contracts/src/opensea-trending.ts",
+      'from "./opensea-trending-version.js"',
+      'from "./opensea-trending-version-rogue.js"',
+    );
+    expectFailure(root, /unreviewed or test-only source.*opensea-trending-version-rogue\.ts/u);
+  });
+  withFixture((root) => {
+    append(
+      root,
+      "packages/source-contracts/src/opensea-trending-version.ts",
+      '\nimport "node:child_process";\n',
+    );
+    expectFailure(root, /unapproved process module node:child_process/u);
+  });
+  withFixture((root) => {
     replace(
       root,
       "packages/source-contracts/src/opensea-trending.ts",

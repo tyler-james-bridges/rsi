@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, realpath, stat } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 
 import {
@@ -36,10 +37,8 @@ interface DatabaseIdentity {
   readonly inode?: bigint;
 }
 
-function isMissingPath(error: unknown): boolean {
-  return (
-    error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT"
-  );
+function isExistingPath(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "EEXIST";
 }
 
 async function resolveDatabaseIdentity(path: string): Promise<DatabaseIdentity> {
@@ -47,17 +46,26 @@ async function resolveDatabaseIdentity(path: string): Promise<DatabaseIdentity> 
   await mkdir(dirname(path), { mode: 0o700, recursive: true });
   const parent = await realpath(dirname(path));
   const canonicalPath = resolve(parent, basename(path));
+  let created;
   try {
-    const entry = await lstat(canonicalPath, { bigint: true });
-    if (entry.isSymbolicLink() || !entry.isFile() || entry.nlink !== 1n) {
-      throw new TypeError("SQLite paths must be single-link regular files");
-    }
-    const identity = await stat(canonicalPath, { bigint: true });
-    return { path: canonicalPath, device: identity.dev, inode: identity.ino };
+    created = await open(
+      canonicalPath,
+      constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY,
+      0o600,
+    );
   } catch (error) {
-    if (isMissingPath(error)) return { path: canonicalPath };
-    throw error;
+    if (!isExistingPath(error)) throw error;
   }
+  await created?.close();
+  const entry = await lstat(canonicalPath, { bigint: true });
+  if (entry.isSymbolicLink() || !entry.isFile() || entry.nlink !== 1n) {
+    throw new TypeError("SQLite paths must be single-link regular files");
+  }
+  const identity = await stat(canonicalPath, { bigint: true });
+  if (entry.dev !== identity.dev || entry.ino !== identity.ino) {
+    throw new TypeError("SQLite path changed during inspection");
+  }
+  return { path: canonicalPath, device: identity.dev, inode: identity.ino };
 }
 
 function assertSeparateDatabases(runtime: DatabaseIdentity, research: DatabaseIdentity): void {

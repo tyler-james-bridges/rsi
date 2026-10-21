@@ -9,15 +9,6 @@ import {
   type ResearchProposalV1,
 } from "@rsi/domain/proposals";
 import { RuntimeBoundaryDeniedError, RuntimeConflictError } from "@rsi/runtime";
-import { WatchlistConflictError } from "@rsi/watchlist";
-import {
-  parseWatchlistPreviewCommand,
-  parseWatchlistConfirmCommand,
-  parseWatchlistPreview,
-  parseWatchlistResult,
-  parseWatchlistView,
-  type OperatorWatchlistProvider,
-} from "./watchlist.js";
 
 import {
   OPERATOR_DASHBOARD_CSS,
@@ -182,6 +173,17 @@ export type OperatorControlCommand =
 export interface OperatorControlProvider {
   readonly supportedActions: readonly OperatorControlCommand["action"][];
   executeControl(command: OperatorControlCommand): Promise<unknown> | unknown;
+}
+
+export interface OperatorWatchlistProvider {
+  parsePreviewCommand(input: unknown): Readonly<{ input: unknown }>;
+  parseConfirmCommand(input: unknown): Readonly<{ input: unknown; expected: unknown }>;
+  parsePreview(input: unknown): unknown;
+  parseResult(input: unknown): unknown;
+  parseView(input: unknown): unknown;
+  previewWatchlist(input: unknown): unknown;
+  confirmWatchlist(input: unknown, expected: unknown): unknown;
+  readWatchlist(): unknown;
 }
 
 export interface OperatorServerOptions {
@@ -1190,22 +1192,22 @@ async function route(
     if (url.pathname === "/api/watchlist/preview") {
       let command;
       try {
-        command = parseWatchlistPreviewCommand(body);
+        command = watchlist.parsePreviewCommand(body);
       } catch {
         badRequest("Invalid offline watchlist input.");
       }
       sendJson(response, 200, {
-        preview: parseWatchlistPreview(watchlist.previewWatchlist(command.input)),
+        preview: watchlist.parsePreview(watchlist.previewWatchlist(command.input)),
       });
     } else {
       let command;
       try {
-        command = parseWatchlistConfirmCommand(body);
+        command = watchlist.parseConfirmCommand(body);
       } catch {
         badRequest("Invalid offline watchlist confirmation.");
       }
       sendJson(response, 200, {
-        result: parseWatchlistResult(watchlist.confirmWatchlist(command.input, command.expected)),
+        result: watchlist.parseResult(watchlist.confirmWatchlist(command.input, command.expected)),
       });
     }
     return;
@@ -1323,7 +1325,7 @@ async function route(
     if (url.search !== "") badRequest("Watchlist reads do not accept query parameters.");
     if (watchlist === undefined)
       throw new HttpError(501, "watchlist_unavailable", "Offline watchlist is not configured.");
-    sendJson(response, 200, { watchlist: parseWatchlistView(watchlist.readWatchlist()) });
+    sendJson(response, 200, { watchlist: watchlist.parseView(watchlist.readWatchlist()) });
     return;
   }
 
@@ -1478,11 +1480,7 @@ export function createOperatorServer(
         });
         return;
       }
-      if (
-        error instanceof RuntimeConflictError ||
-        error instanceof RuntimeBoundaryDeniedError ||
-        error instanceof WatchlistConflictError
-      ) {
+      if (error instanceof RuntimeConflictError || error instanceof RuntimeBoundaryDeniedError) {
         sendJson(response, 409, {
           error: {
             code: "runtime_conflict",

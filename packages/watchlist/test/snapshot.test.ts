@@ -25,6 +25,16 @@ describe("offline watchlist shape and identity", () => {
     expect(() => parse(getterInput)).toThrow();
     expect(invoked).toBe(false);
   });
+  it("rejects cycles and shared-reference expansion", () => {
+    const cycle = fixture() as ReturnType<typeof fixture> & { extra?: unknown };
+    cycle.extra = cycle;
+    expect(() => parse(cycle)).toThrow("acyclic");
+
+    const shared = Object.freeze({ value: "untrusted" });
+    const aliased = fixture() as ReturnType<typeof fixture> & { extra?: unknown };
+    aliased.extra = [shared, shared];
+    expect(() => parse(aliased)).toThrow("shared references");
+  });
   it("normalizes case, address order, key order and whitespace", () => {
     const original = parse(fixture());
     const changed = fixture();

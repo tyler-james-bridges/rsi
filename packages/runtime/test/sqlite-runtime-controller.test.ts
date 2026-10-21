@@ -599,6 +599,56 @@ describe("SqliteRuntimeController", () => {
       expect.objectContaining({ code: "AUTHORIZATION_ALREADY_USED" }),
     );
 
+    const promiseReturningDispatchAuthorization = runtime.requestBoundaryAuthorization({
+      actionId: "x-attempt-promise-returning-dispatch",
+      authorizationId: uuids[15]!,
+      boundary: "research_collection",
+    });
+    expect(() =>
+      promiseReturningDispatchAuthorization.consumeAndDispatch(() => Promise.resolve()),
+    ).toThrow(RuntimeValidationError);
+    expect(
+      runtime
+        .listAudit()
+        .find(
+          (event) =>
+            event.type === RUNTIME_BOUNDARY_EVENT_TYPE &&
+            event.payload.authorizationId === promiseReturningDispatchAuthorization.authorizationId,
+        )?.payload,
+    ).toMatchObject({ decision: "allowed", reason: "ALLOWED" });
+    expect(() =>
+      promiseReturningDispatchAuthorization.consumeAndDispatch(() => undefined),
+    ).toThrowError(expect.objectContaining({ code: "AUTHORIZATION_ALREADY_USED" }));
+    expect(promiseReturningDispatchAuthorization.guardCompletion(() => undefined)).toMatchObject({
+      decision: "allowed",
+      reason: "ALLOWED",
+    });
+
+    const throwingThenAuthorization = runtime.requestBoundaryAuthorization({
+      actionId: "x-attempt-throwing-then",
+      authorizationId: uuids[16]!,
+      boundary: "research_collection",
+    });
+    const thenError = new Error("then getter failed");
+    expect(() =>
+      throwingThenAuthorization.consumeAndDispatch(() =>
+        Object.defineProperty({}, "then", {
+          get() {
+            throw thenError;
+          },
+        }),
+      ),
+    ).toThrow(thenError);
+    expect(
+      runtime
+        .listAudit()
+        .find(
+          (event) =>
+            event.type === RUNTIME_BOUNDARY_EVENT_TYPE &&
+            event.payload.authorizationId === throwingThenAuthorization.authorizationId,
+        )?.payload,
+    ).toMatchObject({ decision: "allowed", reason: "ALLOWED" });
+
     const boundAsyncDispatchAuthorization = runtime.requestBoundaryAuthorization({
       actionId: "x-attempt-bound-async-dispatch",
       authorizationId: uuids[14]!,
@@ -735,6 +785,7 @@ describe("SqliteRuntimeController", () => {
     const invalid = [
       async () => undefined,
       (async () => undefined).bind(null),
+      () => Promise.resolve(),
       function* completionGenerator() {
         yield undefined;
       },
@@ -942,11 +993,7 @@ describe("SqliteRuntimeController", () => {
           boundary,
         });
 
-        const invoke =
-          authorization.boundary === "watchlist_import"
-            ? authorization.consumeAndCommit
-            : authorization.consumeAndDispatch;
-        const receipt = invoke((checked) => {
+        const protectedCallback = (checked: { decision: string; mode: string }) => {
           Atomics.store(coordination, 0, 1);
           Atomics.notify(coordination, 0);
           // The worker may announce immediately before this thread begins
@@ -955,12 +1002,16 @@ describe("SqliteRuntimeController", () => {
           expect(Atomics.wait(coordination, 1, 0, 2_000)).not.toBe("timed-out");
           expect(Atomics.load(coordination, 1)).toBe(1);
           expect(checked).toMatchObject({ decision: "allowed", mode: "RESEARCH" });
-          // The competing controller announced its STOP attempt before this
-          // dispatch marker. It cannot persist until this callback returns and
-          // the runtime transaction releases its write lock.
           Atomics.store(coordination, 2, 1);
           Atomics.notify(coordination, 2);
-        });
+        };
+        const receipt =
+          authorization.boundary === "watchlist_import"
+            ? authorization.consumeAndCommit((checked, checkpoint) => {
+                checkpoint();
+                protectedCallback(checked);
+              })
+            : authorization.consumeAndDispatch(protectedCallback);
         expect(receipt).toMatchObject({ decision: "allowed", mode: "RESEARCH" });
 
         const stopResult = await stopped;

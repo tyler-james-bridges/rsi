@@ -24,11 +24,13 @@ Payment, wallet signing, policy approval, execution-adapter use, transaction bro
 external publication are permanent denials.
 
 `@rsi/watchlist` owns a third isolated event database for operator-supplied offline Base collection
-snapshots. Preview binds the normalized digest, predecessor, runtime process, and revision.
-Confirmation uses a one-shot `watchlist_import` permit whose synchronous commit is serialized
-against STOP. The runtime receipt commits before the watchlist event. The dashboard derives
-bounded current, changed, and departed rows from verified history without a mutable projection.
-See [ADR 0002](decisions/0002-offline-base-watchlist.md).
+snapshots. The stateless preview reports the normalized digest, predecessor, runtime process,
+revision, and time. The runtime permit, not preview issuance, is the authorization boundary.
+Confirmation uses a one-shot `watchlist_import` permit. The runtime receipt commits first. The
+runtime then holds its write lock while the watchlist acquires its own, and a final checkpoint
+revalidates authority before the append. The dashboard derives bounded current, changed, and
+departed rows from locally validated event history without a mutable projection. See
+[ADR 0002](decisions/0002-offline-base-watchlist.md).
 
 Non-executable proposal scorecards live in a separate research ledger. Its isolated schema has no
 action, target, selector, calldata, recipient, payment asset, spend, order, nonce, wallet, or

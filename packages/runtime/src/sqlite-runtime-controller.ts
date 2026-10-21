@@ -35,6 +35,8 @@ import type {
   RuntimeBoundary,
   RuntimeBoundaryAuthorization,
   RuntimeBoundaryAuthorizationInput,
+  RuntimeBoundaryCommit,
+  RuntimeBoundaryCommitCheckpoint,
   RuntimeBoundaryCompletion,
   RuntimeBoundaryCompletionFacts,
   RuntimeBoundaryDispatch,
@@ -1009,10 +1011,8 @@ export class SqliteRuntimeController {
 
   #consumeWatchlistCommit(
     requested: IssuedBoundary,
-    commit: RuntimeBoundaryDispatch,
+    commit: RuntimeBoundaryCommit,
   ): Readonly<RuntimeBoundaryReceipt> {
-    // Commit the receipt first. A crash in the second transaction may leave an
-    // unused authorization, but can never roll back authority behind a saved snapshot.
     const receipt = this.#consumeBoundaryAuthorization(requested);
     return this.#store.withExclusiveTransaction(() => {
       const replay = replayRuntimeStore(this.#store);
@@ -1025,21 +1025,61 @@ export class SqliteRuntimeController {
       );
       if (durable?.eventHash !== receipt.eventHash)
         throw new RuntimeIntegrityError("Watchlist receipt changed");
-      const checkedAt = nonRegressingBoundaryTime(
-        readRuntimeClock(this.#clock),
-        replay,
-        requested.requestedAt,
-      );
-      const monotonicAt = readMonotonicClock(this.#monotonicClock);
-      const reason = boundaryReason(requested, state, checkedAt);
-      if (
-        reason !== "ALLOWED" ||
-        monotonicAt < requested.monotonicIssuedAt ||
-        monotonicAt >= requested.monotonicExpiresAt
-      ) {
-        throw new RuntimeConflictError("STALE_STATE", "Watchlist authority changed before commit");
+      const assertFresh = (currentReplay: ReplayResult): string => {
+        const currentState = currentReplay.state;
+        if (currentState === null)
+          throw new RuntimeIntegrityError("Watchlist authority is unavailable");
+        const checkedAt = nonRegressingBoundaryTime(
+          readRuntimeClock(this.#clock),
+          currentReplay,
+          requested.requestedAt,
+        );
+        const monotonicAt = readMonotonicClock(this.#monotonicClock);
+        const reason = boundaryReason(requested, currentState, checkedAt);
+        if (
+          reason !== "ALLOWED" ||
+          monotonicAt < requested.monotonicIssuedAt ||
+          monotonicAt >= requested.monotonicExpiresAt
+        ) {
+          throw new RuntimeConflictError(
+            "STALE_STATE",
+            "Watchlist authority changed before commit",
+          );
+        }
+        return checkedAt;
+      };
+      assertFresh(replay);
+      const checkpointScope: {
+        active: boolean;
+        state: "unused" | "valid" | "failed";
+      } = { active: true, state: "unused" };
+      const checkpoint: RuntimeBoundaryCommitCheckpoint = () => {
+        if (!checkpointScope.active) {
+          throw new RuntimeConflictError(
+            "STALE_STATE",
+            "Watchlist checkpoint called outside commit callback",
+          );
+        }
+        if (checkpointScope.state !== "unused") {
+          checkpointScope.state = "failed";
+          throw new RuntimeConflictError(
+            "STALE_STATE",
+            "Watchlist checkpoint must be invoked exactly once",
+          );
+        }
+        checkpointScope.state = "failed";
+        const checkedAt = assertFresh(replayRuntimeStore(this.#store));
+        checkpointScope.state = "valid";
+        return Object.freeze({ schemaVersion: 1 as const, checkedAt });
+      };
+      try {
+        commit(receipt, checkpoint);
+        if (checkpointScope.state !== "valid") {
+          throw new RuntimeValidationError("Watchlist commit must invoke checkpoint exactly once");
+        }
+      } finally {
+        checkpointScope.active = false;
       }
-      commit(receipt);
       return receipt;
     });
   }

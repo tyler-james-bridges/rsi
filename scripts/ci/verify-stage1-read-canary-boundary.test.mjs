@@ -480,7 +480,19 @@ export * from "./sqlite-runtime-controller.js";
 const AUTHENTIC_AUTHORIZATIONS = new WeakSet<object>();
 const CONSUMED_AUTHORIZATIONS = new WeakSet<object>();
 const DISPATCHED_AUTHORIZATIONS = new WeakSet<object>();
-const COMPLETED_AUTHORIZATIONS = new WeakSet<object>();
+const COMPLETION_GUARDED_AUTHORIZATIONS = new WeakSet<object>();
+function isSynchronousCallback(value: unknown) {
+  return (
+    typeof value === "function" &&
+    !utilTypes.isProxy(value) &&
+    !utilTypes.isAsyncFunction(value) &&
+    !utilTypes.isGeneratorFunction(value) &&
+    Object.prototype.toString.call(value) === "[object Function]"
+  );
+}
+function assertSynchronousResult(value: unknown, message: string): void {
+  if (value instanceof Promise) throw new Error(message);
+}
 export function isRuntimeBoundaryAuthorization() { return true; }
 export function createAuthorization(parts: { boundary: string }) {
   const authorization = Object.create(null);
@@ -491,20 +503,21 @@ export function createAuthorization(parts: { boundary: string }) {
   const guardCompletion = (...arguments_: unknown[]) => {
     if (!AUTHENTIC_AUTHORIZATIONS.has(authorization)) throw new Error("not authentic");
     if (!DISPATCHED_AUTHORIZATIONS.has(authorization)) throw new Error("not dispatched");
-    if (COMPLETED_AUTHORIZATIONS.has(authorization)) throw new Error("already completed");
-    COMPLETED_AUTHORIZATIONS.add(authorization);
-    const callback = arguments_[0];
-    if (
-      arguments_.length !== 1 ||
-      typeof callback !== "function" ||
-      utilTypes.isProxy(callback) ||
-      utilTypes.isAsyncFunction(callback) ||
-      utilTypes.isGeneratorFunction(callback) ||
-      Object.prototype.toString.call(callback) !== "[object Function]"
-    ) throw new Error("completion callback must be synchronous");
-    return guardBoundaryCompletion(callback);
+    if (COMPLETION_GUARDED_AUTHORIZATIONS.has(authorization)) throw new Error("already completed");
+    COMPLETION_GUARDED_AUTHORIZATIONS.add(authorization);
+    const completion = arguments_[0];
+    const message = "completion callback must be synchronous";
+    if (arguments_.length !== 1 || !isSynchronousCallback(completion)) throw new Error(message);
+    let callbackResult: unknown;
+    const facts = guardBoundaryCompletion((facts) => {
+      callbackResult = completion(facts);
+    });
+    assertSynchronousResult(callbackResult, message);
+    return facts;
   };
-  if (parts.boundary === "research_collection") {
+  if (parts.boundary === "watchlist_import") {
+    properties.consumeAndCommit = { enumerable: true, value: consumeAndCommit };
+  } else if (parts.boundary === "research_collection") {
     properties.consumeAndDispatch = { value: consumeAndDispatch };
     properties.guardCompletion = { value: guardCompletion };
   } else {
@@ -514,7 +527,8 @@ export function createAuthorization(parts: { boundary: string }) {
   return authorization;
 }
 declare const consumeAndDispatch: unknown;
-declare function guardBoundaryCompletion(callback: unknown): unknown;
+declare const consumeAndCommit: unknown;
+declare function guardBoundaryCompletion(callback: (facts: unknown) => void): unknown;
 void CONSUMED_AUTHORIZATIONS;
 void DISPATCHED_AUTHORIZATIONS;
 `,
@@ -1243,8 +1257,53 @@ test("pins the shared fail-closed profile lease and blocks disconnected core byp
     requestedDatabasePath,
     requestedResearchDatabasePath,
     requestedProductionDataDirectory,
+    requestedWatchlistDatabasePath,
   );`,
       to: "  void requestedProductionDataDirectory;",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "    resolveProspectiveStoragePath(requestedWatchlistDatabasePath),",
+      to: "    requestedWatchlistDatabasePath,",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: `    productionDataDirectory,
+    prospectiveWatchlistPath,
+  );`,
+      to: `    productionDataDirectory,
+    requestedWatchlistDatabasePath,
+  );`,
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "      resolveDatabaseIdentity(prospectiveWatchlistPath),",
+      to: "      Promise.resolve({ path: prospectiveWatchlistPath }),",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: `      productionDataDirectory,
+      watchlistIdentity.path,
+    );`,
+      to: `      productionDataDirectory,
+      prospectiveWatchlistPath,
+    );`,
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "    assertSeparateDatabases(runtimeIdentity, watchlistIdentity);",
+      to: "    void watchlistIdentity;",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "    assertSeparateDatabases(researchIdentity, watchlistIdentity);",
+      to: "    void watchlistIdentity;",
       failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
     },
     {
@@ -1514,6 +1573,15 @@ test("rejects policy, executable domain, adapters, wallet, payment, and test tra
       expectFailure(root, pattern);
     });
   }
+});
+
+test("keeps the shared X operator graph isolated from the Stage 0 watchlist", () => {
+  withFixture((root) => {
+    write(root, "packages/watchlist/package.json", manifest("@rsi/watchlist"));
+    write(root, "packages/watchlist/src/index.ts", "export const watchlist = true;\n");
+    appendFileSync(join(root, "apps/operator/src/server.ts"), 'import "@rsi/watchlist";\n');
+    expectFailure(root, /unreviewed workspace import @rsi\/watchlist/u);
+  });
 });
 
 test("rejects reuse of other CLI production, demo, or offline entrypoints", () => {
@@ -1888,7 +1956,7 @@ test("rejects completion-guard and launched-request cleanup bypasses", () => {
     replace(
       root,
       "packages/runtime/src/boundary-authorization.ts",
-      "COMPLETED_AUTHORIZATIONS.add(authorization);",
+      "COMPLETION_GUARDED_AUTHORIZATIONS.add(authorization);",
       "void authorization;",
     );
     expectFailure(
@@ -1909,8 +1977,9 @@ test("rejects completion-guard and launched-request cleanup bypasses", () => {
     );
   });
   for (const validation of [
-    "      utilTypes.isProxy(callback) ||\n",
-    "      utilTypes.isAsyncFunction(callback) ||\n",
+    "    !utilTypes.isProxy(value) &&\n",
+    "    !utilTypes.isAsyncFunction(value) &&\n",
+    "    !utilTypes.isGeneratorFunction(value) &&\n",
   ]) {
     withFixture((root) => {
       replace(root, "packages/runtime/src/boundary-authorization.ts", validation, "");
@@ -1920,6 +1989,30 @@ test("rejects completion-guard and launched-request cleanup bypasses", () => {
       );
     });
   }
+  withFixture((root) => {
+    replace(
+      root,
+      "packages/runtime/src/boundary-authorization.ts",
+      "      callbackResult = completion(facts);",
+      "      void completion;",
+    );
+    expectFailure(
+      root,
+      /completion guarding authentic, terminal, synchronous, and proxy-resistant/u,
+    );
+  });
+  withFixture((root) => {
+    replace(
+      root,
+      "packages/runtime/src/boundary-authorization.ts",
+      "    assertSynchronousResult(callbackResult, message);",
+      "    void callbackResult;",
+    );
+    expectFailure(
+      root,
+      /completion guarding authentic, terminal, synchronous, and proxy-resistant/u,
+    );
+  });
   withFixture((root) => {
     replace(
       root,

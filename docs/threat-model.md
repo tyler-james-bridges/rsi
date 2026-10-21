@@ -18,14 +18,18 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 - No raw external content reaches a signer or transaction builder.
 - Every Stage 0 process boot persists a fresh `STOPPED` revision. A prior `RESEARCH` or
   `PROPOSE_ONLY` mode is audit history and never resumes authority.
-- Stage 0 exposes only one-shot research-collection, offline-watchlist-import, and non-executable proposal-persistence
-  authorizations. Payment, signing, policy approval, execution, broadcast, and publication are
-  permanently denied and absent from the active operator dependency graph.
+- Stage 0 exposes only one-shot research-collection, offline-watchlist-import, and non-executable
+  proposal-persistence authorizations. Payment, signing, policy approval, execution, broadcast,
+  and publication are permanently denied and absent from the active operator dependency graph.
 - Offline watchlist imports accept only a strict collection projection, not raw provider responses.
-  Operator-supplied timestamps and contract groups remain unverified facts. Confirmation binds the
-  digest, predecessor, process, and revision. The `watchlist_import` commit holds the runtime write
-  lock against STOP and requires a previously committed authorization receipt. History replay
-  detects hash and semantic corruption, but not replacement with a complete older database.
+  Operator-supplied timestamps and contract groups remain unverified facts. The stateless preview
+  binding is also untrusted and does not prove human review. Confirmation checks its internal and
+  current-state consistency. The runtime permit is the authorization boundary. The
+  `watchlist_import` commit holds the runtime write lock against STOP and checkpoints authority after
+  acquiring the watchlist write lock. History replay validates the stored authorization shape,
+  action binding, sequence, and uniqueness. It does not cross-check the separate runtime database.
+  Replay detects hash and semantic corruption, but it cannot detect a complete older database or a
+  coherent rewrite by a malicious same-user process.
 - Recorded replay scenarios are closed and code-owned, but their names cannot select a verdict.
   Dispositions are derived from extracted evidence, opportunity remains zero, and hostile fixture
   text cannot enter the proposal ledger or operator response.
@@ -68,10 +72,10 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 - Each Stage 1 controller persists sanitized result evidence before raw-capture deletion, then authenticates the exact runtime event, capture event, network closure, and keyed deletion tombstone before returning a receipt. Restart recovery reads storage keys only, has no collector, X bearer, OpenSea or Alchemy API key, or egress dependency, and cannot repeat egress. The Base recovery entry additionally has a statically collectorless and network-free dependency graph.
 - Vault compromise is contained with a dedicated directory, strict permissions, authenticated encryption, per-capture keys, bounded objects, and filesystem identity checks. A same-user process holding a live wrapping key can still decrypt active data, so production deployment requires process and Keychain isolation.
 - SQLite's internal hash chain cannot detect replacement with another internally consistent database. Production state paths are therefore code-owned, and each provider's create-once Keychain marker must be claimed before its credential is revealed. RSI contains no marker update, reset, or delete path. This protects against ordinary alternate-database replay, not a malicious same-user process that can alter code or Keychain state. Signed checkpoints plus an independently retained hash or immutable remote receipt can prove a pinned suffix. Remote retention is an optional software control with scoped credentials; same-Mac restore drills and one durable authorization writer remain required before authority grows.
-- The Stage 0 runtime and research ledger deliberately use separate SQLite files. Each detects
-  invalid rows, edits, reordering, tail deletion, foreign aggregates, and semantically invalid
-  hash-valid events, but neither claims rollback protection against replacement by a complete older
-  internally consistent file without an independently retained head.
+- The Stage 0 runtime, research ledger, and watchlist use separate SQLite files. Each detects invalid
+  rows, edits, reordering, tail deletion, foreign aggregates, and semantically invalid hash-valid
+  events. None claims rollback protection against a complete older file or a coherent same-user
+  rewrite without an independently retained head.
 - Recovery archives are intentionally split into state evidence, sanitized event history, and a signed release bundle. No single component may claim complete restoration, and lifecycle acceptance records all three exact archive hashes.
 
 ## Tool activation

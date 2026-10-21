@@ -1,19 +1,19 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { link, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 
 import { afterEach, describe, expect, it } from "vitest";
-import { OfflineBaseWatchlist } from "@rsi/watchlist";
-import { parseOperatorRuntimeSnapshot } from "@rsi/operator";
 import {
+  OfflineBaseWatchlist,
   parseWatchlistPreview,
   parseWatchlistResult,
   parseWatchlistView,
-} from "../../operator/src/watchlist.js";
+} from "@rsi/watchlist";
+import { parseOperatorRuntimeSnapshot } from "@rsi/operator";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const entry = fileURLToPath(new URL("../src/operator.ts", import.meta.url));
@@ -126,6 +126,13 @@ describe("fresh-process offline watchlist", () => {
     expect(
       (
         await post(origin, "/api/watchlist/preview", {
+          input: input("9999-12-30T00:00:00.000Z"),
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await post(origin, "/api/watchlist/preview", {
           input: { ...input(), url: "https://evil.invalid" },
         })
       ).status,
@@ -224,4 +231,30 @@ describe("fresh-process offline watchlist", () => {
       await expect(launch(kind === "path" ? ["--watchlist-db", runtime] : [])).rejects.toThrow();
     },
   );
+
+  it("separates new case-fold aliases before opening SQLite", async () => {
+    directory = await mkdtemp(join(tmpdir(), "rsi-watchlist-casefold-"));
+    const probe = join(directory, "CaseProbe");
+    await writeFile(probe, "probe");
+    let caseInsensitive = false;
+    try {
+      const original = await stat(probe);
+      const folded = await stat(join(directory, "caseprobe"));
+      caseInsensitive = original.dev === folded.dev && original.ino === folded.ino;
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    }
+
+    const runtimePath = join(directory, "Research.sqlite");
+    const researchPath = join(directory, "research.sqlite");
+    const startup = launch(["--db", runtimePath, "--research-db", researchPath]);
+    if (caseInsensitive) {
+      await expect(startup).rejects.toThrow("RSI Stage 0 operator startup was refused.");
+      const placeholder = await stat(runtimePath);
+      expect(placeholder.size).toBe(0);
+      if (process.platform !== "win32") expect(placeholder.mode & 0o077).toBe(0);
+    } else {
+      await expect(startup).resolves.toMatchObject({ runtimeMode: "STOPPED" });
+    }
+  });
 });
