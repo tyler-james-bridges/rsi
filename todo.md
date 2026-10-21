@@ -30,7 +30,7 @@
 - [x] Verify on the matching surface. Fresh subprocess HTTP flow and real Chrome file selection, preview, confirmation, and STOP verified.
 - [x] Rebase into small, ordered commits. Stack follow-ups. Pure model, authorized history, then operator integration.
 - [x] If the design is contested, `interrogate` before shipping. Three-model review complete.
-- [ ] Run Opening a PR after final verification.
+- [x] Run Opening a PR after final verification.
 
 ### Architect phases
 
