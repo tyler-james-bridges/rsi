@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./base-rpc-anchor": "./src/base-rpc-anchor.ts",
     "./legacy-opensea-fixtures": "./src/opensea.ts",
-    "./opensea-trending": "./src/opensea-trending.ts"
+    "./opensea-trending": "./src/opensea-trending.ts",
+    "./opensea-trending-version": "./src/opensea-trending-version.ts"
   },
   "scripts": {
     "format:check": "prettier --check .",

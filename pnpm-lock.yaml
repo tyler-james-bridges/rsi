@@ -5,6 +5,20 @@ settings:
   excludeLinksFromLockfile: false
 
 importers:
+  packages/watchlist:
+    dependencies:
+      "@rsi/runtime":
+        specifier: workspace:*
+        version: link:../runtime
+      "@rsi/source-contracts":
+        specifier: workspace:*
+        version: link:../source-contracts
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
   .:
     devDependencies:
       "@types/node":
