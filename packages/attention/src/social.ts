@@ -61,7 +61,7 @@ export function sanitizeSocialPost(input: unknown): SanitizedSocialPostFacts {
   const post = parsed.data;
   const normalized = normalizeSocialText(post.text);
   const mentionedAddresses = uniqueSorted(
-    [...normalized.matchAll(/(?<![0-9a-f])0x[0-9a-f]{40}(?![0-9a-f])/giu)].map((match) =>
+    [...normalized.matchAll(/(?<![\p{L}\p{N}_])0x[0-9a-f]{40}(?![\p{L}\p{N}_])/giu)].map((match) =>
       match[0].toLowerCase(),
     ),
   );

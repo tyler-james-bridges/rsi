@@ -1,17 +1,11 @@
 export { assessRecordedAttention, type AssessRecordedAttentionInput } from "./assess.js";
 export {
-  recordedBundleId,
-  recordedRefreshId,
-  sanitizeParsedRecordedAttentionBundle,
-  sanitizeRecordedAttentionBundle,
-} from "./sanitize.js";
-export { normalizeSocialText, sanitizeSocialPost } from "./social.js";
-export {
   ATTENTION_NOTES,
   ATTENTION_POLICY_VERSION,
   BASE_CHAIN_ID,
   DIAGNOSTIC_CODES,
   HARD_REASONS,
+  MAX_RETAINED_ATTENTION_FACTS,
   MISSING_CHECKS,
   NEXT_ACTIONS,
   RECORDED_ATTENTION_STREAM_ID,
@@ -40,7 +34,6 @@ export {
   RecordedSocialPostSchema,
   RecordedProvenanceSchema,
   RefreshIdSchema,
-  SanitizedRecordedBundleSchema,
   ScorecardSchema,
   SourceSummarySchema,
   WatchReasonSchema,
@@ -66,6 +59,5 @@ export {
   type RecordedAttentionBundleV1,
   type RecordedAttentionFactsV1,
   type RefreshId,
-  type SanitizedRecordedBundleV1,
   type WatchReason,
 } from "./schemas.js";

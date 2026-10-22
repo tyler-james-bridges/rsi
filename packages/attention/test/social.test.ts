@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sanitizeSocialPost } from "../src/index.js";
+import { sanitizeSocialPost } from "../src/social.js";
 import { ADDRESS_A } from "./fixtures.js";
 
 describe("recorded social sanitization", () => {
@@ -40,12 +40,26 @@ describe("recorded social sanitization", () => {
 
   it("matches only complete hexadecimal addresses", () => {
     const exact = sanitizeSocialPost({ id: "1", text: `Mention ${ADDRESS_A}.` });
-    const prefixed = sanitizeSocialPost({ id: "2", text: `Mention f${ADDRESS_A}.` });
-    const suffixed = sanitizeSocialPost({ id: "3", text: `Mention ${ADDRESS_A}f.` });
 
     expect(exact.mentionedAddresses).toEqual([ADDRESS_A]);
-    expect(prefixed.mentionedAddresses).toEqual([]);
-    expect(suffixed.mentionedAddresses).toEqual([]);
+    expect(
+      sanitizeSocialPost({ id: "2", text: `Mention (${ADDRESS_A}), then research.` })
+        .mentionedAddresses,
+    ).toEqual([ADDRESS_A]);
+  });
+
+  it.each([
+    ["ASCII hexadecimal prefix", `f${ADDRESS_A}`],
+    ["ASCII nonhex prefix", `g${ADDRESS_A}`],
+    ["ASCII nonhex suffix", `${ADDRESS_A}g`],
+    ["underscore prefix", `_${ADDRESS_A}`],
+    ["underscore suffix", `${ADDRESS_A}_`],
+    ["Greek prefix", `λ${ADDRESS_A}`],
+    ["Cyrillic suffix", `${ADDRESS_A}я`],
+    ["Unicode number prefix", `١${ADDRESS_A}`],
+    ["Unicode number suffix", `${ADDRESS_A}١`],
+  ])("does not extract an address with %s adjacency", (_label, text) => {
+    expect(sanitizeSocialPost({ id: "1", text }).mentionedAddresses).toEqual([]);
   });
 
   it("clusters NFKC, case, and whitespace copies while keeping post IDs distinct", () => {

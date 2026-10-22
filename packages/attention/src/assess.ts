@@ -1,7 +1,11 @@
 import { hashCanonical } from "./hash.js";
 import { contractsOverlap, deriveCandidateIdentity, type SanitizedCandidate } from "./identity.js";
 import { compareStrings, toJsonValue } from "./json-types.js";
-import { recordedBundleId, recordedRefreshId } from "./sanitize.js";
+import {
+  recordedBundleId,
+  recordedRefreshId,
+  sanitizeParsedRecordedAttentionBundle,
+} from "./sanitize.js";
 import {
   ATTENTION_NOTES,
   ATTENTION_POLICY_VERSION,
@@ -12,6 +16,7 @@ import {
   EvidenceIdSchema,
   HARD_REASONS,
   MAX_BASE_BLOCK_AGE_MS,
+  MAX_CANONICAL_TIME_MILLISECONDS,
   MISSING_CHECKS,
   RECORDED_ATTENTION_STREAM_ID,
   RecordedAttentionAssessmentResultSchema,
@@ -19,11 +24,14 @@ import {
   SOCIAL_VALIDITY_MS,
   WATCH_REASONS,
   AssessRecordedAttentionInputSchema,
+  AssessStoredRecordedAttentionInputSchema,
   AttentionInputError,
   assertPlainAttentionData,
   deepFreeze,
   emptyRecordedAttentionFacts,
   type AttentionNote,
+  type AssessRecordedAttentionInputV1,
+  type AssessStoredRecordedAttentionInputV1,
   type BaseCollectionIdentityV1,
   type CollectionAttentionAssessmentV1,
   type CollectionAttentionRowV1,
@@ -82,11 +90,8 @@ interface BaseContextResult {
   readonly usable: boolean;
 }
 
-export interface AssessRecordedAttentionInput {
-  readonly sourceFacts: SanitizedRecordedBundleV1;
-  readonly evaluatedAt: string;
-  readonly priorFacts?: RecordedAttentionFactsV1;
-}
+export type AssessRecordedAttentionInput = AssessRecordedAttentionInputV1;
+export type AssessStoredRecordedAttentionInput = AssessStoredRecordedAttentionInputV1;
 
 export function assessRecordedAttention(
   input: AssessRecordedAttentionInput,
@@ -94,9 +99,32 @@ export function assessRecordedAttention(
   assertPlainAttentionData(input);
   const parsedInput = AssessRecordedAttentionInputSchema.safeParse(input);
   if (!parsedInput.success) throw new AttentionInputError();
-  const sourceFacts = parsedInput.data.sourceFacts;
-  const priorFacts = parsedInput.data.priorFacts ?? emptyRecordedAttentionFacts();
-  const evaluatedAt = parsedInput.data.evaluatedAt;
+  return assessValidatedRecordedAttention({
+    sourceFacts: sanitizeParsedRecordedAttentionBundle(parsedInput.data.recordedBundle),
+    evaluatedAt: parsedInput.data.evaluatedAt,
+    priorFacts: parsedInput.data.priorFacts ?? emptyRecordedAttentionFacts(),
+  });
+}
+
+export function assessStoredRecordedAttention(
+  input: AssessStoredRecordedAttentionInput,
+): RecordedAttentionAssessmentResultV1 {
+  assertPlainAttentionData(input);
+  const parsedInput = AssessStoredRecordedAttentionInputSchema.safeParse(input);
+  if (!parsedInput.success) throw new AttentionInputError();
+  return assessValidatedRecordedAttention({
+    sourceFacts: parsedInput.data.sourceFacts,
+    evaluatedAt: parsedInput.data.evaluatedAt,
+    priorFacts: parsedInput.data.priorFacts ?? emptyRecordedAttentionFacts(),
+  });
+}
+
+function assessValidatedRecordedAttention(input: {
+  readonly sourceFacts: SanitizedRecordedBundleV1;
+  readonly evaluatedAt: string;
+  readonly priorFacts: RecordedAttentionFactsV1;
+}): RecordedAttentionAssessmentResultV1 {
+  const { sourceFacts, priorFacts, evaluatedAt } = input;
   const evaluatedMilliseconds = Date.parse(evaluatedAt);
   const bundleId = recordedBundleId(sourceFacts);
   const refreshId = recordedRefreshId(bundleId);
@@ -382,11 +410,7 @@ function analyzeSocial(input: {
     const validUntil = addMilliseconds(firstSeenAt, SOCIAL_VALIDITY_MS);
     summaryExpiries.push(Date.parse(validUntil));
 
-    const affectedIds = new Set<CollectionId>(matchedCollectionIds);
-    if (contentConflict && priorBinding !== undefined) {
-      for (const collectionId of priorBinding.matchedCollectionIds) affectedIds.add(collectionId);
-    }
-    for (const collectionId of affectedIds) {
+    for (const collectionId of matchedCollectionIds) {
       const state = currentById.get(collectionId);
       if (state === undefined) continue;
       if (contentConflict) state.hardReasons.add("POST_CONTENT_CONFLICT");
@@ -681,11 +705,11 @@ function buildDepartureRows(input: {
   return previous.rows
     .filter((row) => !currentIds.has(row.identity.collectionId))
     .map((row) => {
-      const hardReasons = ordered(row.hardReasons, HARD_REASONS);
-      const outcome =
-        hardReasons.length > 0
-          ? { kind: "rejected" as const, reasons: hardReasons, priority: null }
-          : { kind: "watch" as const, reasons: ["LEFT_WINDOW" as const], priority: 0 };
+      const outcome = {
+        kind: "watch" as const,
+        reasons: ["LEFT_WINDOW" as const],
+        priority: 0,
+      };
       const notes = new Set<AttentionNote>(["NO_SAFE_VERDICT"]);
       if (input.sourceFacts.marketplace.hasNextPage) notes.add("PARTIAL_MARKETPLACE_WINDOW");
       if (input.sourceFacts.x.kind === "recorded_posts" && input.sourceFacts.x.hasNextPage) {
@@ -701,7 +725,7 @@ function buildDepartureRows(input: {
         scorecard: null,
         evidenceIds: [row.evidenceId],
         assessedAt: input.evaluatedAt,
-        expiresAt: input.sourceFacts.marketplace.validUntil,
+        expiresAt: previous.validUntil,
         provenance: input.provenance,
         missingChecks: baselineMissingChecks(input.baseUsable, false),
         notes: ordered([...notes], ATTENTION_NOTES),
@@ -792,7 +816,6 @@ function advanceFacts(input: {
           slug: state.candidate.slug,
           rank: state.candidate.rank,
           evidenceId: input.rankEvidenceId,
-          hardReasons: ordered([...state.hardReasons], HARD_REASONS),
         };
       }),
     };
@@ -803,24 +826,14 @@ function advanceFacts(input: {
       (latestAdmittedXAcquiredAt === null ||
         Date.parse(input.sourceFacts.x.acquiredAt) >= Date.parse(latestAdmittedXAcquiredAt))
     ) {
-      const usableIds = new Set(
-        usableStates
-          .map((state) => state.identity?.collectionId)
-          .filter((collectionId) => collectionId !== undefined),
-      );
+      let admittedPostCount = 0;
       for (const social of input.socialStates) {
-        if (
-          social.attributableCollectionId === null ||
-          !usableIds.has(social.attributableCollectionId) ||
-          social.contentConflict
-        ) {
-          continue;
-        }
+        if (social.contentConflict) continue;
+        admittedPostCount += 1;
         if (!postBindings.has(social.post.postIdHash)) {
           postBindings.set(social.post.postIdHash, {
             postIdHash: social.post.postIdHash,
             contentClusterId: social.post.contentClusterId,
-            matchedCollectionIds: [social.attributableCollectionId],
           });
         }
         if (!clusterFirstSeen.has(social.post.contentClusterId)) {
@@ -830,11 +843,13 @@ function advanceFacts(input: {
           });
         }
       }
-      latestAdmittedXAcquiredAt = input.sourceFacts.x.acquiredAt;
+      if (admittedPostCount > 0) {
+        latestAdmittedXAcquiredAt = input.sourceFacts.x.acquiredAt;
+      }
     }
   }
 
-  return RecordedAttentionFactsSchema.parse({
+  const nextFacts = RecordedAttentionFactsSchema.safeParse({
     schemaVersion: 1,
     streamId: RECORDED_ATTENTION_STREAM_ID,
     headRefreshId: input.assessment.refreshId,
@@ -855,6 +870,8 @@ function advanceFacts(input: {
       compareStrings(left.contentClusterId, right.contentClusterId),
     ),
   });
+  if (!nextFacts.success) throw new AttentionInputError();
+  return nextFacts.data;
 }
 
 function baselineMissingChecks(baseUsable: boolean, hasLink: boolean): MissingCheck[] {
@@ -934,7 +951,11 @@ function evidenceId(domain: string, value: unknown): EvidenceId {
 }
 
 function addMilliseconds(timestamp: string, milliseconds: number): string {
-  return new Date(Date.parse(timestamp) + milliseconds).toISOString();
+  const result = Date.parse(timestamp) + milliseconds;
+  if (!Number.isFinite(result) || result > MAX_CANONICAL_TIME_MILLISECONDS) {
+    throw new AttentionInputError();
+  }
+  return new Date(result).toISOString();
 }
 
 function ordered<T extends string>(values: readonly T[], order: readonly T[]): T[] {

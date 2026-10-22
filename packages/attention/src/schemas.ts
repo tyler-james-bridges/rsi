@@ -12,6 +12,10 @@ export const MARKETPLACE_VALIDITY_MS = 120_000;
 export const SOCIAL_VALIDITY_MS = 7_200_000;
 export const BASE_CONTEXT_VALIDITY_MS = 120_000;
 export const MAX_BASE_BLOCK_AGE_MS = 7_200_000;
+export const MAX_RETAINED_ATTENTION_FACTS = 1_000;
+export const MAX_CANONICAL_TIME_MILLISECONDS = 8_640_000_000_000_000;
+
+const MAX_PLAIN_ATTENTION_OBJECTS = MAX_RETAINED_ATTENTION_FACTS * 4 + 256;
 
 export const HARD_REASONS = [
   "POST_CONTENT_CONFLICT",
@@ -116,6 +120,9 @@ export const CanonicalTimeSchema = z
     const milliseconds = Date.parse(value);
     return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
   }, "expected canonical UTC milliseconds");
+const MarketplaceSourceTimeSchema = sourceTimeSchema(MARKETPLACE_VALIDITY_MS);
+const SocialSourceTimeSchema = sourceTimeSchema(SOCIAL_VALIDITY_MS);
+const BaseSourceTimeSchema = sourceTimeSchema(BASE_CONTEXT_VALIDITY_MS);
 export const AddressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
 export const LowerAddressSchema = z.string().regex(/^0x[0-9a-f]{40}$/);
 export const ChainIdSchema = z.string().regex(/^(0|[1-9][0-9]{0,9})$/);
@@ -153,7 +160,7 @@ const RecordedXSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("absent") }),
   z.strictObject({
     kind: z.literal("recorded_posts"),
-    acquiredAt: CanonicalTimeSchema,
+    acquiredAt: SocialSourceTimeSchema,
     hasNextPage: z.boolean(),
     posts: z.array(RecordedSocialPostSchema).max(10),
   }),
@@ -164,7 +171,7 @@ const RecordedBaseSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("reported_finalized_head"),
     chainId: ChainIdSchema,
-    acquiredAt: CanonicalTimeSchema,
+    acquiredAt: BaseSourceTimeSchema,
     blockTimestamp: CanonicalTimeSchema,
   }),
 ]);
@@ -175,7 +182,7 @@ export const RecordedAttentionBundleSchema = z
     kind: z.literal("recorded_collection_attention"),
     marketplace: z.strictObject({
       kind: z.literal("recorded_rank_window"),
-      acquiredAt: CanonicalTimeSchema,
+      acquiredAt: MarketplaceSourceTimeSchema,
       validUntil: CanonicalTimeSchema,
       hasNextPage: z.boolean(),
       candidates: z.array(RecordedMarketplaceCandidateSchema).max(10),
@@ -251,7 +258,7 @@ export const SanitizedRecordedBundleSchema = z
     kind: z.literal("sanitized_recorded_collection_attention"),
     marketplace: z.strictObject({
       kind: z.literal("recorded_rank_window"),
-      acquiredAt: CanonicalTimeSchema,
+      acquiredAt: MarketplaceSourceTimeSchema,
       validUntil: CanonicalTimeSchema,
       hasNextPage: z.boolean(),
       candidates: z.array(SanitizedCandidateSchema).max(10),
@@ -260,7 +267,7 @@ export const SanitizedRecordedBundleSchema = z
       z.strictObject({ kind: z.literal("absent") }),
       z.strictObject({
         kind: z.literal("recorded_posts"),
-        acquiredAt: CanonicalTimeSchema,
+        acquiredAt: SocialSourceTimeSchema,
         hasNextPage: z.boolean(),
         posts: z.array(SanitizedPostSchema).max(10),
       }),
@@ -478,18 +485,17 @@ export const AssessmentRowSchema = z
           message: "left-window rows have no current score or comparison",
         });
       }
-      if (row.outcome.kind === "review") {
+      if (
+        row.outcome.kind !== "watch" ||
+        row.outcome.priority !== 0 ||
+        row.outcome.reasons.length !== 1 ||
+        row.outcome.reasons[0] !== "LEFT_WINDOW"
+      ) {
         context.addIssue({
           code: "custom",
           path: ["outcome"],
-          message: "departures cannot review",
+          message: "departures are closed left-window observations",
         });
-      }
-      if (
-        row.outcome.kind === "watch" &&
-        (!row.outcome.reasons.includes("LEFT_WINDOW") || row.outcome.priority !== 0)
-      ) {
-        addCustomIssue(context, ["outcome"]);
       }
     } else if (row.scorecard === null) {
       context.addIssue({
@@ -556,6 +562,7 @@ export const AssessmentRowSchema = z
     }
     if (
       Date.parse(row.expiresAt) <= Date.parse(row.assessedAt) &&
+      row.presence.kind !== "left_window" &&
       (row.outcome.kind !== "rejected" || !row.outcome.reasons.includes("MARKETPLACE_STALE"))
     ) {
       addCustomIssue(context, ["expiresAt"]);
@@ -566,7 +573,7 @@ export type CollectionAttentionRowV1 = z.infer<typeof AssessmentRowSchema>;
 
 export const SourceSummarySchema = z.strictObject({
   marketplace: z.strictObject({
-    acquiredAt: CanonicalTimeSchema,
+    acquiredAt: MarketplaceSourceTimeSchema,
     validUntil: CanonicalTimeSchema,
     candidateCount: z.number().int().min(0).max(10),
     hasNextPage: z.boolean(),
@@ -577,7 +584,7 @@ export const SourceSummarySchema = z.strictObject({
     z.strictObject({ kind: z.literal("absent") }),
     z.strictObject({
       kind: z.literal("observed"),
-      acquiredAt: CanonicalTimeSchema,
+      acquiredAt: SocialSourceTimeSchema,
       validUntil: CanonicalTimeSchema,
       postCount: z.number().int().min(0).max(10),
       usableBoundClusterCount: z.number().int().min(0).max(10),
@@ -589,13 +596,13 @@ export const SourceSummarySchema = z.strictObject({
     z.strictObject({ kind: z.literal("invalid") }),
     z.strictObject({
       kind: z.literal("usable"),
-      acquiredAt: CanonicalTimeSchema,
+      acquiredAt: BaseSourceTimeSchema,
       validUntil: CanonicalTimeSchema,
       blockTimestamp: CanonicalTimeSchema,
     }),
     z.strictObject({
       kind: z.literal("stale"),
-      acquiredAt: CanonicalTimeSchema,
+      acquiredAt: BaseSourceTimeSchema,
       validUntil: CanonicalTimeSchema,
       blockTimestamp: CanonicalTimeSchema,
     }),
@@ -666,12 +673,11 @@ const PriorRankRowSchema = z.strictObject({
   slug: SlugSchema,
   rank: z.number().int().min(1).max(10),
   evidenceId: EvidenceIdSchema,
-  hardReasons: z.array(HardReasonSchema).max(HARD_REASONS.length),
 });
 
 const PriorUsableRankWindowSchema = z.strictObject({
   evidenceId: EvidenceIdSchema,
-  acquiredAt: CanonicalTimeSchema,
+  acquiredAt: MarketplaceSourceTimeSchema,
   validUntil: CanonicalTimeSchema,
   rows: z.array(PriorRankRowSchema).max(10),
 });
@@ -679,12 +685,11 @@ const PriorUsableRankWindowSchema = z.strictObject({
 const PostBindingSchema = z.strictObject({
   postIdHash: PostIdHashSchema,
   contentClusterId: ContentClusterIdSchema,
-  matchedCollectionIds: z.array(CollectionIdSchema).max(10),
 });
 
 const ClusterFirstSeenSchema = z.strictObject({
   contentClusterId: ContentClusterIdSchema,
-  firstSeenAt: CanonicalTimeSchema,
+  firstSeenAt: SocialSourceTimeSchema,
 });
 
 export const RecordedAttentionFactsSchema = z
@@ -693,13 +698,21 @@ export const RecordedAttentionFactsSchema = z
     streamId: z.literal(RECORDED_ATTENTION_STREAM_ID),
     headRefreshId: RefreshIdSchema.nullable(),
     latestUsableRankWindow: PriorUsableRankWindowSchema.nullable(),
-    latestAdmittedXAcquiredAt: CanonicalTimeSchema.nullable(),
-    knownCollections: z.array(KnownCollectionSchema).max(10_000),
-    slugAssociations: z.array(SlugAssociationSchema).max(10_000),
-    postBindings: z.array(PostBindingSchema).max(10_000),
-    clusterFirstSeen: z.array(ClusterFirstSeenSchema).max(10_000),
+    latestAdmittedXAcquiredAt: SocialSourceTimeSchema.nullable(),
+    knownCollections: z.array(KnownCollectionSchema).max(MAX_RETAINED_ATTENTION_FACTS),
+    slugAssociations: z.array(SlugAssociationSchema).max(MAX_RETAINED_ATTENTION_FACTS),
+    postBindings: z.array(PostBindingSchema).max(MAX_RETAINED_ATTENTION_FACTS),
+    clusterFirstSeen: z.array(ClusterFirstSeenSchema).max(MAX_RETAINED_ATTENTION_FACTS),
   })
   .superRefine((facts, context) => {
+    const retainedFactCount =
+      facts.knownCollections.length +
+      facts.slugAssociations.length +
+      facts.postBindings.length +
+      facts.clusterFirstSeen.length;
+    if (retainedFactCount > MAX_RETAINED_ATTENTION_FACTS) {
+      addCustomIssue(context, []);
+    }
     const knownIds = facts.knownCollections.map((known) => known.identity.collectionId);
     if (!isUniqueSortedStrings(knownIds)) addCustomIssue(context, ["knownCollections"]);
     const knownSet = new Set(knownIds);
@@ -714,16 +727,35 @@ export const RecordedAttentionFactsSchema = z
     }
     const postIds = facts.postBindings.map((binding) => binding.postIdHash);
     if (!isUniqueSortedStrings(postIds)) addCustomIssue(context, ["postBindings"]);
-    facts.postBindings.forEach((binding, index) => {
-      if (
-        !isUniqueSortedStrings(binding.matchedCollectionIds) ||
-        binding.matchedCollectionIds.some((collectionId) => !knownSet.has(collectionId))
-      ) {
-        addCustomIssue(context, ["postBindings", index]);
-      }
-    });
     const clusterIds = facts.clusterFirstSeen.map((cluster) => cluster.contentClusterId);
     if (!isUniqueSortedStrings(clusterIds)) addCustomIssue(context, ["clusterFirstSeen"]);
+    const retainedClusterIds = new Set(clusterIds);
+    const referencedClusterIds = new Set(
+      facts.postBindings.map((binding) => binding.contentClusterId),
+    );
+    facts.postBindings.forEach((binding, index) => {
+      if (!retainedClusterIds.has(binding.contentClusterId)) {
+        addCustomIssue(context, ["postBindings", index, "contentClusterId"]);
+      }
+    });
+    facts.clusterFirstSeen.forEach((cluster, index) => {
+      if (!referencedClusterIds.has(cluster.contentClusterId)) {
+        addCustomIssue(context, ["clusterFirstSeen", index, "contentClusterId"]);
+      }
+    });
+    const hasSocialIntegrityFacts =
+      facts.postBindings.length > 0 || facts.clusterFirstSeen.length > 0;
+    if ((facts.latestAdmittedXAcquiredAt !== null) !== hasSocialIntegrityFacts) {
+      addCustomIssue(context, ["latestAdmittedXAcquiredAt"]);
+    }
+    if (facts.latestAdmittedXAcquiredAt !== null) {
+      const latestAdmittedXMilliseconds = Date.parse(facts.latestAdmittedXAcquiredAt);
+      facts.clusterFirstSeen.forEach((cluster, index) => {
+        if (Date.parse(cluster.firstSeenAt) > latestAdmittedXMilliseconds) {
+          addCustomIssue(context, ["clusterFirstSeen", index, "firstSeenAt"]);
+        }
+      });
+    }
     if (facts.latestUsableRankWindow !== null) {
       const window = facts.latestUsableRankWindow;
       if (
@@ -739,21 +771,26 @@ export const RecordedAttentionFactsSchema = z
       ) {
         addCustomIssue(context, ["latestUsableRankWindow", "rows"]);
       }
-      window.rows.forEach((row, index) => {
-        if (!isEnumOrdered(row.hardReasons, HARD_REASONS)) {
-          addCustomIssue(context, ["latestUsableRankWindow", "rows", index, "hardReasons"]);
-        }
-      });
     }
   });
 
 export type RecordedAttentionFactsV1 = z.infer<typeof RecordedAttentionFactsSchema>;
 
 export const AssessRecordedAttentionInputSchema = z.strictObject({
+  recordedBundle: RecordedAttentionBundleSchema,
+  evaluatedAt: CanonicalTimeSchema,
+  priorFacts: RecordedAttentionFactsSchema.optional(),
+});
+export type AssessRecordedAttentionInputV1 = z.infer<typeof AssessRecordedAttentionInputSchema>;
+
+export const AssessStoredRecordedAttentionInputSchema = z.strictObject({
   sourceFacts: SanitizedRecordedBundleSchema,
   evaluatedAt: CanonicalTimeSchema,
   priorFacts: RecordedAttentionFactsSchema.optional(),
 });
+export type AssessStoredRecordedAttentionInputV1 = z.infer<
+  typeof AssessStoredRecordedAttentionInputSchema
+>;
 
 export const RecordedAttentionAssessmentResultSchema = z.strictObject({
   assessment: CollectionAttentionAssessmentSchema,
@@ -783,7 +820,7 @@ export function assertPlainAttentionData(value: unknown): void {
     if (utilTypes.isProxy(current) || seen.has(current)) throw new AttentionInputError();
     seen.add(current);
     objectCount += 1;
-    if (objectCount > 4_096) throw new AttentionInputError();
+    if (objectCount > MAX_PLAIN_ATTENTION_OBJECTS) throw new AttentionInputError();
 
     const isArray = Array.isArray(current);
     const expectedPrototype = isArray ? Array.prototype : Object.prototype;
@@ -793,7 +830,10 @@ export function assertPlainAttentionData(value: unknown): void {
     }
 
     const keys = Reflect.ownKeys(current);
-    if (isArray && (current.length > 1_000 || keys.length !== current.length + 1)) {
+    if (
+      isArray &&
+      (current.length > MAX_RETAINED_ATTENTION_FACTS || keys.length !== current.length + 1)
+    ) {
       throw new AttentionInputError();
     }
     for (const key of keys) {
@@ -888,6 +928,13 @@ function isEnumOrdered<T extends string>(values: readonly T[], order: readonly T
   const positions = values.map((value) => order.indexOf(value));
   return positions.every(
     (position, index) => position >= 0 && (index === 0 || positions[index - 1]! < position),
+  );
+}
+
+function sourceTimeSchema(maximumAdditionMilliseconds: number) {
+  return CanonicalTimeSchema.refine(
+    (value) => Date.parse(value) <= MAX_CANONICAL_TIME_MILLISECONDS - maximumAdditionMilliseconds,
+    "source timestamp exceeds derivation range",
   );
 }
 

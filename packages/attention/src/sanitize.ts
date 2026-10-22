@@ -22,7 +22,7 @@ export function sanitizeRecordedAttentionBundle(input: unknown): SanitizedRecord
 export function sanitizeParsedRecordedAttentionBundle(
   bundle: RecordedAttentionBundleV1,
 ): SanitizedRecordedBundleV1 {
-  return sanitizeValidatedRecordedAttentionBundle(parseRecordedAttentionBundle(bundle));
+  return sanitizeValidatedRecordedAttentionBundle(bundle);
 }
 
 function sanitizeValidatedRecordedAttentionBundle(
