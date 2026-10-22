@@ -4,7 +4,7 @@ Signer-blind, local runtime authority for RSI's first production stage. It owns 
 `SqliteEventStore` path and exposes no raw store handle, network transport, credential, signer,
 wallet, payment permit, policy approval, execution adapter, or general-purpose action callback. Its
 bounded callbacks are the one-shot, write-locked `research_collection` dispatch and the
-checkpointed `watchlist_import` commit described below.
+checkpointed local commits described below.
 
 ## Modes
 
@@ -24,8 +24,9 @@ provider clock to the current audit timestamp so clock rollback cannot prevent d
 same-request retry returns the current audit head only while that exact mode revision remains
 current.
 
-`RESEARCH` can authorize `research_collection` and `watchlist_import`. `PROPOSE_ONLY` can authorize
-`research_collection` and `proposal_persist`. Only `RESEARCH` permits `watchlist_import`.
+`RESEARCH` can authorize `research_collection`, `attention_refresh`, and `watchlist_import`.
+`PROPOSE_ONLY` can authorize `research_collection` and `proposal_persist`. Only `RESEARCH` permits
+the two local commit boundaries.
 `policy_approval`, `paid_read`, `wallet_sign`, `execution_adapter`, `transaction_broadcast`, and
 `external_publish` are permanently forbidden by runtime schema v1.
 
@@ -45,11 +46,17 @@ winner; a STOP that commits first prevents the checkpoint callback from running.
 limits dispatch authority; completion grants no new egress and remains bound to that exact durable
 dispatch.
 
-A `watchlist_import` authorization exposes `consumeAndCommit`. It records the allowed receipt,
-holds the runtime write lock across one synchronous commit callback, and requires that callback to
-use exactly one final authority checkpoint after acquiring the watchlist lock. Dispatch or commit
-expiry, clock regression, a mode transition, STOP, restart, duplicate or malformed use, an
-asynchronous or proxied callback, a copied object, or a fabricated object fails closed.
+An `attention_refresh` or `watchlist_import` authorization exposes `consumeAndCommit`. It records
+the allowed receipt, holds the runtime write lock across one synchronous commit callback, and
+requires that callback to use exactly one final authority checkpoint after acquiring its own store
+lock. Dispatch or commit expiry, clock regression, a mode transition, STOP, restart, duplicate or
+malformed use, an asynchronous or proxied callback, a copied object, or a fabricated object fails
+closed.
+
+`verifyPersistedAttentionRefreshReceipt` accepts a strict JSON-round-tripped allowed receipt. It
+matches every receipt field against the exact durable runtime event. Verification reads neither a
+clock nor a current authority mode, so a separate attention store can verify an earlier commit
+after restart without gaining new authority.
 
 The runtime database and `listAudit` DTO contain only closed mode and boundary audit fields.
 External content and research proposals belong in separate stores. `ResearchProposalV1` is

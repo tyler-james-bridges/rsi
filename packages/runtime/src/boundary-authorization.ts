@@ -9,6 +9,7 @@ import type {
   RuntimeBoundaryCompletionFacts,
   RuntimeBoundaryDispatch,
   RuntimeBoundaryReceipt,
+  RuntimeLocalCommitBoundary,
   RuntimeMode,
 } from "./types.js";
 
@@ -62,6 +63,10 @@ function assertSynchronousResult(value: unknown, message: string): void {
   if (isThenableResult(value)) throw new RuntimeValidationError(message);
 }
 
+function isLocalCommitBoundary(boundary: RuntimeBoundary): boundary is RuntimeLocalCommitBoundary {
+  return boundary === "attention_refresh" || boundary === "watchlist_import";
+}
+
 export function createRuntimeBoundaryAuthorization<TBoundary extends RuntimeBoundary>(
   parts: RuntimeBoundaryAuthorizationParts<TBoundary>,
 ): RuntimeBoundaryAuthorization<TBoundary> {
@@ -70,7 +75,7 @@ export function createRuntimeBoundaryAuthorization<TBoundary extends RuntimeBoun
   const consumeAndCommit = (...arguments_: unknown[]): Readonly<RuntimeBoundaryReceipt> => {
     claim();
     const commit = arguments_[0];
-    const message = "Watchlist commit requires one synchronous callback";
+    const message = "Runtime local commit requires one synchronous callback";
     if (arguments_.length !== 1 || !isSynchronousCallback(commit)) {
       throw new RuntimeValidationError(message);
     }
@@ -177,7 +182,7 @@ export function createRuntimeBoundaryAuthorization<TBoundary extends RuntimeBoun
     requestedMode: { enumerable: true, value: parts.requestedMode },
     requestedRevision: { enumerable: true, value: parts.requestedRevision },
   };
-  if (parts.boundary === "watchlist_import") {
+  if (isLocalCommitBoundary(parts.boundary)) {
     properties.consumeAndCommit = { enumerable: true, value: consumeAndCommit };
   } else if (parts.boundary === "research_collection") {
     properties.consumeAndDispatch = { enumerable: true, value: consumeAndDispatch };

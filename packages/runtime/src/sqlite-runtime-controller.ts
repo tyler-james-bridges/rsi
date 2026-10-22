@@ -16,6 +16,7 @@ import {
 } from "./errors.js";
 import {
   OpenRuntimeInputSchema,
+  RuntimeAllowedAttentionRefreshReceiptSchema,
   RuntimeBoundaryAuthorizationInputSchema,
   RuntimeCanonicalTimestampSchema,
   RuntimeBoundaryEventPayloadSchema,
@@ -32,6 +33,7 @@ import {
 import type {
   OpenRuntimeInput,
   RuntimeAuditEvent,
+  RuntimeAllowedAttentionRefreshReceipt,
   RuntimeBoundary,
   RuntimeBoundaryAuthorization,
   RuntimeBoundaryAuthorizationInput,
@@ -42,6 +44,7 @@ import type {
   RuntimeBoundaryDispatch,
   RuntimeBoundaryDecisionReason,
   RuntimeBoundaryReceipt,
+  RuntimeLocalCommitBoundary,
   RuntimeMode,
   RuntimeOpenOptions,
   RuntimeSnapshotV1,
@@ -229,8 +232,12 @@ function isPermanentlyDeniedBoundary(boundary: RuntimeBoundary): boolean {
   return (PERMANENTLY_DENIED_RUNTIME_BOUNDARIES as readonly RuntimeBoundary[]).includes(boundary);
 }
 
+function isLocalCommitBoundary(boundary: RuntimeBoundary): boundary is RuntimeLocalCommitBoundary {
+  return boundary === "attention_refresh" || boundary === "watchlist_import";
+}
+
 function modeAllowsBoundary(mode: RuntimeMode, boundary: RuntimeBoundary): boolean {
-  if (boundary === "watchlist_import") return mode === "RESEARCH";
+  if (isLocalCommitBoundary(boundary)) return mode === "RESEARCH";
   if (boundary === "research_collection") return mode !== "STOPPED";
   if (boundary === "proposal_persist") return mode === "PROPOSE_ONLY";
   return false;
@@ -579,6 +586,42 @@ function boundaryReceipt(
     processInstanceId: payload.checkedProcessInstanceId,
     reason: payload.reason,
   });
+}
+
+function assertExactAttentionRefreshReceipt(
+  event: StoredEvent | undefined,
+  receipt: RuntimeAllowedAttentionRefreshReceipt,
+): void {
+  if (
+    event === undefined ||
+    event.aggregateId !== RUNTIME_AGGREGATE_ID ||
+    event.type !== RUNTIME_BOUNDARY_EVENT_TYPE ||
+    event.idempotencyKey !== `runtime-boundary-v1:${receipt.authorizationId}`
+  ) {
+    throw new RuntimeIntegrityError("Attention refresh receipt has no exact durable event");
+  }
+  const payload = parsedEventPayload(
+    event,
+    RuntimeBoundaryEventPayloadSchema,
+    "Attention refresh boundary event",
+  );
+  const durableReceipt = boundaryReceipt(event, payload);
+  if (
+    durableReceipt.schemaVersion !== receipt.schemaVersion ||
+    durableReceipt.actionId !== receipt.actionId ||
+    durableReceipt.authorizationId !== receipt.authorizationId ||
+    durableReceipt.boundary !== receipt.boundary ||
+    durableReceipt.checkedAt !== receipt.checkedAt ||
+    durableReceipt.decision !== receipt.decision ||
+    durableReceipt.eventHash !== receipt.eventHash ||
+    durableReceipt.eventSequence !== receipt.eventSequence ||
+    durableReceipt.mode !== receipt.mode ||
+    durableReceipt.modeRevision !== receipt.modeRevision ||
+    durableReceipt.processInstanceId !== receipt.processInstanceId ||
+    durableReceipt.reason !== receipt.reason
+  ) {
+    throw new RuntimeIntegrityError("Attention refresh receipt does not match its durable event");
+  }
 }
 
 function appendBoundaryCheck(
@@ -966,7 +1009,7 @@ export class SqliteRuntimeController {
       requestedMode: requested.requestedMode,
       requestedRevision: requested.requestedRevision,
       consume: () => this.#consumeBoundaryAuthorization(requested),
-      consumeAndCommit: (commit) => this.#consumeWatchlistCommit(requested, commit),
+      consumeAndCommit: (commit) => this.#consumeLocalCommit(requested, commit),
       consumeAndDispatch: (dispatch) =>
         this.#consumeBoundaryAuthorizationAndDispatch(requested, dispatch),
       guardCompletion: (completion) => this.#guardBoundaryCompletion(requested, completion),
@@ -976,6 +1019,25 @@ export class SqliteRuntimeController {
   listAudit(): readonly RuntimeAuditEvent[] {
     this.#assertAuthentic();
     return this.#store.withExclusiveTransaction(() => replayRuntimeStore(this.#store).events);
+  }
+
+  verifyPersistedAttentionRefreshReceipt(
+    inputValue: unknown,
+  ): Readonly<RuntimeAllowedAttentionRefreshReceipt> {
+    this.#assertAuthentic();
+    const receipt = parseRuntimeInput(
+      RuntimeAllowedAttentionRefreshReceiptSchema,
+      inputValue,
+      "Persisted attention refresh receipt",
+    );
+    return this.#store.withExclusiveTransaction(() => {
+      replayRuntimeStore(this.#store);
+      const event = this.#store.getByIdempotencyKey(
+        `runtime-boundary-v1:${receipt.authorizationId}`,
+      );
+      assertExactAttentionRefreshReceipt(event, receipt);
+      return Object.freeze(receipt);
+    });
   }
 
   close(): void {
@@ -1009,7 +1071,7 @@ export class SqliteRuntimeController {
     return receipt;
   }
 
-  #consumeWatchlistCommit(
+  #consumeLocalCommit(
     requested: IssuedBoundary,
     commit: RuntimeBoundaryCommit,
   ): Readonly<RuntimeBoundaryReceipt> {
@@ -1017,18 +1079,18 @@ export class SqliteRuntimeController {
     return this.#store.withExclusiveTransaction(() => {
       const replay = replayRuntimeStore(this.#store);
       const state = replay.state;
-      if (state === null || requested.boundary !== "watchlist_import") {
-        throw new RuntimeIntegrityError("Watchlist authority is unavailable");
+      if (state === null || !isLocalCommitBoundary(requested.boundary)) {
+        throw new RuntimeIntegrityError("Runtime local commit authority is unavailable");
       }
       const durable = this.#store.getByIdempotencyKey(
         `runtime-boundary-v1:${requested.authorizationId}`,
       );
       if (durable?.eventHash !== receipt.eventHash)
-        throw new RuntimeIntegrityError("Watchlist receipt changed");
+        throw new RuntimeIntegrityError("Runtime local commit receipt changed");
       const assertFresh = (currentReplay: ReplayResult): string => {
         const currentState = currentReplay.state;
         if (currentState === null)
-          throw new RuntimeIntegrityError("Watchlist authority is unavailable");
+          throw new RuntimeIntegrityError("Runtime local commit authority is unavailable");
         const checkedAt = nonRegressingBoundaryTime(
           readRuntimeClock(this.#clock),
           currentReplay,
@@ -1043,7 +1105,7 @@ export class SqliteRuntimeController {
         ) {
           throw new RuntimeConflictError(
             "STALE_STATE",
-            "Watchlist authority changed before commit",
+            "Runtime local commit authority changed before commit",
           );
         }
         return checkedAt;
@@ -1057,14 +1119,14 @@ export class SqliteRuntimeController {
         if (!checkpointScope.active) {
           throw new RuntimeConflictError(
             "STALE_STATE",
-            "Watchlist checkpoint called outside commit callback",
+            "Runtime local commit checkpoint called outside commit callback",
           );
         }
         if (checkpointScope.state !== "unused") {
           checkpointScope.state = "failed";
           throw new RuntimeConflictError(
             "STALE_STATE",
-            "Watchlist checkpoint must be invoked exactly once",
+            "Runtime local commit checkpoint must be invoked exactly once",
           );
         }
         checkpointScope.state = "failed";
@@ -1075,7 +1137,9 @@ export class SqliteRuntimeController {
       try {
         commit(receipt, checkpoint);
         if (checkpointScope.state !== "valid") {
-          throw new RuntimeValidationError("Watchlist commit must invoke checkpoint exactly once");
+          throw new RuntimeValidationError(
+            "Runtime local commit must invoke checkpoint exactly once",
+          );
         }
       } finally {
         checkpointScope.active = false;
