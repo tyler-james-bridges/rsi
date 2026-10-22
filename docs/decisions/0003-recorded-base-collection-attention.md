@@ -46,4 +46,3 @@ The first release does not modify live collectors or canary receipts. A later au
 - Treat rank, verification labels, social volume, or Base head health as profit or legitimacy evidence.
 - Accept caller-supplied authenticated provenance.
 - Write the attention database from a live completion callback.
-

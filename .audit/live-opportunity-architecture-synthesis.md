@@ -43,4 +43,3 @@ A later security-reviewed series may retain a sanitized source projection in a k
 ## Verification status
 
 The architecture was grounded by three subsystem explorers, synthesized by an explainer, explored by three independent candidates, and cross-judged. Implementation and product verification have not yet been run; the exit condition remains the repository checklist in `todo.md`.
-

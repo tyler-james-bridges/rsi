@@ -11,17 +11,17 @@ Neither path produces a durable, authenticated collection-level research queue. 
 
 ## Existing components and limits
 
-| Component | Responsibility | Limit |
-| --- | --- | --- |
-| Runtime controller | One-shot, mode/revision/process-bound authority serialized against STOP | No queue-specific permission |
-| Operations store | Provider attempt, budget, fingerprint, and lifecycle bounds | No collection assessment |
-| Vault and capture registry | Encrypt raw responses and verify deletion/key destruction | Deleted content cannot be reconstructed |
-| X ingestion | Strictly parses up to ten `{id, text}` posts | Durable projection drops text and has no author, timestamp, metrics, or URLs |
-| OpenSea ingestion | Strictly parses Base contract groups, ranks, slugs, and validity | Durable projection drops addresses and ranks; no token, listing, price, volume, or order data |
-| Base RPC ingestion | Validates one provider-reported finalized Base anchor | Does not inspect collection contracts, tokens, owners, or orders |
-| Offline watchlist | Imports normalized Base collection groups and derives rank changes | Operator-supplied, not authenticated provider evidence |
-| Research replay | Exercises hostile recorded scenarios | Fixture-only, abstention-only, and token-specific |
-| Proposal ledger | Stores token-specific `ResearchProposalV1` | Every claim requires a token ID; it is not a queue |
+| Component                  | Responsibility                                                          | Limit                                                                                         |
+| -------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Runtime controller         | One-shot, mode/revision/process-bound authority serialized against STOP | No queue-specific permission                                                                  |
+| Operations store           | Provider attempt, budget, fingerprint, and lifecycle bounds             | No collection assessment                                                                      |
+| Vault and capture registry | Encrypt raw responses and verify deletion/key destruction               | Deleted content cannot be reconstructed                                                       |
+| X ingestion                | Strictly parses up to ten `{id, text}` posts                            | Durable projection drops text and has no author, timestamp, metrics, or URLs                  |
+| OpenSea ingestion          | Strictly parses Base contract groups, ranks, slugs, and validity        | Durable projection drops addresses and ranks; no token, listing, price, volume, or order data |
+| Base RPC ingestion         | Validates one provider-reported finalized Base anchor                   | Does not inspect collection contracts, tokens, owners, or orders                              |
+| Offline watchlist          | Imports normalized Base collection groups and derives rank changes      | Operator-supplied, not authenticated provider evidence                                        |
+| Research replay            | Exercises hostile recorded scenarios                                    | Fixture-only, abstention-only, and token-specific                                             |
+| Proposal ledger            | Stores token-specific `ResearchProposalV1`                              | Every claim requires a token ID; it is not a queue                                            |
 
 ## Current live lifecycle
 
@@ -66,4 +66,3 @@ The present system cannot claim that offline snapshots came from OpenSea, recove
 6. Stable deduplication and clustering across acquisition batches.
 7. Expiry, partial-window, and `left_window` semantics.
 8. Whether whole-database rollback is in scope.
-
