@@ -466,6 +466,54 @@ describe("recorded attention history", () => {
     expect(events(f.path)).toHaveLength(1);
   });
 
+  it("replays a changed post cluster without renewing it under a later post ID", () => {
+    const f = fixture();
+    const first = f.record(
+      recordedBundle({ posts: [{ id: "1", text: `Original research ${ADDRESS_A}` }] }),
+    );
+    expect(first.assessment.rows[0]?.outcome.kind).toBe("review");
+
+    f.clock.now = "2026-10-21T12:01:30.000Z";
+    const conflict = f.record(
+      recordedBundle({
+        acquiredAt: "2026-10-21T12:01:00.000Z",
+        posts: [{ id: "1", text: `Replacement research ${ADDRESS_A}` }],
+      }),
+    );
+    expect(conflict.assessment.rows[0]?.outcome).toMatchObject({
+      kind: "rejected",
+      reasons: ["POST_CONTENT_CONFLICT"],
+    });
+    const conflictPayload = AttentionRecordedEventSchema.parse(events(f.path)[1]?.payload);
+    expect(conflictPayload.nextFacts.conflictingClusterFirstSeen).toMatchObject([
+      { firstSeenAt: "2026-10-21T12:01:10.000Z" },
+    ]);
+
+    f.clock.now = "2026-10-21T14:01:30.000Z";
+    const copied = f.record(
+      recordedBundle({
+        acquiredAt: "2026-10-21T14:01:00.000Z",
+        posts: [{ id: "2", text: `Replacement research ${ADDRESS_A}` }],
+      }),
+    );
+    expect(copied.assessment.rows[0]).toMatchObject({
+      scorecard: { socialPresence: 0 },
+      outcome: { kind: "watch", reasons: ["STALE_X"] },
+    });
+
+    f.history.close();
+    const reopened = RecordedAttentionHistory.open({
+      path: f.path,
+      receiptVerifier: f.receiptVerifier,
+    });
+    closeables.push(reopened);
+    const view = reopened.read(f.clock.now);
+    expect(view).toMatchObject({
+      kind: "available",
+      latest: { assessment: copied.assessment },
+    });
+  });
+
   it("requires exact stored binding for a record retry and does not consume valid retry authority", () => {
     const f = fixture();
     const input = recordedBundle();

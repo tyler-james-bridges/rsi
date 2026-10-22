@@ -396,8 +396,51 @@ describe("recorded collection attention assessment", () => {
     });
     expect(second.nextFacts.postBindings).toEqual(first.nextFacts.postBindings);
     expect(second.nextFacts.clusterFirstSeen).toEqual(first.nextFacts.clusterFirstSeen);
-    expect(second.nextFacts.latestAdmittedXAcquiredAt).toBe(
-      first.nextFacts.latestAdmittedXAcquiredAt,
+    expect(second.nextFacts.conflictingClusterFirstSeen).toHaveLength(1);
+    expect(second.nextFacts.latestAdmittedXAcquiredAt).toBe("2026-10-21T12:01:10.000Z");
+  });
+
+  it("ages changed post content before it reappears under a new post ID", () => {
+    const firstRaw = recordedBundle({
+      posts: [{ id: "1", text: `Original research ${ADDRESS_A}` }],
+    });
+    const first = assessRaw(firstRaw);
+    expect(first.assessment.rows[0]?.outcome.kind).toBe("review");
+
+    const conflictRaw = recordedBundle({
+      acquiredAt: "2026-10-21T12:01:00.000Z",
+      posts: [{ id: "1", text: `Replacement research ${ADDRESS_A}` }],
+    });
+    const conflict = assessRaw(conflictRaw, assessTime(conflictRaw), first.nextFacts);
+    expect(conflict.assessment.rows[0]?.outcome).toMatchObject({
+      kind: "rejected",
+      reasons: ["POST_CONTENT_CONFLICT"],
+    });
+    expect(conflict.nextFacts.postBindings).toEqual(first.nextFacts.postBindings);
+    expect(conflict.nextFacts.clusterFirstSeen).toEqual(first.nextFacts.clusterFirstSeen);
+    expect(conflict.nextFacts.conflictingClusterFirstSeen).toEqual([
+      expect.objectContaining({
+        firstSeenAt: "2026-10-21T12:01:10.000Z",
+        conflictingPostIdHash: first.nextFacts.postBindings[0]?.postIdHash,
+      }),
+    ]);
+    expect(conflict.nextFacts.latestAdmittedXAcquiredAt).toBe("2026-10-21T12:01:10.000Z");
+
+    const copiedRaw = recordedBundle({
+      acquiredAt: "2026-10-21T14:01:00.000Z",
+      posts: [{ id: "2", text: `Replacement research ${ADDRESS_A}` }],
+    });
+    const copied = assessRaw(copiedRaw, assessTime(copiedRaw), conflict.nextFacts);
+    const row = copied.assessment.rows[0];
+
+    expect(row?.scorecard?.socialPresence).toBe(0);
+    expect(row?.outcome).toMatchObject({ kind: "watch", reasons: ["STALE_X"] });
+    expect(copied.assessment.sourceSummary.x).toMatchObject({
+      kind: "observed",
+      validUntil: "2026-10-21T14:01:10.000Z",
+    });
+    expect(copied.nextFacts.conflictingClusterFirstSeen).toEqual(
+      conflict.nextFacts.conflictingClusterFirstSeen,
     );
   });
 
@@ -417,6 +460,7 @@ describe("recorded collection attention assessment", () => {
       expect.arrayContaining(first.nextFacts.postBindings),
     );
     expect(second.nextFacts.clusterFirstSeen).toHaveLength(2);
+    expect(second.nextFacts.conflictingClusterFirstSeen).toHaveLength(1);
     expect(second.nextFacts.latestAdmittedXAcquiredAt).toBe("2026-10-21T12:01:10.000Z");
   });
 
@@ -434,6 +478,50 @@ describe("recorded collection attention assessment", () => {
       reasons: ["POST_CONTENT_CONFLICT"],
     });
     expect(second.nextFacts.postBindings).toEqual(first.nextFacts.postBindings);
+    expect(second.nextFacts.conflictingClusterFirstSeen).toHaveLength(1);
+    expect(second.nextFacts.latestAdmittedXAcquiredAt).toBe("2026-10-21T12:01:10.000Z");
+  });
+
+  it("does not retain changed-content chronology from future, regressed, or stale-source batches", () => {
+    const first = assessRaw(recordedBundle());
+    const futureX = recordedBundle({
+      acquiredAt: "2026-10-21T12:01:00.000Z",
+      x: {
+        kind: "recorded_posts",
+        acquiredAt: "2026-10-21T12:01:31.000Z",
+        hasNextPage: false,
+        posts: [{ id: "1", text: `Changed future research ${ADDRESS_A}` }],
+      },
+    });
+    const regressedX = recordedBundle({
+      acquiredAt: "2026-10-21T12:01:00.000Z",
+      x: {
+        kind: "recorded_posts",
+        acquiredAt: "2026-10-21T12:00:05.000Z",
+        hasNextPage: false,
+        posts: [{ id: "1", text: `Changed regressed research ${ADDRESS_A}` }],
+      },
+    });
+    const staleMarketplace = recordedBundle({
+      acquiredAt: "2026-10-21T12:01:00.000Z",
+      posts: [{ id: "1", text: `Changed stale-window research ${ADDRESS_A}` }],
+    });
+
+    for (const [raw, evaluatedAt] of [
+      [futureX, "2026-10-21T12:01:30.000Z"],
+      [regressedX, "2026-10-21T12:01:30.000Z"],
+      [staleMarketplace, staleMarketplace.marketplace.validUntil],
+    ] as const) {
+      const incident = assessRaw(raw, evaluatedAt, first.nextFacts);
+      expect(incident.nextFacts.latestAdmittedXAcquiredAt).toBe(
+        first.nextFacts.latestAdmittedXAcquiredAt,
+      );
+      expect(incident.nextFacts.postBindings).toEqual(first.nextFacts.postBindings);
+      expect(incident.nextFacts.clusterFirstSeen).toEqual(first.nextFacts.clusterFirstSeen);
+      expect(incident.nextFacts.conflictingClusterFirstSeen).toEqual(
+        first.nextFacts.conflictingClusterFirstSeen,
+      );
+    }
   });
 
   it("rejects regressed social acquisition time for the affected row", () => {
@@ -458,6 +546,9 @@ describe("recorded collection attention assessment", () => {
     );
     expect(second.nextFacts.postBindings).toEqual(first.nextFacts.postBindings);
     expect(second.nextFacts.clusterFirstSeen).toEqual(first.nextFacts.clusterFirstSeen);
+    expect(second.nextFacts.conflictingClusterFirstSeen).toEqual(
+      first.nextFacts.conflictingClusterFirstSeen,
+    );
   });
 
   it("reuses an equal-time X acquisition without renewing its fixed expiry", () => {
@@ -496,6 +587,7 @@ describe("recorded collection attention assessment", () => {
     expect(result.nextFacts.latestAdmittedXAcquiredAt).toBeNull();
     expect(result.nextFacts.postBindings).toEqual([]);
     expect(result.nextFacts.clusterFirstSeen).toEqual([]);
+    expect(result.nextFacts.conflictingClusterFirstSeen).toEqual([]);
   });
 
   it("keeps the same post ID and content as one retained binding", () => {
@@ -528,6 +620,13 @@ describe("recorded collection attention assessment", () => {
     expect(() => assessRaw(overflowRaw, assessTime(overflowRaw), priorFacts)).toThrowError(
       AttentionInputError,
     );
+    const conflictingOverflowRaw = recordedBundle({
+      candidates: [],
+      posts: [{ id: "700", text: "Changed unbound capacity observation" }],
+    });
+    expect(() =>
+      assessRaw(conflictingOverflowRaw, assessTime(conflictingOverflowRaw), priorFacts),
+    ).toThrowError(AttentionInputError);
     expect(JSON.stringify(priorFacts)).toBe(before);
   });
 
@@ -668,6 +767,7 @@ describe("recorded collection attention assessment", () => {
     expect(result.nextFacts.latestAdmittedXAcquiredAt).toBeNull();
     expect(result.nextFacts.postBindings).toEqual([]);
     expect(result.nextFacts.clusterFirstSeen).toEqual([]);
+    expect(result.nextFacts.conflictingClusterFirstSeen).toEqual([]);
   });
 
   it("records a regressed rank window as an incident without advancing the usable cursor", () => {
@@ -684,6 +784,9 @@ describe("recorded collection attention assessment", () => {
     );
     expect(regressed.nextFacts.postBindings).toEqual(first.nextFacts.postBindings);
     expect(regressed.nextFacts.clusterFirstSeen).toEqual(first.nextFacts.clusterFirstSeen);
+    expect(regressed.nextFacts.conflictingClusterFirstSeen).toEqual(
+      first.nextFacts.conflictingClusterFirstSeen,
+    );
   });
 
   it("treats Base head evidence as zero-point context", () => {
@@ -926,6 +1029,7 @@ function factsAtCapacity(raw: RecordedAttentionBundleV1): RecordedAttentionFacts
       contentClusterId,
       firstSeenAt: "2026-10-21T11:00:00.000Z",
     })),
+    conflictingClusterFirstSeen: [],
   });
 }
 
@@ -934,7 +1038,8 @@ function retainedFactCount(facts: RecordedAttentionFactsV1): number {
     facts.knownCollections.length +
     facts.slugAssociations.length +
     facts.postBindings.length +
-    facts.clusterFirstSeen.length
+    facts.clusterFirstSeen.length +
+    facts.conflictingClusterFirstSeen.length
   );
 }
 

@@ -39,13 +39,18 @@ describe("recorded social sanitization", () => {
   });
 
   it("matches only complete hexadecimal addresses", () => {
-    const exact = sanitizeSocialPost({ id: "1", text: `Mention ${ADDRESS_A}.` });
-
-    expect(exact.mentionedAddresses).toEqual([ADDRESS_A]);
+    for (const text of [
+      `Mention ${ADDRESS_A}.`,
+      `Mention (${ADDRESS_A}), then research.`,
+      `[${ADDRESS_A}]`,
+      `#${ADDRESS_A}!`,
+    ]) {
+      expect(sanitizeSocialPost({ id: "1", text }).mentionedAddresses).toEqual([ADDRESS_A]);
+    }
+    const mixedCaseHex = `0x${"ABCDEF12".repeat(5)}`;
     expect(
-      sanitizeSocialPost({ id: "2", text: `Mention (${ADDRESS_A}), then research.` })
-        .mentionedAddresses,
-    ).toEqual([ADDRESS_A]);
+      sanitizeSocialPost({ id: "2", text: `Mention ${mixedCaseHex}.` }).mentionedAddresses,
+    ).toEqual([mixedCaseHex.toLowerCase()]);
   });
 
   it.each([
@@ -58,8 +63,23 @@ describe("recorded social sanitization", () => {
     ["Cyrillic suffix", `${ADDRESS_A}я`],
     ["Unicode number prefix", `١${ADDRESS_A}`],
     ["Unicode number suffix", `${ADDRESS_A}١`],
+    ["combining mark prefix", `\u0301${ADDRESS_A}`],
+    ["combining mark suffix", `${ADDRESS_A}\u0301`],
+    ["enclosing combining mark suffix", `${ADDRESS_A}\u20dd`],
+    ["format-control prefix", `\u200d${ADDRESS_A}`],
+    ["format-control suffix", `${ADDRESS_A}\u200d`],
+    ["connector-punctuation prefix", `\u203f${ADDRESS_A}`],
+    ["connector-punctuation suffix", `${ADDRESS_A}\u203f`],
+    ["other identifier-continuation suffix", `${ADDRESS_A}\u00b7`],
+    ["uppercase X", ADDRESS_A.replace("0x", "0X")],
   ])("does not extract an address with %s adjacency", (_label, text) => {
     expect(sanitizeSocialPost({ id: "1", text }).mentionedAddresses).toEqual([]);
+  });
+
+  it("does not fabricate an address by compatibility-normalizing fullwidth text", () => {
+    const fullwidthAddress = `０ｘ${"１".repeat(40)}`;
+
+    expect(sanitizeSocialPost({ id: "1", text: fullwidthAddress }).mentionedAddresses).toEqual([]);
   });
 
   it("clusters NFKC, case, and whitespace copies while keeping post IDs distinct", () => {

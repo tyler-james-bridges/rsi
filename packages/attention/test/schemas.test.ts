@@ -5,6 +5,7 @@ import {
   AttentionInputError,
   ContentClusterIdSchema,
   PostIdHashSchema,
+  RecordedAttentionFactsSchema,
   assessRecordedAttention,
   emptyRecordedAttentionFacts,
   parseRecordedAttentionBundle,
@@ -175,6 +176,143 @@ describe("recorded attention input", () => {
         }),
       ).toThrowError(AttentionInputError);
     }
+  });
+
+  it("requires every retained conflict cluster to name a different bound post cluster", () => {
+    const postIdHash = PostIdHashSchema.parse("1".padStart(64, "0"));
+    const missingPostIdHash = PostIdHashSchema.parse("2".padStart(64, "0"));
+    const boundClusterId = ContentClusterIdSchema.parse("3".padStart(64, "0"));
+    const conflictingClusterId = ContentClusterIdSchema.parse("4".padStart(64, "0"));
+    const conflictingCluster = {
+      contentClusterId: conflictingClusterId,
+      firstSeenAt: "2026-10-21T12:00:10.000Z",
+      conflictingPostIdHash: postIdHash,
+    };
+    const validFacts: RecordedAttentionFactsV1 = {
+      ...emptyRecordedAttentionFacts(),
+      latestAdmittedXAcquiredAt: "2026-10-21T12:00:10.000Z",
+      postBindings: [{ postIdHash, contentClusterId: boundClusterId }],
+      clusterFirstSeen: [
+        { contentClusterId: boundClusterId, firstSeenAt: "2026-10-21T12:00:10.000Z" },
+      ],
+      conflictingClusterFirstSeen: [conflictingCluster],
+    };
+
+    expect(RecordedAttentionFactsSchema.safeParse(validFacts).success).toBe(true);
+
+    const invalidFacts: readonly RecordedAttentionFactsV1[] = [
+      {
+        ...validFacts,
+        conflictingClusterFirstSeen: [
+          { ...conflictingCluster, conflictingPostIdHash: missingPostIdHash },
+        ],
+      },
+      {
+        ...validFacts,
+        conflictingClusterFirstSeen: [
+          {
+            ...conflictingCluster,
+            contentClusterId: boundClusterId,
+          },
+        ],
+      },
+      {
+        ...validFacts,
+        conflictingClusterFirstSeen: [
+          {
+            ...conflictingCluster,
+            firstSeenAt: "2026-10-21T12:00:10.001Z",
+          },
+        ],
+      },
+      {
+        ...validFacts,
+        conflictingClusterFirstSeen: [
+          {
+            ...conflictingCluster,
+            firstSeenAt: "2026-10-21T12:00:09.999Z",
+          },
+        ],
+      },
+    ];
+
+    for (const priorFacts of invalidFacts) {
+      expect(() =>
+        assessRecordedAttention({
+          recordedBundle: recordedBundle(),
+          evaluatedAt: "2026-10-21T12:00:30.000Z",
+          priorFacts,
+        }),
+      ).toThrowError(AttentionInputError);
+    }
+  });
+
+  it("rejects circular conflict chronology without an ordinary first observation", () => {
+    const firstPostId = PostIdHashSchema.parse("1".padStart(64, "0"));
+    const secondPostId = PostIdHashSchema.parse("2".padStart(64, "0"));
+    const firstClusterId = ContentClusterIdSchema.parse("3".padStart(64, "0"));
+    const secondClusterId = ContentClusterIdSchema.parse("4".padStart(64, "0"));
+    const circularFacts: RecordedAttentionFactsV1 = {
+      ...emptyRecordedAttentionFacts(),
+      latestAdmittedXAcquiredAt: "2026-10-21T12:00:10.000Z",
+      postBindings: [
+        { postIdHash: firstPostId, contentClusterId: firstClusterId },
+        { postIdHash: secondPostId, contentClusterId: secondClusterId },
+      ],
+      conflictingClusterFirstSeen: [
+        {
+          contentClusterId: firstClusterId,
+          firstSeenAt: "2026-10-21T12:00:10.000Z",
+          conflictingPostIdHash: secondPostId,
+        },
+        {
+          contentClusterId: secondClusterId,
+          firstSeenAt: "2026-10-21T12:00:10.000Z",
+          conflictingPostIdHash: firstPostId,
+        },
+      ],
+    };
+
+    expect(() =>
+      assessRecordedAttention({
+        recordedBundle: recordedBundle(),
+        evaluatedAt: "2026-10-21T12:00:30.000Z",
+        priorFacts: circularFacts,
+      }),
+    ).toThrowError(AttentionInputError);
+  });
+
+  it("accepts a time-ordered conflict chain rooted in an ordinary cluster", () => {
+    const firstPostId = PostIdHashSchema.parse("1".padStart(64, "0"));
+    const secondPostId = PostIdHashSchema.parse("2".padStart(64, "0"));
+    const ordinaryClusterId = ContentClusterIdSchema.parse("3".padStart(64, "0"));
+    const firstConflictId = ContentClusterIdSchema.parse("4".padStart(64, "0"));
+    const secondConflictId = ContentClusterIdSchema.parse("5".padStart(64, "0"));
+    const chainedFacts: RecordedAttentionFactsV1 = {
+      ...emptyRecordedAttentionFacts(),
+      latestAdmittedXAcquiredAt: "2026-10-21T12:00:12.000Z",
+      postBindings: [
+        { postIdHash: firstPostId, contentClusterId: ordinaryClusterId },
+        { postIdHash: secondPostId, contentClusterId: firstConflictId },
+      ],
+      clusterFirstSeen: [
+        { contentClusterId: ordinaryClusterId, firstSeenAt: "2026-10-21T12:00:10.000Z" },
+      ],
+      conflictingClusterFirstSeen: [
+        {
+          contentClusterId: firstConflictId,
+          firstSeenAt: "2026-10-21T12:00:11.000Z",
+          conflictingPostIdHash: firstPostId,
+        },
+        {
+          contentClusterId: secondConflictId,
+          firstSeenAt: "2026-10-21T12:00:12.000Z",
+          conflictingPostIdHash: secondPostId,
+        },
+      ],
+    };
+
+    expect(RecordedAttentionFactsSchema.safeParse(chainedFacts).success).toBe(true);
   });
 
   it("accepts ordered unique rank subsets without inventing missing ranks", () => {

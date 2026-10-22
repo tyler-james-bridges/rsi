@@ -377,10 +377,9 @@ function analyzeSocial(input: {
     input.priorFacts.postBindings.map((binding) => [binding.postIdHash, binding]),
   );
   const priorFirstSeen = new Map(
-    input.priorFacts.clusterFirstSeen.map((cluster) => [
-      cluster.contentClusterId,
-      cluster.firstSeenAt,
-    ]),
+    [...input.priorFacts.clusterFirstSeen, ...input.priorFacts.conflictingClusterFirstSeen].map(
+      (cluster) => [cluster.contentClusterId, cluster.firstSeenAt],
+    ),
   );
   const socialStates: SocialState[] = [];
   const diagnostics: CollectionAttentionAssessmentV1["diagnostics"][number][] = [];
@@ -787,6 +786,12 @@ function advanceFacts(input: {
   const clusterFirstSeen = new Map(
     input.priorFacts.clusterFirstSeen.map((cluster) => [cluster.contentClusterId, cluster]),
   );
+  const conflictingClusterFirstSeen = new Map(
+    input.priorFacts.conflictingClusterFirstSeen.map((cluster) => [
+      cluster.contentClusterId,
+      cluster,
+    ]),
+  );
   let latestUsableRankWindow = input.priorFacts.latestUsableRankWindow;
   let latestAdmittedXAcquiredAt = input.priorFacts.latestAdmittedXAcquiredAt;
 
@@ -826,24 +831,39 @@ function advanceFacts(input: {
       (latestAdmittedXAcquiredAt === null ||
         Date.parse(input.sourceFacts.x.acquiredAt) >= Date.parse(latestAdmittedXAcquiredAt))
     ) {
-      let admittedPostCount = 0;
+      let chronologyObservationCount = 0;
       for (const social of input.socialStates) {
-        if (social.contentConflict) continue;
-        admittedPostCount += 1;
+        chronologyObservationCount += 1;
+        if (social.contentConflict) {
+          if (
+            !clusterFirstSeen.has(social.post.contentClusterId) &&
+            !conflictingClusterFirstSeen.has(social.post.contentClusterId)
+          ) {
+            conflictingClusterFirstSeen.set(social.post.contentClusterId, {
+              contentClusterId: social.post.contentClusterId,
+              firstSeenAt: social.firstSeenAt,
+              conflictingPostIdHash: social.post.postIdHash,
+            });
+          }
+          continue;
+        }
         if (!postBindings.has(social.post.postIdHash)) {
           postBindings.set(social.post.postIdHash, {
             postIdHash: social.post.postIdHash,
             contentClusterId: social.post.contentClusterId,
           });
         }
-        if (!clusterFirstSeen.has(social.post.contentClusterId)) {
+        if (
+          !clusterFirstSeen.has(social.post.contentClusterId) &&
+          !conflictingClusterFirstSeen.has(social.post.contentClusterId)
+        ) {
           clusterFirstSeen.set(social.post.contentClusterId, {
             contentClusterId: social.post.contentClusterId,
             firstSeenAt: social.firstSeenAt,
           });
         }
       }
-      if (admittedPostCount > 0) {
+      if (chronologyObservationCount > 0) {
         latestAdmittedXAcquiredAt = input.sourceFacts.x.acquiredAt;
       }
     }
@@ -867,6 +887,9 @@ function advanceFacts(input: {
       compareStrings(left.postIdHash, right.postIdHash),
     ),
     clusterFirstSeen: [...clusterFirstSeen.values()].sort((left, right) =>
+      compareStrings(left.contentClusterId, right.contentClusterId),
+    ),
+    conflictingClusterFirstSeen: [...conflictingClusterFirstSeen.values()].sort((left, right) =>
       compareStrings(left.contentClusterId, right.contentClusterId),
     ),
   });

@@ -38,6 +38,8 @@ const APPROVAL_DEMAND = /\b(?:approve|approval|authorize|allow)\b/giu;
 const UNLIMITED_CONTEXT = /\b(?:unlimited|all\s+tokens|all\s+assets)\b/giu;
 const GUARANTEED_CONTEXT = /\bguaranteed\b/giu;
 const RETURN_CONTEXT = /\b(?:returns?|profits?|risk[ -]?free)\b/giu;
+const EXACT_ADDRESS_PATTERN =
+  /(?<![\p{ID_Continue}\p{L}\p{N}\p{M}\p{Cf}\p{Pc}])0x[0-9a-fA-F]{40}(?![\p{ID_Continue}\p{L}\p{N}\p{M}\p{Cf}\p{Pc}])/gu;
 
 export interface SanitizedSocialPostFacts {
   readonly postIdHash: ReturnType<typeof PostIdHashSchema.parse>;
@@ -61,9 +63,7 @@ export function sanitizeSocialPost(input: unknown): SanitizedSocialPostFacts {
   const post = parsed.data;
   const normalized = normalizeSocialText(post.text);
   const mentionedAddresses = uniqueSorted(
-    [...normalized.matchAll(/(?<![\p{L}\p{N}_])0x[0-9a-f]{40}(?![\p{L}\p{N}_])/giu)].map((match) =>
-      match[0].toLowerCase(),
-    ),
+    [...post.text.matchAll(EXACT_ADDRESS_PATTERN)].map((match) => match[0].toLowerCase()),
   );
   const detectedHardReasons: HardReason[] = [];
   const detectedWatchReasons: WatchReason[] = [];

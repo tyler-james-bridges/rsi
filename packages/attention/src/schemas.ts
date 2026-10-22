@@ -692,6 +692,10 @@ const ClusterFirstSeenSchema = z.strictObject({
   firstSeenAt: SocialSourceTimeSchema,
 });
 
+const ConflictingClusterFirstSeenSchema = ClusterFirstSeenSchema.extend({
+  conflictingPostIdHash: PostIdHashSchema,
+});
+
 export const RecordedAttentionFactsSchema = z
   .strictObject({
     schemaVersion: z.literal(1),
@@ -703,13 +707,17 @@ export const RecordedAttentionFactsSchema = z
     slugAssociations: z.array(SlugAssociationSchema).max(MAX_RETAINED_ATTENTION_FACTS),
     postBindings: z.array(PostBindingSchema).max(MAX_RETAINED_ATTENTION_FACTS),
     clusterFirstSeen: z.array(ClusterFirstSeenSchema).max(MAX_RETAINED_ATTENTION_FACTS),
+    conflictingClusterFirstSeen: z
+      .array(ConflictingClusterFirstSeenSchema)
+      .max(MAX_RETAINED_ATTENTION_FACTS),
   })
   .superRefine((facts, context) => {
     const retainedFactCount =
       facts.knownCollections.length +
       facts.slugAssociations.length +
       facts.postBindings.length +
-      facts.clusterFirstSeen.length;
+      facts.clusterFirstSeen.length +
+      facts.conflictingClusterFirstSeen.length;
     if (retainedFactCount > MAX_RETAINED_ATTENTION_FACTS) {
       addCustomIssue(context, []);
     }
@@ -727,9 +735,31 @@ export const RecordedAttentionFactsSchema = z
     }
     const postIds = facts.postBindings.map((binding) => binding.postIdHash);
     if (!isUniqueSortedStrings(postIds)) addCustomIssue(context, ["postBindings"]);
+    const postBindingsById = new Map(
+      facts.postBindings.map((binding) => [binding.postIdHash, binding]),
+    );
     const clusterIds = facts.clusterFirstSeen.map((cluster) => cluster.contentClusterId);
     if (!isUniqueSortedStrings(clusterIds)) addCustomIssue(context, ["clusterFirstSeen"]);
-    const retainedClusterIds = new Set(clusterIds);
+    const conflictingClusterIds = facts.conflictingClusterFirstSeen.map(
+      (cluster) => cluster.contentClusterId,
+    );
+    if (!isUniqueSortedStrings(conflictingClusterIds)) {
+      addCustomIssue(context, ["conflictingClusterFirstSeen"]);
+    }
+    const retainedClusterIds = new Set([...clusterIds, ...conflictingClusterIds]);
+    if (retainedClusterIds.size !== clusterIds.length + conflictingClusterIds.length) {
+      addCustomIssue(context, ["conflictingClusterFirstSeen"]);
+    }
+    const ordinaryClusterIds = new Set(clusterIds);
+    const conflictingClustersById = new Map(
+      facts.conflictingClusterFirstSeen.map((cluster) => [cluster.contentClusterId, cluster]),
+    );
+    const firstSeenByClusterId = new Map(
+      [...facts.clusterFirstSeen, ...facts.conflictingClusterFirstSeen].map((cluster) => [
+        cluster.contentClusterId,
+        cluster.firstSeenAt,
+      ]),
+    );
     const referencedClusterIds = new Set(
       facts.postBindings.map((binding) => binding.contentClusterId),
     );
@@ -743,8 +773,28 @@ export const RecordedAttentionFactsSchema = z
         addCustomIssue(context, ["clusterFirstSeen", index, "contentClusterId"]);
       }
     });
+    facts.conflictingClusterFirstSeen.forEach((cluster, index) => {
+      const binding = postBindingsById.get(cluster.conflictingPostIdHash);
+      if (
+        binding === undefined ||
+        binding.contentClusterId === cluster.contentClusterId ||
+        !conflictChainReachesOrdinaryCluster({
+          firstPredecessorId: binding.contentClusterId,
+          initialClusterId: cluster.contentClusterId,
+          initialFirstSeenAt: cluster.firstSeenAt,
+          ordinaryClusterIds,
+          conflictingClustersById,
+          firstSeenByClusterId,
+          postBindingsById,
+        })
+      ) {
+        addCustomIssue(context, ["conflictingClusterFirstSeen", index]);
+      }
+    });
     const hasSocialIntegrityFacts =
-      facts.postBindings.length > 0 || facts.clusterFirstSeen.length > 0;
+      facts.postBindings.length > 0 ||
+      facts.clusterFirstSeen.length > 0 ||
+      facts.conflictingClusterFirstSeen.length > 0;
     if ((facts.latestAdmittedXAcquiredAt !== null) !== hasSocialIntegrityFacts) {
       addCustomIssue(context, ["latestAdmittedXAcquiredAt"]);
     }
@@ -753,6 +803,11 @@ export const RecordedAttentionFactsSchema = z
       facts.clusterFirstSeen.forEach((cluster, index) => {
         if (Date.parse(cluster.firstSeenAt) > latestAdmittedXMilliseconds) {
           addCustomIssue(context, ["clusterFirstSeen", index, "firstSeenAt"]);
+        }
+      });
+      facts.conflictingClusterFirstSeen.forEach((cluster, index) => {
+        if (Date.parse(cluster.firstSeenAt) > latestAdmittedXMilliseconds) {
+          addCustomIssue(context, ["conflictingClusterFirstSeen", index, "firstSeenAt"]);
         }
       });
     }
@@ -880,6 +935,7 @@ export function emptyRecordedAttentionFacts(): RecordedAttentionFactsV1 {
       slugAssociations: [],
       postBindings: [],
       clusterFirstSeen: [],
+      conflictingClusterFirstSeen: [],
     }),
   );
 }
@@ -936,6 +992,38 @@ function sourceTimeSchema(maximumAdditionMilliseconds: number) {
     (value) => Date.parse(value) <= MAX_CANONICAL_TIME_MILLISECONDS - maximumAdditionMilliseconds,
     "source timestamp exceeds derivation range",
   );
+}
+
+function conflictChainReachesOrdinaryCluster(input: {
+  readonly firstPredecessorId: ContentClusterId;
+  readonly initialClusterId: ContentClusterId;
+  readonly initialFirstSeenAt: string;
+  readonly ordinaryClusterIds: ReadonlySet<ContentClusterId>;
+  readonly conflictingClustersById: ReadonlyMap<
+    ContentClusterId,
+    z.infer<typeof ConflictingClusterFirstSeenSchema>
+  >;
+  readonly firstSeenByClusterId: ReadonlyMap<ContentClusterId, string>;
+  readonly postBindingsById: ReadonlyMap<PostIdHash, z.infer<typeof PostBindingSchema>>;
+}): boolean {
+  const visited = new Set<ContentClusterId>([input.initialClusterId]);
+  let descendantFirstSeenMilliseconds = Date.parse(input.initialFirstSeenAt);
+  let predecessorId = input.firstPredecessorId;
+  while (true) {
+    if (visited.has(predecessorId)) return false;
+    visited.add(predecessorId);
+    const predecessorFirstSeenAt = input.firstSeenByClusterId.get(predecessorId);
+    if (predecessorFirstSeenAt === undefined) return false;
+    const predecessorFirstSeenMilliseconds = Date.parse(predecessorFirstSeenAt);
+    if (descendantFirstSeenMilliseconds < predecessorFirstSeenMilliseconds) return false;
+    if (input.ordinaryClusterIds.has(predecessorId)) return true;
+    const predecessor = input.conflictingClustersById.get(predecessorId);
+    if (predecessor === undefined) return false;
+    const witness = input.postBindingsById.get(predecessor.conflictingPostIdHash);
+    if (witness === undefined) return false;
+    descendantFirstSeenMilliseconds = predecessorFirstSeenMilliseconds;
+    predecessorId = witness.contentClusterId;
+  }
 }
 
 function addCustomIssue(context: z.RefinementCtx, path: readonly PropertyKey[]): void {
