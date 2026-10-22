@@ -120,6 +120,12 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/attention:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
   packages/backup: {}
 
   packages/base-rpc-collector:
