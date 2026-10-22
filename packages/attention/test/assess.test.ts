@@ -253,6 +253,35 @@ describe("recorded collection attention assessment", () => {
     ]);
   });
 
+  it("reports changed content under an unbound post ID as a content-free hostile diagnostic", () => {
+    const firstRaw = recordedBundle({
+      candidates: [],
+      posts: [{ id: "928374650", text: "first private unbound observation" }],
+    });
+    const first = assessRaw(firstRaw);
+    const secondRaw = recordedBundle({
+      acquiredAt: "2026-10-21T12:01:00.000Z",
+      candidates: [],
+      posts: [{ id: "928374650", text: "changed private unbound observation" }],
+    });
+    const second = assessRaw(secondRaw, assessTime(secondRaw), first.nextFacts);
+
+    expect(second.assessment.diagnostics).toEqual([
+      expect.objectContaining({ code: "HOSTILE_UNBOUND_SOCIAL" }),
+    ]);
+    expect(second.nextFacts.postBindings).toEqual(first.nextFacts.postBindings);
+    expect(second.nextFacts.clusterFirstSeen).toEqual(first.nextFacts.clusterFirstSeen);
+    expect(second.nextFacts.conflictingClusterFirstSeen).toEqual([
+      expect.objectContaining({
+        firstSeenAt: "2026-10-21T12:01:10.000Z",
+        conflictingPostIdHash: first.nextFacts.postBindings[0]?.postIdHash,
+      }),
+    ]);
+    const serialized = JSON.stringify(second);
+    expect(serialized).not.toContain("928374650");
+    expect(serialized).not.toContain("changed private unbound observation");
+  });
+
   it("distinguishes absent social coverage from a legitimacy verdict", () => {
     const row = assessRaw(recordedBundle({ x: { kind: "absent" } })).assessment.rows[0];
 
@@ -482,7 +511,7 @@ describe("recorded collection attention assessment", () => {
     expect(second.nextFacts.latestAdmittedXAcquiredAt).toBe("2026-10-21T12:01:10.000Z");
   });
 
-  it("does not retain changed-content chronology from future, regressed, or stale-source batches", () => {
+  it("does not retain changed-content chronology from future or regressed X batches", () => {
     const first = assessRaw(recordedBundle());
     const futureX = recordedBundle({
       acquiredAt: "2026-10-21T12:01:00.000Z",
@@ -502,15 +531,9 @@ describe("recorded collection attention assessment", () => {
         posts: [{ id: "1", text: `Changed regressed research ${ADDRESS_A}` }],
       },
     });
-    const staleMarketplace = recordedBundle({
-      acquiredAt: "2026-10-21T12:01:00.000Z",
-      posts: [{ id: "1", text: `Changed stale-window research ${ADDRESS_A}` }],
-    });
-
     for (const [raw, evaluatedAt] of [
       [futureX, "2026-10-21T12:01:30.000Z"],
       [regressedX, "2026-10-21T12:01:30.000Z"],
-      [staleMarketplace, staleMarketplace.marketplace.validUntil],
     ] as const) {
       const incident = assessRaw(raw, evaluatedAt, first.nextFacts);
       expect(incident.nextFacts.latestAdmittedXAcquiredAt).toBe(
@@ -522,6 +545,119 @@ describe("recorded collection attention assessment", () => {
         first.nextFacts.conflictingClusterFirstSeen,
       );
     }
+  });
+
+  it("advances X integrity chronology without admitting stale, future, or regressed rank windows", () => {
+    const first = assessRaw(recordedBundle());
+    const incidents = [
+      {
+        raw: recordedBundle({
+          acquiredAt: "2026-10-21T12:01:00.000Z",
+          candidates: [candidate(1, "stale-replacement", [ADDRESS_B])],
+          posts: [
+            { id: "1", text: `Changed stale-window research ${ADDRESS_A}` },
+            { id: "2", text: `Independent stale-window observation ${ADDRESS_B}` },
+          ],
+        }),
+        evaluatedAt: "2026-10-21T12:03:00.000Z",
+        expectedCursor: "2026-10-21T12:01:10.000Z",
+      },
+      {
+        raw: recordedBundle({
+          acquiredAt: "2026-10-21T12:04:00.000Z",
+          candidates: [candidate(1, "future-replacement", [ADDRESS_B])],
+          x: {
+            kind: "recorded_posts",
+            acquiredAt: "2026-10-21T12:01:10.000Z",
+            hasNextPage: false,
+            posts: [
+              { id: "1", text: `Changed future-window research ${ADDRESS_A}` },
+              { id: "2", text: `Independent future-window observation ${ADDRESS_B}` },
+            ],
+          },
+        }),
+        evaluatedAt: "2026-10-21T12:03:00.000Z",
+        expectedCursor: "2026-10-21T12:01:10.000Z",
+      },
+      {
+        raw: recordedBundle({
+          acquiredAt: "2026-10-21T11:59:00.000Z",
+          candidates: [candidate(1, "regressed-replacement", [ADDRESS_B])],
+          x: {
+            kind: "recorded_posts",
+            acquiredAt: "2026-10-21T12:00:20.000Z",
+            hasNextPage: false,
+            posts: [
+              { id: "1", text: `Changed regressed-window research ${ADDRESS_A}` },
+              { id: "2", text: `Independent regressed-window observation ${ADDRESS_B}` },
+            ],
+          },
+        }),
+        evaluatedAt: "2026-10-21T12:00:30.000Z",
+        expectedCursor: "2026-10-21T12:00:20.000Z",
+      },
+    ] as const;
+
+    for (const incidentInput of incidents) {
+      const incident = assessRaw(incidentInput.raw, incidentInput.evaluatedAt, first.nextFacts);
+
+      expect(incident.nextFacts.latestUsableRankWindow).toEqual(
+        first.nextFacts.latestUsableRankWindow,
+      );
+      expect(incident.nextFacts.knownCollections).toEqual(first.nextFacts.knownCollections);
+      expect(incident.nextFacts.slugAssociations).toEqual(first.nextFacts.slugAssociations);
+      expect(incident.nextFacts.latestAdmittedXAcquiredAt).toBe(incidentInput.expectedCursor);
+      expect(incident.nextFacts.postBindings).toHaveLength(2);
+      expect(incident.nextFacts.clusterFirstSeen).toHaveLength(2);
+      expect(incident.nextFacts.conflictingClusterFirstSeen).toHaveLength(1);
+    }
+  });
+
+  it("uses empty valid X windows as chronology checkpoints", () => {
+    const emptyRaw = recordedBundle({ posts: [] });
+    const empty = assessRaw(emptyRaw);
+
+    expect(empty.nextFacts.latestAdmittedXAcquiredAt).toBe("2026-10-21T12:00:10.000Z");
+    expect(empty.nextFacts.postBindings).toEqual([]);
+    expect(empty.nextFacts.clusterFirstSeen).toEqual([]);
+    expect(empty.nextFacts.conflictingClusterFirstSeen).toEqual([]);
+
+    const olderRaw = recordedBundle({
+      acquiredAt: "2026-10-21T12:01:00.000Z",
+      x: {
+        kind: "recorded_posts",
+        acquiredAt: "2026-10-21T12:00:05.000Z",
+        hasNextPage: false,
+        posts: [{ id: "2", text: `Older research ${ADDRESS_A}` }],
+      },
+    });
+    const older = assessRaw(olderRaw, assessTime(olderRaw), empty.nextFacts);
+
+    expect(older.assessment.rows[0]?.outcome).toMatchObject({
+      kind: "rejected",
+      reasons: ["SOCIAL_TIME_REGRESSION"],
+    });
+    expect(older.nextFacts.latestAdmittedXAcquiredAt).toBe(
+      empty.nextFacts.latestAdmittedXAcquiredAt,
+    );
+    expect(older.nextFacts.postBindings).toEqual([]);
+    expect(older.nextFacts.clusterFirstSeen).toEqual([]);
+
+    const equalRaw = recordedBundle({
+      acquiredAt: "2026-10-21T12:01:30.000Z",
+      x: {
+        kind: "recorded_posts",
+        acquiredAt: "2026-10-21T12:00:10.000Z",
+        hasNextPage: false,
+        posts: [{ id: "3", text: `Equal-time research ${ADDRESS_A}` }],
+      },
+    });
+    const equal = assessRaw(equalRaw, assessTime(equalRaw), older.nextFacts);
+
+    expect(equal.assessment.rows[0]?.outcome).toMatchObject({ kind: "review" });
+    expect(equal.nextFacts.latestAdmittedXAcquiredAt).toBe("2026-10-21T12:00:10.000Z");
+    expect(equal.nextFacts.postBindings).toHaveLength(1);
+    expect(equal.nextFacts.clusterFirstSeen).toHaveLength(1);
   });
 
   it("rejects regressed social acquisition time for the affected row", () => {
@@ -756,7 +892,7 @@ describe("recorded collection attention assessment", () => {
     });
   });
 
-  it("does not retain social integrity facts from an unusable marketplace window", () => {
+  it("retains valid social integrity facts from an unusable marketplace window", () => {
     const raw = recordedBundle({
       candidates: [],
       posts: [{ id: "9", text: `Unbound incident ${ADDRESS_B}` }],
@@ -764,9 +900,9 @@ describe("recorded collection attention assessment", () => {
     const result = assessRaw(raw, raw.marketplace.validUntil);
 
     expect(result.nextFacts.latestUsableRankWindow).toBeNull();
-    expect(result.nextFacts.latestAdmittedXAcquiredAt).toBeNull();
-    expect(result.nextFacts.postBindings).toEqual([]);
-    expect(result.nextFacts.clusterFirstSeen).toEqual([]);
+    expect(result.nextFacts.latestAdmittedXAcquiredAt).toBe("2026-10-21T12:00:10.000Z");
+    expect(result.nextFacts.postBindings).toHaveLength(1);
+    expect(result.nextFacts.clusterFirstSeen).toHaveLength(1);
     expect(result.nextFacts.conflictingClusterFirstSeen).toEqual([]);
   });
 
@@ -909,7 +1045,19 @@ describe("recorded collection attention assessment", () => {
       outcome: { kind: "watch", reasons: ["LEFT_WINDOW"], priority: 0 },
       nextAction: "continue_recorded_observation",
     });
-    expect(departure?.expiresAt).toBe(first.assessment.sourceSummary.marketplace.validUntil);
+    const priorEvidenceId = first.nextFacts.latestUsableRankWindow?.evidenceId;
+    const currentEvidenceId = second.nextFacts.latestUsableRankWindow?.evidenceId;
+    if (priorEvidenceId === undefined || currentEvidenceId === undefined) {
+      throw new Error("fixture invariant");
+    }
+    expect(departure?.evidenceIds).toEqual(
+      [...new Set([priorEvidenceId, currentEvidenceId])].sort(),
+    );
+    expect(departure?.evidenceIds).toHaveLength(2);
+    expect(departure?.expiresAt).toBe(secondRaw.marketplace.validUntil);
+    expect(Date.parse(departure?.expiresAt ?? "")).toBeGreaterThan(
+      Date.parse(departure?.assessedAt ?? ""),
+    );
   });
 
   it("turns a hostile expired predecessor into one closed departure observation", () => {
@@ -935,10 +1083,10 @@ describe("recorded collection attention assessment", () => {
       presence: { kind: "left_window", previousRank: 2 },
       comparison: { kind: "not_observed" },
       scorecard: null,
-      expiresAt: firstRaw.marketplace.validUntil,
+      expiresAt: secondRaw.marketplace.validUntil,
       outcome: { kind: "watch", reasons: ["LEFT_WINDOW"], priority: 0 },
     });
-    expect(Date.parse(departure?.expiresAt ?? "")).toBeLessThanOrEqual(
+    expect(Date.parse(departure?.expiresAt ?? "")).toBeGreaterThan(
       Date.parse(departure?.assessedAt ?? ""),
     );
 

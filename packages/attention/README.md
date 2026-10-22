@@ -2,6 +2,8 @@
 
 `@rsi/attention` turns bounded, operator-supplied recorded evidence into Base collection research priorities. It performs no provider request, payment, signing, or execution. `review`, `watch`, and `rejected` are research outcomes, not legitimacy or return predictions.
 
+Policy `attention-v2` tracks marketplace rank windows and X integrity chronology independently. An unusable rank window cannot change collection identity or rank facts. A valid X window still records hashed post-to-content bindings, including an empty window that advances the X chronology cursor. Future or regressed X windows cannot change those facts. A `LEFT_WINDOW` row cites both rank windows and remains valid until the current rank window expires. This unshipped policy does not replay or migrate `attention-v1` history.
+
 ## Local recording
 
 Open `RecordedAttentionHistory` with a dedicated SQLite path and `createRuntimeAttentionReceiptVerifier(runtime)`. The verifier exposes only attention-authorization ownership and persisted-receipt verification, and it requires a genuine runtime controller. Keep the runtime open until the history is closed.

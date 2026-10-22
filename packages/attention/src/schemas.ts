@@ -5,7 +5,7 @@ import { z } from "zod";
 import { hashCanonical } from "./hash.js";
 import { compareStrings, toJsonValue } from "./json-types.js";
 
-export const ATTENTION_POLICY_VERSION = "attention-v1" as const;
+export const ATTENTION_POLICY_VERSION = "attention-v2" as const;
 export const RECORDED_ATTENTION_STREAM_ID = "recorded-base-v1" as const;
 export const BASE_CHAIN_ID = "8453" as const;
 export const MARKETPLACE_VALIDITY_MS = 120_000;
@@ -795,7 +795,7 @@ export const RecordedAttentionFactsSchema = z
       facts.postBindings.length > 0 ||
       facts.clusterFirstSeen.length > 0 ||
       facts.conflictingClusterFirstSeen.length > 0;
-    if ((facts.latestAdmittedXAcquiredAt !== null) !== hasSocialIntegrityFacts) {
+    if (facts.latestAdmittedXAcquiredAt === null && hasSocialIntegrityFacts) {
       addCustomIssue(context, ["latestAdmittedXAcquiredAt"]);
     }
     if (facts.latestAdmittedXAcquiredAt !== null) {

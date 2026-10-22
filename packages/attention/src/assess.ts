@@ -205,6 +205,7 @@ function assessValidatedRecordedAttention(input: {
         states,
         sourceFacts,
         priorFacts,
+        rankEvidenceId,
         evaluatedAt,
         provenance,
         baseUsable: base.usable,
@@ -491,7 +492,9 @@ function analyzeSocial(input: {
 
     if (matchedCollectionIds.length === 0) {
       const code: DiagnosticCode =
-        post.detectedHardReasons.length > 0 ? "HOSTILE_UNBOUND_SOCIAL" : "UNBOUND_SOCIAL";
+        contentConflict || post.detectedHardReasons.length > 0
+          ? "HOSTILE_UNBOUND_SOCIAL"
+          : "UNBOUND_SOCIAL";
       diagnostics.push({
         evidenceId: evidenceId("rsi-attention-social-diagnostic-v1\0", {
           bundleId: input.bundleId,
@@ -686,6 +689,7 @@ function buildDepartureRows(input: {
   readonly states: readonly CandidateState[];
   readonly sourceFacts: SanitizedRecordedBundleV1;
   readonly priorFacts: RecordedAttentionFactsV1;
+  readonly rankEvidenceId: EvidenceId;
   readonly evaluatedAt: string;
   readonly provenance: {
     readonly kind: "operator_supplied_unverified";
@@ -722,9 +726,9 @@ function buildDepartureRows(input: {
         presence: { kind: "left_window", previousRank: row.rank },
         comparison: { kind: "not_observed" },
         scorecard: null,
-        evidenceIds: [row.evidenceId],
+        evidenceIds: [...new Set([row.evidenceId, input.rankEvidenceId])].sort(),
         assessedAt: input.evaluatedAt,
-        expiresAt: previous.validUntil,
+        expiresAt: input.sourceFacts.marketplace.validUntil,
         provenance: input.provenance,
         missingChecks: baselineMissingChecks(input.baseUsable, false),
         notes: ordered([...notes], ATTENTION_NOTES),
@@ -824,49 +828,45 @@ function advanceFacts(input: {
         };
       }),
     };
+  }
 
-    if (
-      input.sourceFacts.x.kind === "recorded_posts" &&
-      Date.parse(input.sourceFacts.x.acquiredAt) <= Date.parse(input.assessment.evaluatedAt) &&
-      (latestAdmittedXAcquiredAt === null ||
-        Date.parse(input.sourceFacts.x.acquiredAt) >= Date.parse(latestAdmittedXAcquiredAt))
-    ) {
-      let chronologyObservationCount = 0;
-      for (const social of input.socialStates) {
-        chronologyObservationCount += 1;
-        if (social.contentConflict) {
-          if (
-            !clusterFirstSeen.has(social.post.contentClusterId) &&
-            !conflictingClusterFirstSeen.has(social.post.contentClusterId)
-          ) {
-            conflictingClusterFirstSeen.set(social.post.contentClusterId, {
-              contentClusterId: social.post.contentClusterId,
-              firstSeenAt: social.firstSeenAt,
-              conflictingPostIdHash: social.post.postIdHash,
-            });
-          }
-          continue;
-        }
-        if (!postBindings.has(social.post.postIdHash)) {
-          postBindings.set(social.post.postIdHash, {
-            postIdHash: social.post.postIdHash,
-            contentClusterId: social.post.contentClusterId,
-          });
-        }
+  if (
+    input.sourceFacts.x.kind === "recorded_posts" &&
+    Date.parse(input.sourceFacts.x.acquiredAt) <= Date.parse(input.assessment.evaluatedAt) &&
+    (latestAdmittedXAcquiredAt === null ||
+      Date.parse(input.sourceFacts.x.acquiredAt) >= Date.parse(latestAdmittedXAcquiredAt))
+  ) {
+    for (const social of input.socialStates) {
+      if (social.contentConflict) {
         if (
           !clusterFirstSeen.has(social.post.contentClusterId) &&
           !conflictingClusterFirstSeen.has(social.post.contentClusterId)
         ) {
-          clusterFirstSeen.set(social.post.contentClusterId, {
+          conflictingClusterFirstSeen.set(social.post.contentClusterId, {
             contentClusterId: social.post.contentClusterId,
             firstSeenAt: social.firstSeenAt,
+            conflictingPostIdHash: social.post.postIdHash,
           });
         }
+        continue;
       }
-      if (chronologyObservationCount > 0) {
-        latestAdmittedXAcquiredAt = input.sourceFacts.x.acquiredAt;
+      if (!postBindings.has(social.post.postIdHash)) {
+        postBindings.set(social.post.postIdHash, {
+          postIdHash: social.post.postIdHash,
+          contentClusterId: social.post.contentClusterId,
+        });
+      }
+      if (
+        !clusterFirstSeen.has(social.post.contentClusterId) &&
+        !conflictingClusterFirstSeen.has(social.post.contentClusterId)
+      ) {
+        clusterFirstSeen.set(social.post.contentClusterId, {
+          contentClusterId: social.post.contentClusterId,
+          firstSeenAt: social.firstSeenAt,
+        });
       }
     }
+    latestAdmittedXAcquiredAt = input.sourceFacts.x.acquiredAt;
   }
 
   const nextFacts = RecordedAttentionFactsSchema.safeParse({

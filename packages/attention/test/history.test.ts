@@ -124,7 +124,7 @@ describe("recorded attention history", () => {
     expect(events(f.path)).toEqual([]);
     expect(f.runtime.listAudit()).toEqual(beforeAudit);
     expect(preview.binding).toMatchObject({
-      policyVersion: "attention-v1",
+      policyVersion: "attention-v2",
       auditHead: null,
       evaluatedAt: NOW,
       deadline: "2026-10-21T12:01:00.000Z",

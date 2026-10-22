@@ -142,7 +142,7 @@ describe("recorded attention input", () => {
     }
   });
 
-  it("rejects incomplete or future-dated retained social integrity registries", () => {
+  it("requires a social chronology cursor for retained facts but permits cursor-only facts", () => {
     const postIdHash = PostIdHashSchema.parse("1".padStart(64, "0"));
     const contentClusterId = ContentClusterIdSchema.parse("2".padStart(64, "0"));
     const binding = { postIdHash, contentClusterId };
@@ -158,14 +158,17 @@ describe("recorded attention input", () => {
       { ...validFacts, postBindings: [] },
       { ...validFacts, latestAdmittedXAcquiredAt: null },
       {
-        ...emptyRecordedAttentionFacts(),
-        latestAdmittedXAcquiredAt: "2026-10-21T12:00:10.000Z",
-      },
-      {
         ...validFacts,
         clusterFirstSeen: [{ ...cluster, firstSeenAt: "2026-10-21T12:00:31.000Z" }],
       },
     ];
+
+    expect(
+      RecordedAttentionFactsSchema.safeParse({
+        ...emptyRecordedAttentionFacts(),
+        latestAdmittedXAcquiredAt: "2026-10-21T12:00:10.000Z",
+      }).success,
+    ).toBe(true);
 
     for (const priorFacts of invalidFacts) {
       expect(() =>

@@ -1,7 +1,9 @@
 import { compareStrings, toJsonValue } from "./json-types.js";
 import { hashCanonical } from "./hash.js";
 import {
+  ATTENTION_POLICY_VERSION,
   BundleIdSchema,
+  RECORDED_ATTENTION_STREAM_ID,
   RefreshIdSchema,
   SanitizedRecordedBundleSchema,
   AttentionInputError,
@@ -72,11 +74,11 @@ export function recordedRefreshId(bundleId: BundleId): ReturnType<typeof Refresh
   if (!parsedBundleId.success) throw new AttentionInputError();
   return RefreshIdSchema.parse(
     hashCanonical(
-      "rsi-attention-refresh-v1\0",
+      `rsi-attention-refresh-${ATTENTION_POLICY_VERSION}\0`,
       toJsonValue({
-        streamId: "recorded-base-v1",
+        streamId: RECORDED_ATTENTION_STREAM_ID,
         bundleId: parsedBundleId.data,
-        policyVersion: "attention-v1",
+        policyVersion: ATTENTION_POLICY_VERSION,
       }),
     ),
   );
