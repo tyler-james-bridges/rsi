@@ -6,7 +6,11 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
-import { SqliteRuntimeController, type RuntimeBoundaryAuthorization } from "@rsi/runtime";
+import {
+  SqliteRuntimeController,
+  type RuntimeAllowedAttentionRefreshReceipt,
+  type RuntimeBoundaryAuthorization,
+} from "@rsi/runtime";
 import { SqliteEventStore, type AppendEventInput, type StoredEvent } from "@rsi/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -23,7 +27,14 @@ import {
   type AttentionRecordCommand,
   type RecordedAttentionBundleV1,
 } from "../src/index.js";
-import { AttentionRecordedEventSchema } from "../src/history-schemas.js";
+import { assessStoredRecordedAttention } from "../src/assess.js";
+import {
+  AttentionRecordedEventSchema,
+  buildAttentionRecordedEvent,
+  buildLargestValidAttentionRecordedEvent,
+  decisionHash,
+  serialize,
+} from "../src/history-schemas.js";
 import { sanitizeRecordedAttentionBundle } from "../src/sanitize.js";
 import { ADDRESS_A, ADDRESS_B, candidate, mixedFixture, recordedBundle } from "./fixtures.js";
 
@@ -122,6 +133,68 @@ function events(path: string): readonly StoredEvent[] {
   return rawEvents(path).filter((event) => event.type === "attention.batch.recorded.v2");
 }
 
+function recordedEventDraft(evaluatedAt: string) {
+  const acquiredAt = new Date(Date.parse(evaluatedAt) - 30_000).toISOString();
+  const sourceFacts = sanitizeRecordedAttentionBundle(
+    recordedBundle({ acquiredAt, x: { kind: "absent" } }),
+  );
+  const assessed = assessStoredRecordedAttention({ sourceFacts, evaluatedAt });
+  const binding = AttentionPreviewBindingSchema.parse({
+    schemaVersion: 2,
+    kind: "attention_preview_binding",
+    policyVersion: "attention-v2",
+    historyId: "00000000-0000-4000-8000-000000000001",
+    previewId: "00000000-0000-4000-8000-000000000002",
+    bundleId: assessed.assessment.bundleId,
+    refreshId: assessed.assessment.refreshId,
+    auditHead: null,
+    processInstanceId: "00000000-0000-4000-8000-000000000003",
+    modeRevision: Number.MAX_SAFE_INTEGER,
+    evaluatedAt,
+    deadline: new Date(Date.parse(evaluatedAt) + ATTENTION_PREVIEW_TTL_MS).toISOString(),
+    decisionHash: decisionHash(assessed),
+  });
+  return { sourceFacts, binding, assessed };
+}
+
+function recordedEventReceipt(
+  draft: ReturnType<typeof recordedEventDraft>,
+  checkedAt: string,
+  eventSequence: number,
+): RuntimeAllowedAttentionRefreshReceipt {
+  return {
+    schemaVersion: 1,
+    actionId: attentionPreviewActionId(draft.binding),
+    authorizationId: "00000000-0000-4000-8000-000000000004",
+    boundary: "attention_refresh",
+    checkedAt,
+    decision: "allowed",
+    eventHash: "0".repeat(64),
+    eventSequence,
+    mode: "RESEARCH",
+    modeRevision: draft.binding.modeRevision,
+    processInstanceId: draft.binding.processInstanceId,
+    reason: "ALLOWED",
+  };
+}
+
+function maximumWidthCandidates(
+  batch: number,
+): RecordedAttentionBundleV1["marketplace"]["candidates"] {
+  return Array.from({ length: 10 }, (_, rankIndex) => {
+    const collectionIndex = batch * 10 + rankIndex;
+    const slugPrefix = `c${collectionIndex.toString().padStart(6, "0")}-`;
+    return candidate(
+      rankIndex + 1,
+      `${slugPrefix}${"z".repeat(128 - slugPrefix.length)}`,
+      Array.from({ length: 16 }, (_unused, contractIndex) => {
+        const addressIndex = collectionIndex * 16 + contractIndex + 1;
+        return `0x${addressIndex.toString(16).padStart(40, "0")}`;
+      }),
+    );
+  });
+}
+
 function eventInput(event: StoredEvent): AppendEventInput {
   return {
     type: event.type,
@@ -204,6 +277,19 @@ describe("recorded attention history", () => {
     expect(saved).toHaveLength(1);
     const payload = AttentionRecordedEventSchema.parse(saved[0]?.payload);
     expect(payload.result).toEqual(result);
+    const sourceFacts = sanitizeRecordedAttentionBundle(input);
+    expect(payload).toEqual(
+      buildAttentionRecordedEvent({
+        sourceFacts,
+        binding: result.binding,
+        assessed: assessStoredRecordedAttention({
+          sourceFacts,
+          evaluatedAt: result.binding.evaluatedAt,
+        }),
+        authorization: result.authorization,
+        checkpointAt: result.checkpointAt,
+      }),
+    );
     expect(payload.nextFacts.headRefreshId).toBe(result.assessment.refreshId);
     expect(payload.sourceFacts.kind).toBe("sanitized_recorded_collection_attention");
     const view = f.history.read(NOW);
@@ -238,6 +324,74 @@ describe("recorded attention history", () => {
     expect(result.authorization.actionId).toBe(attentionPreviewActionId(result.binding));
     expect(view.kind === "available" ? view.auditHead?.sequence : null).toBe(2);
   });
+
+  it.each([
+    ["ordinary year", "2026-10-21T12:00:30.000Z"],
+    ["extended year", "+010000-01-01T00:00:00.000Z"],
+    ["year-width crossing", "9999-12-31T23:59:45.000Z"],
+  ] as const)("builds a schema-valid maximum event that dominates valid %s receipts", (_, at) => {
+    const draft = recordedEventDraft(at);
+    const largest = buildLargestValidAttentionRecordedEvent(draft);
+    expect(AttentionRecordedEventSchema.parse(largest)).toEqual(largest);
+    expect(largest.result.authorization).toMatchObject({
+      actionId: attentionPreviewActionId(draft.binding),
+      eventSequence: Number.MAX_SAFE_INTEGER,
+      modeRevision: draft.binding.modeRevision,
+      processInstanceId: draft.binding.processInstanceId,
+    });
+
+    const lastValidTime = new Date(Date.parse(draft.binding.deadline) - 1).toISOString();
+    const widestTime =
+      Buffer.byteLength(draft.binding.evaluatedAt, "utf8") >=
+      Buffer.byteLength(lastValidTime, "utf8")
+        ? draft.binding.evaluatedAt
+        : lastValidTime;
+    expect(largest.result.authorization.checkedAt).toBe(widestTime);
+    expect(largest.result.checkpointAt).toBe(widestTime);
+
+    for (const checkedAt of [draft.binding.evaluatedAt, lastValidTime]) {
+      for (const eventSequence of [1, Number.MAX_SAFE_INTEGER]) {
+        const actual = buildAttentionRecordedEvent({
+          ...draft,
+          authorization: recordedEventReceipt(draft, checkedAt, eventSequence),
+          checkpointAt: checkedAt,
+        });
+        expect(Buffer.byteLength(serialize(actual), "utf8")).toBeLessThanOrEqual(
+          Buffer.byteLength(serialize(largest), "utf8"),
+        );
+      }
+    }
+  });
+
+  it("rejects a valid oversized event during preview without consuming runtime authority", () => {
+    const f = fixture();
+    let rejected = false;
+    for (let batch = 0; batch < 50; batch += 1) {
+      const acquiredAt = new Date(Date.parse(NOW) + batch * 180_000).toISOString();
+      f.clock.now = new Date(Date.parse(acquiredAt) + 30_000).toISOString();
+      const input = recordedBundle({
+        acquiredAt,
+        candidates: maximumWidthCandidates(batch),
+        x: { kind: "absent" },
+      });
+      const before = f.runtime.listAudit();
+      let preview: ReturnType<typeof f.preview>;
+      try {
+        preview = f.preview(input);
+      } catch (error) {
+        expect(error).toMatchObject({ code: "attention_event_too_large" });
+        expect(f.runtime.listAudit()).toEqual(before);
+        rejected = true;
+        break;
+      }
+      f.history.record({
+        input,
+        expected: preview.binding,
+        authorization: f.authorize(preview.binding),
+      });
+    }
+    expect(rejected).toBe(true);
+  }, 30_000);
 
   it("initializes one durable lineage and appends nothing on an empty reopen", () => {
     const f = fixture();

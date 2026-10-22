@@ -656,26 +656,28 @@ function parsePersistedAttentionRefreshReceipts(
 
   const receipts: RuntimeAllowedAttentionRefreshReceipt[] = [];
   for (let index = 0; index < length; index += 1) {
-    let descriptor: PropertyDescriptor | undefined;
-    try {
-      // Only array indices are protocol data. Ignoring unrelated own properties keeps
-      // validation work bounded by the receipt limit instead of attacker-controlled keys.
-      descriptor = Object.getOwnPropertyDescriptor(inputValue, String(index));
-    } catch {
-      throw new RuntimeValidationError("Persisted attention refresh receipt batch is invalid");
-    }
-    if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
-      throw new RuntimeValidationError("Persisted attention refresh receipt batch is invalid");
-    }
     receipts.push(
       parseRuntimeInput(
         RuntimeAllowedAttentionRefreshReceiptSchema,
-        descriptor.value,
+        readOwnDenseArrayElement(inputValue, index),
         `Persisted attention refresh receipt ${index}`,
       ),
     );
   }
   return receipts;
+}
+
+function readOwnDenseArrayElement(batch: readonly unknown[], index: number): unknown {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(batch, String(index));
+  } catch {
+    throw new RuntimeValidationError("Persisted attention refresh receipt batch is invalid");
+  }
+  if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+    throw new RuntimeValidationError("Persisted attention refresh receipt batch is invalid");
+  }
+  return descriptor.value;
 }
 
 function appendBoundaryCheck(

@@ -22,9 +22,12 @@ import {
   AttentionPreviewContextSchema,
   AttentionPreviewIdSchema,
   AttentionPreviewSchema,
+  AttentionReceiptSchema,
   AttentionRecordedEventSchema,
   AttentionViewSchema,
   attentionPreviewActionId,
+  buildAttentionRecordedEvent,
+  buildLargestValidAttentionRecordedEvent,
   decisionHash,
   effectiveRow,
   serialize,
@@ -314,13 +317,9 @@ function buildPreview(
     deadline: new Date(deadlineMs).toISOString(),
     decisionHash: decisionHash(result),
   });
-  // The receipt adds fewer than 1 KiB. Reserve it before admitting a preview.
-  if (
-    Buffer.byteLength(serialize({ sourceFacts, binding, ...result }), "utf8") >
-    MAX_ATTENTION_EVENT_BYTES - 1_024
-  ) {
-    throw new AttentionHistoryError("attention_event_too_large");
-  }
+  assertEventBound(
+    buildLargestValidAttentionRecordedEvent({ sourceFacts, binding, assessed: result }),
+  );
   const preview = AttentionPreviewSchema.parse({
     schemaVersion: 2,
     kind: "preview",
@@ -482,13 +481,13 @@ export class RecordedAttentionHistory {
         AttentionPreviewSchema.parse({ schemaVersion: 2, kind: "already_recorded", result }),
       );
     }
-    const leaseWindow = this.#reserveLeaseWindow();
     const preview = buildPreview(
       sourceFacts,
       parsedContext,
       state,
       AttentionPreviewIdSchema.parse(randomUUID()),
     );
+    const leaseWindow = this.#reserveLeaseWindow();
     const actionId = attentionPreviewActionId(preview.binding);
     if (this.#leases.has(preview.binding.previewId))
       throw new AttentionHistoryError("attention_preview_id_collision");
@@ -568,19 +567,12 @@ export class RecordedAttentionHistory {
         });
         if (decisionHash(finalAssessment) !== expected.decisionHash)
           throw new AttentionHistoryError("attention_classification_changed");
-        const payload = AttentionRecordedEventSchema.parse({
-          schemaVersion: 2,
-          kind: "attention_batch_recorded",
-          result: {
-            schemaVersion: 2,
-            kind: "recorded_attention_result",
-            binding: expected,
-            assessment: assessed.assessment,
-            authorization: receipt,
-            checkpointAt,
-          },
+        const payload = buildAttentionRecordedEvent({
           sourceFacts,
-          nextFacts: assessed.nextFacts,
+          binding: expected,
+          assessed,
+          authorization: AttentionReceiptSchema.parse(receipt),
+          checkpointAt,
         });
         assertEventBound(payload);
         this.#assertLiveLease(expected);

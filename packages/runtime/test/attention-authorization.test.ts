@@ -532,19 +532,57 @@ describe("attention refresh authorization", () => {
           Array(MAX_PERSISTED_ATTENTION_REFRESH_RECEIPTS + 1).fill(first),
         ),
       ).toThrow(RuntimeValidationError);
-      expect(() => runtime.verifyPersistedAttentionRefreshReceipts(new Proxy([first], {}))).toThrow(
+      let proxyTrapWasInvoked = false;
+      const hostileProxy = new Proxy([first], {
+        get: () => {
+          proxyTrapWasInvoked = true;
+          throw new Error("receipt-batch get trap must not run");
+        },
+        ownKeys: () => {
+          proxyTrapWasInvoked = true;
+          throw new Error("receipt-batch ownKeys trap must not run");
+        },
+        getPrototypeOf: () => {
+          proxyTrapWasInvoked = true;
+          throw new Error("receipt-batch getPrototypeOf trap must not run");
+        },
+        getOwnPropertyDescriptor: () => {
+          proxyTrapWasInvoked = true;
+          throw new Error("receipt-batch descriptor trap must not run");
+        },
+      });
+      expect(() => runtime.verifyPersistedAttentionRefreshReceipts(hostileProxy)).toThrow(
         RuntimeValidationError,
       );
+      expect(proxyTrapWasInvoked).toBe(false);
+
+      let indexedGetterWasRead = false;
       const accessorBatch: unknown[] = [];
       Object.defineProperty(accessorBatch, "0", {
         enumerable: true,
         get: () => {
-          throw new Error("batch accessor must not run");
+          indexedGetterWasRead = true;
+          return first;
         },
       });
       expect(() => runtime.verifyPersistedAttentionRefreshReceipts(accessorBatch)).toThrow(
         RuntimeValidationError,
       );
+      expect(indexedGetterWasRead).toBe(false);
+
+      let overLimitGetterWasRead = false;
+      const overLimitBatch = Array(MAX_PERSISTED_ATTENTION_REFRESH_RECEIPTS + 1);
+      Object.defineProperty(overLimitBatch, "0", {
+        enumerable: true,
+        get: () => {
+          overLimitGetterWasRead = true;
+          return first;
+        },
+      });
+      expect(() => runtime.verifyPersistedAttentionRefreshReceipts(overLimitBatch)).toThrow(
+        RuntimeValidationError,
+      );
+      expect(overLimitGetterWasRead).toBe(false);
 
       let unrelatedGetterWasRead = false;
       const noisyBatch = [first];

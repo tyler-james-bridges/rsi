@@ -20,6 +20,7 @@ import {
   RefreshIdSchema,
   SanitizedRecordedBundleSchema,
   type RecordedAttentionAssessmentResultV1,
+  type SanitizedRecordedBundleV1,
 } from "./schemas.js";
 
 export const ATTENTION_PREVIEW_TTL_MS = 30_000;
@@ -208,6 +209,70 @@ export type AttentionRecordResult = z.infer<typeof AttentionRecordResultSchema>;
 export type AttentionView = z.infer<typeof AttentionViewSchema>;
 export type AttentionRecordedEvent = z.infer<typeof AttentionRecordedEventSchema>;
 export type AttentionAuditHead = z.infer<typeof AttentionAuditHeadSchema>;
+
+type CompleteInput<T> = {
+  readonly [K in keyof T]-?: T[K];
+};
+
+interface RecordedEventDraft {
+  readonly sourceFacts: SanitizedRecordedBundleV1;
+  readonly binding: AttentionPreviewBinding;
+  readonly assessed: RecordedAttentionAssessmentResultV1;
+}
+
+interface RecordedEventParts extends RecordedEventDraft {
+  readonly authorization: z.input<typeof AttentionReceiptSchema>;
+  readonly checkpointAt: string;
+}
+
+export function buildAttentionRecordedEvent(parts: RecordedEventParts): AttentionRecordedEvent {
+  const result = {
+    schemaVersion: 2,
+    kind: "recorded_attention_result",
+    binding: parts.binding,
+    assessment: parts.assessed.assessment,
+    authorization: AttentionReceiptSchema.parse(parts.authorization),
+    checkpointAt: parts.checkpointAt,
+  } satisfies CompleteInput<z.input<typeof AttentionRecordResultSchema>>;
+
+  return AttentionRecordedEventSchema.parse({
+    schemaVersion: 2,
+    kind: "attention_batch_recorded",
+    result,
+    sourceFacts: parts.sourceFacts,
+    nextFacts: parts.assessed.nextFacts,
+  } satisfies CompleteInput<z.input<typeof AttentionRecordedEventSchema>>);
+}
+
+export function buildLargestValidAttentionRecordedEvent(
+  draft: RecordedEventDraft,
+): AttentionRecordedEvent {
+  const lastValidTime = new Date(Date.parse(draft.binding.deadline) - 1).toISOString();
+  const widestTime =
+    Buffer.byteLength(draft.binding.evaluatedAt, "utf8") >= Buffer.byteLength(lastValidTime, "utf8")
+      ? draft.binding.evaluatedAt
+      : lastValidTime;
+  const authorization = {
+    schemaVersion: 1,
+    actionId: attentionPreviewActionId(draft.binding),
+    authorizationId: "ffffffff-ffff-4fff-bfff-ffffffffffff",
+    boundary: "attention_refresh",
+    checkedAt: widestTime,
+    decision: "allowed",
+    eventHash: "f".repeat(64),
+    eventSequence: Number.MAX_SAFE_INTEGER,
+    mode: "RESEARCH",
+    modeRevision: draft.binding.modeRevision,
+    processInstanceId: draft.binding.processInstanceId,
+    reason: "ALLOWED",
+  } satisfies CompleteInput<z.input<typeof AttentionReceiptSchema>>;
+
+  return buildAttentionRecordedEvent({
+    ...draft,
+    authorization,
+    checkpointAt: widestTime,
+  });
+}
 
 export function effectiveRow(
   saved: z.infer<typeof AssessmentRowSchema>,
