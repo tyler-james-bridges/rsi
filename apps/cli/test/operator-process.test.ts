@@ -721,6 +721,24 @@ describe("Stage 0 operator process", () => {
     const researchPath = join(directory, "research.sqlite");
     const attentionPath = join(directory, "collection.SQLITE");
 
+    await writeFile(runtimePath, "");
+    const runtimeFile = await stat(runtimePath);
+    const pathsAlias = await stat(attentionPath).then(
+      (attentionFile) =>
+        runtimeFile.dev === attentionFile.dev && runtimeFile.ino === attentionFile.ino,
+      (error: unknown) => {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          (error as NodeJS.ErrnoException).code === "ENOENT"
+        ) {
+          return false;
+        }
+        throw error;
+      },
+    );
+    if (!pathsAlias) return;
+
     child = spawn(
       process.execPath,
       [
