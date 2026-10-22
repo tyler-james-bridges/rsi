@@ -137,9 +137,11 @@ shows stale and partial state, and compares observed contract groups. It makes n
 The separate collection-attention panel also accepts one local JSON file in `RESEARCH`. Generate a
 fresh fictional file with the command above, select it, choose **Preview recorded evidence**, inspect
 the exact unrecorded assessment, then choose **Record exact preview**. Selection alone sends
-nothing. The preview expires quickly, is invalidated by runtime or history changes, and cannot be
-rebuilt by the browser. A duplicate remains read-only. The panel never renders recorded X text,
-post IDs, the original JSON, or arbitrary links.
+nothing. On Preview, the browser reads the selected raw JSON and retains its parsed value in memory
+only for that preview-to-record draft. It never renders the raw file. Operator responses never echo
+it, and durable history never persists raw X text, post IDs, or the original JSON. The preview
+expires quickly, is invalidated by runtime or history changes, and cannot be rebuilt by the browser.
+A duplicate remains read-only, and the panel never renders arbitrary links.
 
 The operator service binds to IPv4 loopback and has no network authentication. Do not expose it to
 a network. Every launch begins in persisted `STOPPED`. The dashboard can enter `RESEARCH`, import an

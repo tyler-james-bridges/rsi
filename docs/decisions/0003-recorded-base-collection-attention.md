@@ -25,9 +25,13 @@ The queue will:
 - store complete assessed batches in a dedicated append-only history;
 - authorize a new batch only through a one-shot RESEARCH-only `attention_refresh` local commit boundary serialized against STOP;
 - bind preview to the canonical bundle and assessment, runtime process/mode/revision, current history
-  head, and a 30-second monotonic deadline;
+  head, and a 30-second wall-clock deadline;
+- retain a separate private 30-second monotonic server lease only for that preview window and
+  invalidate the lease on process restart;
 - expose score components, provenance, expiry, missing checks, reasons, and a closed next action in
-  the loopback operator without raw X text, post IDs, original JSON, or arbitrary links; and
+  the loopback operator;
+- never render raw X text, post IDs, original JSON, or arbitrary links; never echo original JSON in
+  an operator response; and never persist that raw material in durable attention history; and
 - perform no provider read, payment, signing, transaction, or execution action.
 
 A canonical bundle and policy identify an assessment. An exact retry returns the original record without renewing evidence. History tracks both the audit head and the last usable source window so rejected future or stale incidents cannot poison later comparisons. Copied social content keeps its first-seen expiry across batches. A regressed read clock makes the view unavailable rather than restoring freshness.
@@ -63,6 +67,10 @@ receipt-free operator projections. The Stage 0 CLI composes it with the runtime 
 same-origin GET, preview, and record routes. The dashboard keeps the durable view separate from one
 short-lived draft, requires explicit Preview and Record actions, and invalidates that draft on file,
 runtime, history, clock, deadline, or record changes.
+
+On Preview, the browser reads the operator-selected raw JSON and retains its parsed value in memory
+only for the preview-to-record draft. It never renders the raw file. Operator responses never echo
+it, and durable attention history never persists raw X text, post IDs, or original JSON.
 
 `pnpm --silent demo:attention-fixture` emits a fresh-timestamped copy of the repository's fictional
 mixed fixture to standard output. It has no provider, network, credential, signer, payment, fund, or

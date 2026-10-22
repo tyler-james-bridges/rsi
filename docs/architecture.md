@@ -37,12 +37,15 @@ evidence. A pure assessment assigns explained `review`, `watch`, or `rejected` o
 contract groups, bounded rank comparisons, capped social clusters, and Base context. Every input is
 `operator_supplied_unverified`; rank and social activity are neither legitimacy evidence nor a
 return or purchase claim. Preview binds the canonical input and assessment to the runtime process,
-mode, revision, attention history head, and a 30-second monotonic deadline. The server retains a
-bounded monotonic lease only for that preview window; process restart invalidates it. Record accepts
-only that exact server binding under a one-shot `attention_refresh` permit serialized against STOP.
-GET, startup, page reload, and timers perform no refresh. The browser receives a receipt-free
-projection and never receives recorded X text or post IDs; server-side history replay verifies the
-private runtime receipt. See
+mode, revision, attention history head, and a 30-second wall-clock deadline. Separately, the server
+retains a private 30-second monotonic lease only for that preview window; process restart invalidates
+the lease. Record accepts only that exact server binding under a one-shot `attention_refresh` permit
+serialized against STOP. GET, startup, page reload, and timers perform no refresh. The browser reads
+the operator-selected raw JSON on Preview and retains its parsed value in memory only for the
+preview-to-record draft; it never renders the raw file. Operator responses never echo it, and
+durable attention history never persists raw X text, post IDs, or original JSON. The response
+projection is receipt-free, while server-side history replay verifies the private runtime receipt.
+See
 [ADR 0003](decisions/0003-recorded-base-collection-attention.md).
 
 Non-executable proposal scorecards live in a separate research ledger. Its isolated schema has no

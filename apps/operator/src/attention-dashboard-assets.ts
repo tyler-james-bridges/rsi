@@ -15,7 +15,10 @@ export const ATTENTION_DASHBOARD_HTML = `<article id="attention-panel" class="pa
     For a fictional local walkthrough, run
     <code>mkdir -p .local/stage0 &amp;&amp; pnpm --silent demo:attention-fixture &gt; .local/stage0/recorded-attention-demo.json</code>.
     The modeled rank window spans 120 seconds and has about 90 seconds remaining when generated.
-    Create it immediately before Preview. The file is recorded test material, not live monitoring.
+    Create it immediately before Preview. The browser reads the raw JSON on Preview and retains its
+    parsed value in memory only for the current preview-to-record draft; it never renders the raw
+    file. Operator responses never echo the original JSON, and durable history never persists raw X
+    text, post IDs, or original JSON. This is recorded test material, not live monitoring.
   </p>
   <label>
     Recorded attention JSON file

@@ -35,10 +35,14 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
   `operator_supplied_unverified` at ingress. Unknown fields, invalid times or identities, cross-chain
   collections, and oversized input fail closed; bounded arrays and counted clusters are capped by
   schema and policy. Plausible fabricated ranks or posts remain possible and receive no authority.
-  The browser receives closed diagnostics, hashed evidence identifiers, and bounded cluster counts,
-  never raw X text, post IDs, the original file, or arbitrary links. Preview creates no authority:
-  record requires the exact unexpired server binding and a genuine one-shot `attention_refresh`
-  permit under the runtime lock. GET, startup, timers, and duplicate replay perform no provider read
+  On Preview, the browser reads the operator-selected raw JSON and retains its parsed value in memory
+  only for the preview-to-record draft, but never renders the raw file. Operator responses return a
+  closed assessment with diagnostics, hashed evidence identifiers, and bounded cluster counts; they
+  never echo the original JSON. Durable attention history never persists raw X text, post IDs, or
+  original JSON, and the panel renders no arbitrary links. Preview creates no authority: record
+  requires the exact unexpired 30-second wall-clock binding, the server's separate private 30-second
+  monotonic lease, and a genuine one-shot `attention_refresh` permit under the runtime lock. Process
+  restart invalidates the lease. GET, startup, timers, and duplicate replay perform no provider read
   or new authorization. Scores rank research attention only; they do not authenticate a collection
   or estimate return.
 - Recorded replay scenarios are closed and code-owned, but their names cannot select a verdict.
