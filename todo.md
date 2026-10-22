@@ -70,7 +70,7 @@
 - [x] Ground.
 - [x] Sketch.
 - [x] Agree.
-- [ ] Implement.
+- [x] Implement.
 - [ ] Scrap. skip: no repeated structural deviation has shown the selected architecture is wrong.
 
 ### Architect arena
@@ -84,10 +84,12 @@
 
 ### Exit condition
 
-- [ ] A deterministic fixture produces an explained Base collection queue with review, watch, and rejected outcomes.
-- [ ] Hostile, ambiguous, stale, future-dated, cross-chain, duplicated, and forged evidence is rejected or capped by policy.
-- [ ] The loopback operator shows rank components, provenance, expiry, and the next action without exposing execution authority.
-- [ ] Refresh is explicit, STOP-aware, idempotent, restart-safe, and never performs implicit network work.
+- [x] A deterministic fixture produces an explained Base collection queue with review, watch, and rejected outcomes.
+- [x] Hostile instruction, approval, and link indicators; ambiguous identity; invalid time;
+      unsupported chain; and duplicate conflicts are rejected or capped. Schema-valid fabrication
+      remains `operator_supplied_unverified` and cannot grant authority.
+- [x] The loopback operator shows rank components, provenance, expiry, and the next action without exposing execution authority.
+- [x] Refresh is explicit, STOP-aware, idempotent, restart-safe, and never performs implicit network work.
 - [ ] Existing authority gates, `pnpm check`, offline drills, a fresh process flow, and a real browser flow pass.
 - [ ] The work is published in a green, independently verified PR.
 

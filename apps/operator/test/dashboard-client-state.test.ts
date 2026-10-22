@@ -19,6 +19,7 @@ class FakeClassList {
 }
 
 class FakeElement {
+  readonly attributes = new Map<string, string>();
   files: readonly { size: number; text(): Promise<string> }[] = [];
   checked = false;
   className = "";
@@ -53,6 +54,10 @@ class FakeElement {
 
   replaceChildren(...children: FakeElement[]): void {
     this.children.splice(0, this.children.length, ...children);
+  }
+
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value);
   }
 }
 
