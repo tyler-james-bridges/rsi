@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   RecordedAttentionHistory,
+  attentionPreviewActionId,
   createRuntimeAttentionReceiptVerifier,
   parseAttentionPreviewCommand,
   parseAttentionRecordCommand,
@@ -46,7 +47,7 @@ describe("attention operator protocol", () => {
     expect(parseAttentionRecordCommand(command)).toEqual(command);
     const authorization = runtime.requestBoundaryAuthorization({
       boundary: "attention_refresh",
-      actionId: preview.binding.refreshId,
+      actionId: attentionPreviewActionId(preview.binding),
       authorizationId: randomUUID(),
     });
     expect(() => parseAttentionRecordCommand({ ...command, authorization })).toThrow();
@@ -66,7 +67,7 @@ describe("attention operator protocol", () => {
           evaluatedAt: NOW,
         }),
       ),
-    ).toEqual({ kind: "already_recorded", result });
+    ).toEqual({ schemaVersion: 2, kind: "already_recorded", result });
     for (const at of [NOW, "2026-10-21T12:02:00.000Z", "2026-10-21T12:00:00.000Z"]) {
       const view = history.read(at);
       expect(parseAttentionView(JSON.parse(JSON.stringify(view)))).toEqual(view);

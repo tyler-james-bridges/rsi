@@ -1,4 +1,8 @@
-import { RuntimeAllowedAttentionRefreshReceiptSchema, RuntimeUuidSchema } from "@rsi/runtime";
+import {
+  MAX_PERSISTED_ATTENTION_REFRESH_RECEIPTS,
+  RuntimeAllowedAttentionRefreshReceiptSchema,
+  RuntimeUuidSchema,
+} from "@rsi/runtime";
 import { z } from "zod";
 
 import { canonicalJson, hashCanonical } from "./hash.js";
@@ -19,9 +23,17 @@ import {
 } from "./schemas.js";
 
 export const ATTENTION_PREVIEW_TTL_MS = 30_000;
-export const MAX_ATTENTION_HISTORY = 1_000;
+export const MAX_ATTENTION_HISTORY = MAX_PERSISTED_ATTENTION_REFRESH_RECEIPTS;
+export const MAX_LIVE_ATTENTION_PREVIEWS = 1_000;
 export const MAX_ATTENTION_EVENT_BYTES = 524_288;
 const Sequence = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
+
+export const AttentionHistoryIdSchema = RuntimeUuidSchema.brand<"AttentionHistoryId">();
+export const AttentionPreviewIdSchema = RuntimeUuidSchema.brand<"AttentionPreviewId">();
+export const AttentionPreviewActionIdSchema = z
+  .string()
+  .regex(/^attention-preview-v2:[0-9a-f]{64}$/)
+  .brand<"AttentionPreviewActionId">();
 
 export const AttentionAuditHeadSchema = z.strictObject({
   refreshId: RefreshIdSchema,
@@ -37,7 +49,11 @@ export const AttentionPreviewContextSchema = z.strictObject({
 
 export const AttentionPreviewBindingSchema = z
   .strictObject({
+    schemaVersion: z.literal(2),
+    kind: z.literal("attention_preview_binding"),
     policyVersion: z.literal(ATTENTION_POLICY_VERSION),
+    historyId: AttentionHistoryIdSchema,
+    previewId: AttentionPreviewIdSchema,
     bundleId: BundleIdSchema,
     refreshId: RefreshIdSchema,
     auditHead: AttentionAuditHeadSchema.nullable(),
@@ -54,13 +70,13 @@ export const AttentionPreviewBindingSchema = z
   );
 
 export const AttentionReceiptSchema = RuntimeAllowedAttentionRefreshReceiptSchema.extend({
-  actionId: RefreshIdSchema,
+  actionId: AttentionPreviewActionIdSchema,
   checkedAt: CanonicalTimeSchema,
 });
 
 export const AttentionRecordResultSchema = z
   .strictObject({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     kind: z.literal("recorded_attention_result"),
     binding: AttentionPreviewBindingSchema,
     assessment: CollectionAttentionAssessmentSchema,
@@ -75,7 +91,7 @@ export const AttentionRecordResultSchema = z
       assessment.refreshId === binding.refreshId &&
       assessment.predecessorId === (binding.auditHead?.refreshId ?? null) &&
       assessment.evaluatedAt === binding.evaluatedAt &&
-      authorization.actionId === binding.refreshId &&
+      authorization.actionId === attentionPreviewActionId(binding) &&
       authorization.processInstanceId === binding.processInstanceId &&
       authorization.modeRevision === binding.modeRevision &&
       Date.parse(binding.evaluatedAt) <= Date.parse(authorization.checkedAt) &&
@@ -85,14 +101,26 @@ export const AttentionRecordResultSchema = z
   }, "attention record binding is inconsistent");
 
 export const AttentionRecordedEventSchema = z.strictObject({
+  schemaVersion: z.literal(2),
+  kind: z.literal("attention_batch_recorded"),
   result: AttentionRecordResultSchema,
   sourceFacts: SanitizedRecordedBundleSchema,
   nextFacts: RecordedAttentionFactsSchema,
 });
 
+export const AttentionHistoryInitializedEventSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    kind: z.literal("attention_history_initialized"),
+    historyId: AttentionHistoryIdSchema,
+    initializedAt: CanonicalTimeSchema,
+  })
+  .readonly();
+
 export const AttentionPreviewSchema = z.discriminatedUnion("kind", [
   z
     .strictObject({
+      schemaVersion: z.literal(2),
       kind: z.literal("preview"),
       binding: AttentionPreviewBindingSchema,
       assessment: CollectionAttentionAssessmentSchema,
@@ -104,7 +132,11 @@ export const AttentionPreviewSchema = z.discriminatedUnion("kind", [
         assessment.predecessorId === (binding.auditHead?.refreshId ?? null) &&
         assessment.evaluatedAt === binding.evaluatedAt,
     ),
-  z.strictObject({ kind: z.literal("already_recorded"), result: AttentionRecordResultSchema }),
+  z.strictObject({
+    schemaVersion: z.literal(2),
+    kind: z.literal("already_recorded"),
+    result: AttentionRecordResultSchema,
+  }),
 ]);
 
 export const AttentionHistoryHeaderSchema = z.strictObject({
@@ -168,6 +200,9 @@ export const AttentionViewSchema = z.discriminatedUnion("kind", [
 
 export type AttentionPreviewContext = z.infer<typeof AttentionPreviewContextSchema>;
 export type AttentionPreviewBinding = z.infer<typeof AttentionPreviewBindingSchema>;
+export type AttentionHistoryId = z.infer<typeof AttentionHistoryIdSchema>;
+export type AttentionPreviewId = z.infer<typeof AttentionPreviewIdSchema>;
+export type AttentionPreviewActionId = z.infer<typeof AttentionPreviewActionIdSchema>;
 export type AttentionPreview = z.infer<typeof AttentionPreviewSchema>;
 export type AttentionRecordResult = z.infer<typeof AttentionRecordResultSchema>;
 export type AttentionView = z.infer<typeof AttentionViewSchema>;
@@ -204,6 +239,20 @@ export function decisionHash(result: RecordedAttentionAssessmentResultV1): strin
       },
       nextFacts: result.nextFacts,
     }),
+  );
+}
+
+export function attentionPreviewActionId(input: AttentionPreviewBinding): AttentionPreviewActionId {
+  const binding = AttentionPreviewBindingSchema.parse(input);
+  return AttentionPreviewActionIdSchema.parse(
+    `attention-preview-v2:${hashCanonical(
+      "rsi-attention-preview-action-v2\0",
+      toJsonValue({
+        binding,
+        boundary: "attention_refresh",
+        mode: "RESEARCH",
+      }),
+    )}`,
   );
 }
 

@@ -1,17 +1,23 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 
 import { SqliteRuntimeController, type RuntimeBoundaryAuthorization } from "@rsi/runtime";
 import { SqliteEventStore, type AppendEventInput, type StoredEvent } from "@rsi/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ATTENTION_PREVIEW_TTL_MS,
   MAX_ATTENTION_EVENT_BYTES,
   MAX_ATTENTION_HISTORY,
+  MAX_LIVE_ATTENTION_PREVIEWS,
   RecordedAttentionHistory,
+  AttentionPreviewBindingSchema,
+  attentionPreviewActionId,
   createRuntimeAttentionReceiptVerifier,
   type AttentionPreviewBinding,
   type AttentionRecordCommand,
@@ -25,6 +31,10 @@ const NOW = "2026-10-21T12:00:30.000Z";
 const directories: string[] = [];
 const closeables: { close(): void }[] = [];
 
+function differentHash(value: string): string {
+  return `${value.startsWith("f") ? "e" : "f"}${value.slice(1)}`;
+}
+
 function directory(): string {
   const path = mkdtempSync(join(tmpdir(), "rsi-attention-history-"));
   directories.push(path);
@@ -36,6 +46,7 @@ function fixture() {
   const path = join(root, "attention.sqlite");
   const runtimePath = join(root, "runtime.sqlite");
   const clock = { now: NOW, reads: 0, samples: [] as string[], fail: false };
+  const leaseClock = { now: 0, reads: 0, samples: [] as number[], fail: false };
   const runtime = SqliteRuntimeController.open(
     { path: runtimePath, openedAt: NOW, processInstanceId: randomUUID() },
     {
@@ -56,7 +67,15 @@ function fixture() {
     targetMode: "RESEARCH",
   });
   const receiptVerifier = createRuntimeAttentionReceiptVerifier(runtime);
-  const history = RecordedAttentionHistory.open({ path, receiptVerifier });
+  const history = RecordedAttentionHistory.open({
+    path,
+    receiptVerifier,
+    monotonicClock: () => {
+      leaseClock.reads += 1;
+      if (leaseClock.fail) throw new Error("read must not consult the lease clock");
+      return leaseClock.samples.shift() ?? leaseClock.now;
+    },
+  });
   closeables.push(history);
   const context = () => ({
     processInstanceId: runtime.getSnapshot().processInstanceId,
@@ -71,7 +90,7 @@ function fixture() {
   const authorize = (expected: AttentionPreviewBinding) =>
     runtime.requestBoundaryAuthorization({
       boundary: "attention_refresh",
-      actionId: expected.refreshId,
+      actionId: attentionPreviewActionId(expected),
       authorizationId: randomUUID(),
     });
   const record = (input: RecordedAttentionBundleV1) => {
@@ -83,6 +102,7 @@ function fixture() {
     path,
     runtimePath,
     clock,
+    leaseClock,
     runtime,
     receiptVerifier,
     history,
@@ -93,9 +113,13 @@ function fixture() {
   };
 }
 
-function events(path: string): readonly StoredEvent[] {
+function rawEvents(path: string): readonly StoredEvent[] {
   using store = new SqliteEventStore(path);
   return store.list();
+}
+
+function events(path: string): readonly StoredEvent[] {
+  return rawEvents(path).filter((event) => event.type === "attention.batch.recorded.v2");
 }
 
 function eventInput(event: StoredEvent): AppendEventInput {
@@ -107,6 +131,34 @@ function eventInput(event: StoredEvent): AppendEventInput {
     occurredAt: event.occurredAt,
     payload: event.payload,
   };
+}
+
+function appendGenesis(store: SqliteEventStore, sourcePath: string): void {
+  const genesis = rawEvents(sourcePath)[0];
+  if (genesis === undefined || genesis.type !== "attention.history.initialized.v1") {
+    throw new Error("missing attention genesis");
+  }
+  store.append(eventInput(genesis));
+}
+
+function runOpenProcess(attentionPath: string, runtimePath: string): Promise<void> {
+  const script = fileURLToPath(new URL("./open-history-child.ts", import.meta.url));
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", script, attentionPath, runtimePath], {
+      cwd: join(import.meta.dirname, "../../.."),
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`open child failed (${String(code ?? signal)}): ${stderr}`));
+    });
+  });
 }
 
 afterEach(() => {
@@ -129,7 +181,13 @@ describe("recorded attention history", () => {
       evaluatedAt: NOW,
       deadline: "2026-10-21T12:01:00.000Z",
     });
-    expect(f.preview(input)).toEqual(preview);
+    const secondPreview = f.preview(input);
+    expect(secondPreview).toMatchObject({ assessment: preview.assessment });
+    if (secondPreview.kind !== "preview") throw new Error("expected a new preview");
+    expect(secondPreview.binding.previewId).not.toBe(preview.binding.previewId);
+    expect(attentionPreviewActionId(secondPreview.binding)).not.toBe(
+      attentionPreviewActionId(preview.binding),
+    );
     const result = f.history.record({
       input,
       expected: preview.binding,
@@ -159,6 +217,82 @@ describe("recorded attention history", () => {
       scorecard: { rank: 40 },
       missingChecks: expect.arrayContaining(["authenticated_provenance"]),
     });
+
+    const stored = rawEvents(f.path);
+    expect(stored).toHaveLength(2);
+    expect(stored[0]).toMatchObject({
+      sequence: 1,
+      type: "attention.history.initialized.v1",
+      payload: {
+        schemaVersion: 1,
+        kind: "attention_history_initialized",
+        historyId: preview.binding.historyId,
+      },
+    });
+    expect(stored[1]).toMatchObject({
+      sequence: 2,
+      type: "attention.batch.recorded.v2",
+      payload: { schemaVersion: 2, kind: "attention_batch_recorded" },
+    });
+    expect(result).toMatchObject({ schemaVersion: 2, binding: { schemaVersion: 2 } });
+    expect(result.authorization.actionId).toBe(attentionPreviewActionId(result.binding));
+    expect(view.kind === "available" ? view.auditHead?.sequence : null).toBe(2);
+  });
+
+  it("initializes one durable lineage and appends nothing on an empty reopen", () => {
+    const f = fixture();
+    const [genesis] = rawEvents(f.path);
+    if (genesis === undefined) throw new Error("missing genesis");
+    f.history.close();
+    const append = vi.spyOn(SqliteEventStore.prototype, "append");
+    using reopened = RecordedAttentionHistory.open({
+      path: f.path,
+      receiptVerifier: f.receiptVerifier,
+      monotonicClock: () => 0,
+    });
+    expect(reopened.read(NOW)).toMatchObject({ kind: "available", latest: null });
+    expect(rawEvents(f.path)).toEqual([genesis]);
+    expect(append).not.toHaveBeenCalled();
+  });
+
+  it("retains lineage when a closed database is copied", () => {
+    const f = fixture();
+    const saved = f.record(recordedBundle());
+    f.history.close();
+    const copiedPath = join(f.root, "copied-attention.sqlite");
+    copyFileSync(f.path, copiedPath);
+    using original = RecordedAttentionHistory.open({
+      path: f.path,
+      receiptVerifier: f.receiptVerifier,
+      monotonicClock: () => 0,
+    });
+    using copied = RecordedAttentionHistory.open({
+      path: copiedPath,
+      receiptVerifier: f.receiptVerifier,
+      monotonicClock: () => 0,
+    });
+    expect(copied.findRecorded(recordedBundle())).toEqual(saved);
+    const nextInput = recordedBundle({ candidates: [], x: { kind: "absent" } });
+    const originalPreview = original.preview(nextInput, f.context());
+    const copiedPreview = copied.preview(nextInput, f.context());
+    if (originalPreview.kind !== "preview" || copiedPreview.kind !== "preview") {
+      throw new Error("expected new previews");
+    }
+    expect(copiedPreview.binding.historyId).toBe(originalPreview.binding.historyId);
+    expect(copiedPreview.binding.auditHead).toEqual(originalPreview.binding.auditHead);
+    expect(copiedPreview.binding.previewId).not.toBe(originalPreview.binding.previewId);
+  });
+
+  it("serializes concurrent first opens into one genesis event", async () => {
+    const root = directory();
+    const attentionPath = join(root, "shared-attention.sqlite");
+    await Promise.all([
+      runOpenProcess(attentionPath, join(root, "runtime-a.sqlite")),
+      runOpenProcess(attentionPath, join(root, "runtime-b.sqlite")),
+    ]);
+    expect(rawEvents(attentionPath)).toMatchObject([
+      { sequence: 1, type: "attention.history.initialized.v1" },
+    ]);
   });
 
   it("applies expiry without changing saved outcomes and refuses a regressed read clock", () => {
@@ -215,7 +349,7 @@ describe("recorded attention history", () => {
     const serialized: unknown = JSON.parse(JSON.stringify(genuine));
     const wrongBoundary = f.runtime.requestBoundaryAuthorization({
       boundary: "watchlist_import",
-      actionId: expected.refreshId,
+      actionId: attentionPreviewActionId(expected),
       authorizationId: randomUUID(),
     });
     const wrongAction = f.runtime.requestBoundaryAuthorization({
@@ -256,7 +390,7 @@ describe("recorded attention history", () => {
           ownsAttentionRefreshAuthorization: (
             input: unknown,
           ): input is RuntimeBoundaryAuthorization<"attention_refresh"> => input !== null,
-          verifyPersistedAttentionRefreshReceipt: () => {
+          verifyPersistedAttentionRefreshReceipts: () => {
             throw new Error("forged");
           },
         },
@@ -293,10 +427,14 @@ describe("recorded attention history", () => {
     const authorization = other.authorize(expected);
     const before = other.runtime.listAudit();
     expect(() => f.history.record({ input, expected, authorization })).toThrow(
-      "attention_authority_mismatch",
+      "attention_history_mismatch",
     );
     expect(other.runtime.listAudit()).toEqual(before);
     expect(events(f.path)).toEqual([]);
+    expect(other.history.record({ input, expected, authorization })).toMatchObject({
+      binding: expected,
+    });
+    expect(events(other.path)).toHaveLength(1);
   });
 
   it("rejects a live foreign authority with the same public runtime identity", () => {
@@ -321,7 +459,7 @@ describe("recorded attention history", () => {
     });
     const foreignAuthorization = foreignRuntime.requestBoundaryAuthorization({
       boundary: "attention_refresh",
-      actionId: expected.refreshId,
+      actionId: attentionPreviewActionId(expected),
       authorizationId: randomUUID(),
     });
     const foreignAudit = foreignRuntime.listAudit();
@@ -368,7 +506,7 @@ describe("recorded attention history", () => {
     });
     const staleAuthorization = staleRuntime.requestBoundaryAuthorization({
       boundary: "attention_refresh",
-      actionId: expected.refreshId,
+      actionId: attentionPreviewActionId(expected),
       authorizationId: randomUUID(),
     });
     staleRuntime.close();
@@ -429,11 +567,147 @@ describe("recorded attention history", () => {
         expected: original,
         authorization: f.authorize(original),
       }),
-    ).toThrow("attention_authority_mismatch");
+    ).toThrow("attention_preview_mismatch");
     f.record(changed);
     expect(() =>
       f.history.record({ input, expected: original, authorization: f.authorize(original) }),
-    ).toThrow("attention_preview_mismatch");
+    ).toThrow("attention_preview_stale");
+    expect(events(f.path)).toHaveLength(1);
+  });
+
+  it("commits every mutable V2 binding field into the preview action", () => {
+    const fixedBinding = AttentionPreviewBindingSchema.parse({
+      schemaVersion: 2,
+      kind: "attention_preview_binding",
+      policyVersion: "attention-v2",
+      historyId: "00000000-0000-4000-8000-000000000001",
+      previewId: "00000000-0000-4000-8000-000000000002",
+      bundleId: "1".repeat(64),
+      refreshId: "2".repeat(64),
+      auditHead: { refreshId: "3".repeat(64), eventHash: "4".repeat(64), sequence: 6 },
+      processInstanceId: "00000000-0000-4000-8000-000000000003",
+      modeRevision: 7,
+      evaluatedAt: "2026-10-21T12:00:00.000Z",
+      deadline: "2026-10-21T12:00:30.000Z",
+      decisionHash: "5".repeat(64),
+    });
+    expect(attentionPreviewActionId(fixedBinding)).toBe(
+      "attention-preview-v2:d025e5c0f6cd90308349220ed504bec1cd9e1d7345da9170da5d763149778720",
+    );
+
+    const f = fixture();
+    const input = recordedBundle();
+    const original = f.preview(input).binding;
+    const shiftedEvaluatedAt = new Date(Date.parse(original.evaluatedAt) + 1).toISOString();
+    const shiftedDeadline = new Date(Date.parse(original.deadline) + 1).toISOString();
+    const mutations: ReadonlyArray<readonly [string, unknown]> = [
+      ["historyId", { ...original, historyId: randomUUID() }],
+      ["previewId", { ...original, previewId: randomUUID() }],
+      ["bundleId", { ...original, bundleId: differentHash(original.bundleId) }],
+      ["refreshId", { ...original, refreshId: differentHash(original.refreshId) }],
+      [
+        "auditHead",
+        {
+          ...original,
+          auditHead: {
+            refreshId: original.refreshId,
+            eventHash: "f".repeat(64),
+            sequence: 1,
+          },
+        },
+      ],
+      ["processInstanceId", { ...original, processInstanceId: randomUUID() }],
+      ["modeRevision", { ...original, modeRevision: original.modeRevision + 1 }],
+      [
+        "evaluatedAt/deadline",
+        { ...original, evaluatedAt: shiftedEvaluatedAt, deadline: shiftedDeadline },
+      ],
+      ["decisionHash", { ...original, decisionHash: differentHash(original.decisionHash) }],
+    ];
+    const originalAction = attentionPreviewActionId(original);
+    for (const [field, value] of mutations) {
+      const mutated = AttentionPreviewBindingSchema.parse(value);
+      expect(attentionPreviewActionId(mutated), field).not.toBe(originalAction);
+      const authorization = f.authorize(original);
+      const before = f.runtime.listAudit();
+      expect(() => f.history.record({ input, expected: mutated, authorization }), field).toThrow();
+      expect(f.runtime.listAudit(), field).toEqual(before);
+    }
+    for (const invalid of [
+      { ...original, schemaVersion: 1 },
+      { ...original, kind: "other" },
+      { ...original, policyVersion: "attention-v1" },
+      {
+        ...original,
+        deadline: new Date(Date.parse(original.deadline) + 1).toISOString(),
+      },
+    ]) {
+      expect(() => AttentionPreviewBindingSchema.parse(invalid)).toThrow();
+    }
+    expect(
+      f.history.record({ input, expected: original, authorization: f.authorize(original) }),
+    ).toMatchObject({ binding: original });
+
+    f.clock.now = "2026-10-21T12:01:30.000Z";
+    const next = f.preview(
+      recordedBundle({
+        acquiredAt: "2026-10-21T12:01:00.000Z",
+        candidates: [],
+        x: { kind: "absent" },
+      }),
+    ).binding;
+    if (next.auditHead === null) throw new Error("expected a committed audit head");
+    const actionWithHead = attentionPreviewActionId(next);
+    for (const [field, auditHead] of [
+      [
+        "auditHead.refreshId",
+        { ...next.auditHead, refreshId: differentHash(next.auditHead.refreshId) },
+      ],
+      [
+        "auditHead.eventHash",
+        { ...next.auditHead, eventHash: differentHash(next.auditHead.eventHash) },
+      ],
+      ["auditHead.sequence", { ...next.auditHead, sequence: next.auditHead.sequence + 1 }],
+    ] as const) {
+      const mutated = AttentionPreviewBindingSchema.parse({ ...next, auditHead });
+      expect(attentionPreviewActionId(mutated), field).not.toBe(actionWithHead);
+    }
+  });
+
+  it("rejects old permits and old heads after an intervening commit without extra writes", () => {
+    const f = fixture();
+    const delayedInput = recordedBundle({
+      candidates: [],
+      x: { kind: "absent" },
+    });
+    const oldBinding = f.preview(delayedInput).binding;
+    const oldAuthorization = f.authorize(oldBinding);
+    f.record(recordedBundle());
+    f.clock.now = "2026-10-21T12:01:30.000Z";
+    const newInput = recordedBundle({
+      acquiredAt: "2026-10-21T12:01:00.000Z",
+      candidates: [],
+      x: { kind: "absent" },
+    });
+    const newBinding = f.preview(newInput).binding;
+    const before = f.runtime.listAudit();
+    expect(() =>
+      f.history.record({
+        input: newInput,
+        expected: newBinding,
+        authorization: oldAuthorization,
+      }),
+    ).toThrow("attention_authority_mismatch");
+    expect(f.runtime.listAudit()).toEqual(before);
+    expect(events(f.path)).toHaveLength(1);
+    expect(() =>
+      f.history.record({
+        input: delayedInput,
+        expected: oldBinding,
+        authorization: oldAuthorization,
+      }),
+    ).toThrow("attention_preview_stale");
+    expect(f.runtime.listAudit()).toEqual(before);
     expect(events(f.path)).toHaveLength(1);
   });
 
@@ -448,6 +722,95 @@ describe("recorded attention history", () => {
       "attention_preview_expired",
     );
     expect(events(f.path)).toEqual([]);
+  });
+
+  it("accepts a frozen-wall preview at 29,999ms and rejects it at 30,000ms", () => {
+    const beforeDeadline = fixture();
+    const firstInput = recordedBundle();
+    const firstBinding = beforeDeadline.preview(firstInput).binding;
+    beforeDeadline.leaseClock.now = 29_999;
+    expect(
+      beforeDeadline.history.record({
+        input: firstInput,
+        expected: firstBinding,
+        authorization: beforeDeadline.authorize(firstBinding),
+      }),
+    ).toMatchObject({ binding: firstBinding });
+
+    const atDeadline = fixture();
+    const secondInput = recordedBundle();
+    const secondBinding = atDeadline.preview(secondInput).binding;
+    const authorization = atDeadline.authorize(secondBinding);
+    const before = atDeadline.runtime.listAudit();
+    atDeadline.leaseClock.now = 30_000;
+    expect(() =>
+      atDeadline.history.record({
+        input: secondInput,
+        expected: secondBinding,
+        authorization,
+      }),
+    ).toThrow("attention_preview_expired");
+    expect(atDeadline.runtime.listAudit()).toEqual(before);
+    expect(events(atDeadline.path)).toEqual([]);
+  });
+
+  it.each([
+    ["after the attention lock", [29_999, 30_000]],
+    ["immediately before append", [29_999, 29_999, 30_000]],
+  ] as const)("rechecks a lease %s", (_label, samples) => {
+    const f = fixture();
+    const input = recordedBundle();
+    const expected = f.preview(input).binding;
+    const authorization = f.authorize(expected);
+    f.leaseClock.samples = [...samples];
+    expect(() => f.history.record({ input, expected, authorization })).toThrow(
+      "attention_preview_expired",
+    );
+    expect(events(f.path)).toEqual([]);
+    expect(
+      f.runtime
+        .listAudit()
+        .filter(
+          (event) =>
+            event.type === "runtime.boundary.checked.v1" &&
+            event.payload.authorizationId === authorization.authorizationId,
+        ),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      "throwing",
+      (): never => {
+        throw new Error("clock failed");
+      },
+      "attention_monotonic_clock_failed",
+    ],
+    ["negative", (): number => -1, "attention_monotonic_clock_invalid"],
+    ["non-finite", (): number => Number.NaN, "attention_monotonic_clock_invalid"],
+    [
+      "unsafe expiry",
+      (): number => Number.MAX_SAFE_INTEGER - ATTENTION_PREVIEW_TTL_MS + 1,
+      "attention_monotonic_clock_invalid",
+    ],
+  ] as const)("rejects a %s monotonic clock", (_label, monotonicClock, code) => {
+    const f = fixture();
+    using history = RecordedAttentionHistory.open({
+      path: join(f.root, `${_label}.sqlite`),
+      receiptVerifier: f.receiptVerifier,
+      monotonicClock,
+    });
+    expect(() => history.preview(recordedBundle(), f.context())).toThrow(code);
+  });
+
+  it("rejects a regressed monotonic sample", () => {
+    const f = fixture();
+    f.leaseClock.now = 10;
+    f.preview(recordedBundle());
+    f.leaseClock.now = 9;
+    expect(() => f.preview(recordedBundle({ candidates: [], x: { kind: "absent" } }))).toThrow(
+      "attention_monotonic_clock_regressed",
+    );
   });
 
   it.each([
@@ -558,6 +921,9 @@ describe("recorded attention history", () => {
     const history = RecordedAttentionHistory.open({
       path: f.path,
       receiptVerifier: createRuntimeAttentionReceiptVerifier(runtime),
+      monotonicClock: () => {
+        throw new Error("duplicate lookup must not read the lease clock");
+      },
     });
     closeables.push(history);
     const equivalent = structuredClone(input);
@@ -569,7 +935,7 @@ describe("recorded attention history", () => {
       modeRevision: runtime.getSnapshot().revision,
       evaluatedAt: "2026-10-21T13:00:00.000Z",
     });
-    expect(preview).toEqual({ kind: "already_recorded", result });
+    expect(preview).toEqual({ schemaVersion: 2, kind: "already_recorded", result });
     expect(history.read("2026-10-21T13:00:00.000Z")).toMatchObject({
       kind: "available",
       latest: result,
@@ -577,6 +943,64 @@ describe("recorded attention history", () => {
     expect(append).not.toHaveBeenCalled();
     expect(runtime.listAudit()).toEqual(before);
     expect(events(f.path)).toHaveLength(1);
+  });
+
+  it("invalidates uncommitted previews on restart and close without consuming their permits", () => {
+    const restarted = fixture();
+    const input = recordedBundle();
+    const binding = restarted.preview(input).binding;
+    const authorization = restarted.authorize(binding);
+    restarted.history.close();
+    const auditBeforeRestart = restarted.runtime.listAudit();
+    using reopened = RecordedAttentionHistory.open({
+      path: restarted.path,
+      receiptVerifier: restarted.receiptVerifier,
+      monotonicClock: () => 0,
+    });
+    expect(() => reopened.record({ input, expected: binding, authorization })).toThrow(
+      "attention_preview_lease_missing",
+    );
+    expect(restarted.runtime.listAudit()).toEqual(auditBeforeRestart);
+    let restartedPermitUsable = false;
+    authorization.consumeAndCommit((_receipt, checkpoint) => {
+      checkpoint();
+      restartedPermitUsable = true;
+    });
+    expect(restartedPermitUsable).toBe(true);
+
+    const closed = fixture();
+    const closedInput = recordedBundle();
+    const closedBinding = closed.preview(closedInput).binding;
+    const closedAuthorization = closed.authorize(closedBinding);
+    closed.history.close();
+    const auditBeforeCloseRetry = closed.runtime.listAudit();
+    expect(() =>
+      closed.history.record({
+        input: closedInput,
+        expected: closedBinding,
+        authorization: closedAuthorization,
+      }),
+    ).toThrow("attention_history_unavailable");
+    expect(closed.runtime.listAudit()).toEqual(auditBeforeCloseRetry);
+  });
+
+  it("fails closed at live-preview capacity without evicting an existing lease", () => {
+    const f = fixture();
+    const input = recordedBundle();
+    const first = f.preview(input).binding;
+    for (let index = 1; index < MAX_LIVE_ATTENTION_PREVIEWS; index += 1) f.preview(input);
+    expect(() => f.preview(input)).toThrow("attention_preview_capacity_reached");
+    expect(
+      f.history.record({ input, expected: first, authorization: f.authorize(first) }),
+    ).toMatchObject({ binding: first });
+  });
+
+  it("prunes expired preview leases before admitting a new one", () => {
+    const f = fixture();
+    const input = recordedBundle();
+    for (let index = 0; index < MAX_LIVE_ATTENTION_PREVIEWS; index += 1) f.preview(input);
+    f.leaseClock.now = ATTENTION_PREVIEW_TTL_MS;
+    expect(f.preview(input)).toMatchObject({ schemaVersion: 2, kind: "preview" });
   });
 
   it("replays a changed post cluster without renewing it under a later post ID", () => {
@@ -634,10 +1058,15 @@ describe("recorded attention history", () => {
     const consumedAuthorization = f.authorize(expected);
     const result = f.history.record({ input, expected, authorization: consumedAuthorization });
     const beforeConsumedRetry = f.runtime.listAudit();
+    const leaseReads = f.leaseClock.reads;
+    f.leaseClock.fail = true;
+    const append = vi.spyOn(SqliteEventStore.prototype, "append");
     expect(f.history.record({ input, expected, authorization: consumedAuthorization })).toEqual(
       result,
     );
     expect(f.runtime.listAudit()).toEqual(beforeConsumedRetry);
+    expect(f.leaseClock.reads).toBe(leaseReads);
+    expect(append).not.toHaveBeenCalled();
     expect(events(f.path)).toHaveLength(1);
     const authorization = f.authorize(result.binding);
     const before = f.runtime.listAudit();
@@ -742,8 +1171,8 @@ describe("recorded attention history", () => {
     const view = f.history.read(f.clock.now);
     if (view.kind !== "available") throw new Error("expected available");
     expect(view.history).toHaveLength(20);
-    expect(view.history[0]?.head.sequence).toBe(22);
-    expect(view.history.at(-1)?.head.sequence).toBe(3);
+    expect(view.history[0]?.head.sequence).toBe(23);
+    expect(view.history.at(-1)?.head.sequence).toBe(4);
     expect(events(f.path)).toHaveLength(22);
   });
 
@@ -820,6 +1249,7 @@ describe("recorded attention history", () => {
       });
       const path = join(f.root, `reused-${field}.sqlite`);
       using store = new SqliteEventStore(path);
+      appendGenesis(store, f.path);
       store.append(eventInput(first));
       store.append({ ...eventInput(second), payload: secondPayload });
       expect(() =>
@@ -870,6 +1300,129 @@ describe("recorded attention history", () => {
     ).toThrow("attention_input_invalid");
   });
 
+  it("rejects missing, replaced, duplicated, misordered, and legacy genesis histories", () => {
+    const f = fixture();
+    f.record(recordedBundle());
+    const [genesis, batch] = rawEvents(f.path);
+    if (genesis === undefined || batch === undefined) throw new Error("missing history events");
+
+    const missingPath = join(f.root, "missing-genesis.sqlite");
+    using missing = new SqliteEventStore(missingPath);
+    missing.append(eventInput(batch));
+    expect(() =>
+      RecordedAttentionHistory.open({ path: missingPath, receiptVerifier: f.receiptVerifier }),
+    ).toThrow("attention_history_inconsistent");
+
+    const replacedPath = join(f.root, "replaced-genesis.sqlite");
+    using replaced = new SqliteEventStore(replacedPath);
+    replaced.append({ ...eventInput(genesis), type: "unknown" });
+    expect(() =>
+      RecordedAttentionHistory.open({ path: replacedPath, receiptVerifier: f.receiptVerifier }),
+    ).toThrow("attention_history_inconsistent");
+
+    const duplicatePath = join(f.root, "duplicate-genesis.sqlite");
+    using duplicate = new SqliteEventStore(duplicatePath);
+    duplicate.append(eventInput(genesis));
+    const duplicateId = randomUUID();
+    duplicate.append({
+      type: "attention.history.initialized.v1",
+      aggregateId: "attention:recorded-base",
+      eventId: `attention-history-v1:${duplicateId}`,
+      idempotencyKey: `attention-history-v1:${duplicateId}`,
+      occurredAt: NOW,
+      payload: {
+        schemaVersion: 1,
+        kind: "attention_history_initialized",
+        historyId: duplicateId,
+        initializedAt: NOW,
+      },
+    });
+    expect(() =>
+      RecordedAttentionHistory.open({ path: duplicatePath, receiptVerifier: f.receiptVerifier }),
+    ).toThrow("attention_history_inconsistent");
+
+    const misorderedPath = join(f.root, "misordered-genesis.sqlite");
+    using misordered = new SqliteEventStore(misorderedPath);
+    misordered.append({
+      type: "unknown",
+      aggregateId: "attention:recorded-base",
+      occurredAt: NOW,
+      payload: {},
+    });
+    misordered.append(eventInput(genesis));
+    expect(() =>
+      RecordedAttentionHistory.open({ path: misorderedPath, receiptVerifier: f.receiptVerifier }),
+    ).toThrow("attention_history_inconsistent");
+
+    const legacyPath = join(f.root, "legacy.sqlite");
+    using legacy = new SqliteEventStore(legacyPath);
+    legacy.append({
+      type: "attention.batch.recorded.v1",
+      aggregateId: "attention:recorded-base",
+      occurredAt: NOW,
+      payload: {},
+    });
+    expect(() =>
+      RecordedAttentionHistory.open({ path: legacyPath, receiptVerifier: f.receiptVerifier }),
+    ).toThrow("attention_history_unsupported");
+  });
+
+  it.each(["different history ID", "same history ID with a different genesis"] as const)(
+    "pins its exact initialized lineage across a self-consistent empty-store replacement: %s",
+    (replacementKind) => {
+      const f = fixture();
+      const originalGenesis = rawEvents(f.path)[0];
+      if (originalGenesis === undefined) throw new Error("missing genesis");
+      const originalHistoryId = (originalGenesis.payload as { historyId: string }).historyId;
+      using database = new DatabaseSync(f.path);
+      database.exec(`
+      BEGIN IMMEDIATE;
+      DELETE FROM rsi_events;
+      UPDATE rsi_event_store_metadata
+         SET head_sequence = 0,
+             head_hash = '${"0".repeat(64)}'
+       WHERE singleton = 1;
+      COMMIT;
+    `);
+      const replacementId =
+        replacementKind === "different history ID" ? randomUUID() : originalHistoryId;
+      const replacementAt = originalGenesis.occurredAt === NOW ? "2026-10-21T12:00:31.000Z" : NOW;
+      using replacement = new SqliteEventStore(f.path);
+      replacement.append({
+        type: "attention.history.initialized.v1",
+        aggregateId: "attention:recorded-base",
+        eventId: `attention-history-v1:${replacementId}`,
+        idempotencyKey: `attention-history-v1:${replacementId}`,
+        occurredAt: replacementAt,
+        payload: {
+          schemaVersion: 1,
+          kind: "attention_history_initialized",
+          historyId: replacementId,
+          initializedAt: replacementAt,
+        },
+      });
+      expect(() => f.history.read(NOW)).toThrow("attention_history_changed");
+    },
+  );
+
+  it("requires a V2 batch receipt action to match the complete stored binding", () => {
+    const f = fixture();
+    f.record(recordedBundle());
+    const batch = events(f.path)[0];
+    if (batch === undefined) throw new Error("missing batch");
+    const payload = AttentionRecordedEventSchema.parse(batch.payload);
+    Object.assign(payload.result.authorization, {
+      actionId: `attention-preview-v2:${"f".repeat(64)}`,
+    });
+    const path = join(f.root, "wrong-preview-action.sqlite");
+    using store = new SqliteEventStore(path);
+    appendGenesis(store, f.path);
+    store.append({ ...eventInput(batch), payload });
+    expect(() =>
+      RecordedAttentionHistory.open({ path, receiptVerifier: f.receiptVerifier }),
+    ).toThrow("attention_history_inconsistent");
+  });
+
   it.each(["type", "aggregateId", "eventId", "idempotencyKey", "occurredAt"] as const)(
     "rejects a hash-consistent wrong event envelope %s",
     (field) => {
@@ -879,6 +1432,7 @@ describe("recorded attention history", () => {
       if (event === undefined) throw new Error("missing event");
       const path = join(f.root, `bad-${field}.sqlite`);
       using store = new SqliteEventStore(path);
+      appendGenesis(store, f.path);
       store.append({
         ...eventInput(event),
         [field]: field === "occurredAt" ? "2026-10-21T12:00:31.000Z" : "wrong",
@@ -932,6 +1486,7 @@ describe("recorded attention history", () => {
     }
     const path = join(f.root, `bad-${mutation}.sqlite`);
     using store = new SqliteEventStore(path);
+    appendGenesis(store, f.path);
     store.append({ ...eventInput(event), payload });
     expect(() =>
       RecordedAttentionHistory.open({ path, receiptVerifier: f.receiptVerifier }),
@@ -961,6 +1516,56 @@ describe("recorded attention history", () => {
     expect(() => f.history.read(NOW)).toThrow();
   });
 
+  it("detects corruption before the latest persisted runtime receipt", () => {
+    const f = fixture();
+    f.record(recordedBundle());
+    f.clock.now = "2026-10-21T12:01:30.000Z";
+    f.record(recordedBundle({ acquiredAt: "2026-10-21T12:01:00.000Z" }));
+    const first = AttentionRecordedEventSchema.parse(events(f.path)[0]?.payload);
+    using runtimeDb = new DatabaseSync(f.runtimePath);
+    runtimeDb
+      .prepare("UPDATE rsi_events SET event_type = 'corrupt' WHERE event_hash = ?")
+      .run(first.result.authorization.eventHash);
+    expect(() => f.history.read(f.clock.now)).toThrow();
+  });
+
+  it("rejects a forged earlier receipt when the latest receipt is genuine", () => {
+    const f = fixture();
+    f.record(recordedBundle());
+    f.clock.now = "2026-10-21T12:01:30.000Z";
+    f.record(recordedBundle({ acquiredAt: "2026-10-21T12:01:00.000Z" }));
+    const [firstEvent, secondEvent] = events(f.path);
+    if (firstEvent === undefined || secondEvent === undefined) {
+      throw new Error("missing attention batches");
+    }
+    const firstPayload = AttentionRecordedEventSchema.parse(firstEvent.payload);
+    const secondPayload = AttentionRecordedEventSchema.parse(secondEvent.payload);
+    Object.assign(firstPayload.result.authorization, {
+      authorizationId: randomUUID(),
+      eventHash: differentHash(firstPayload.result.authorization.eventHash),
+    });
+
+    const path = join(f.root, "forged-earlier-receipt.sqlite");
+    using store = new SqliteEventStore(path);
+    appendGenesis(store, f.path);
+    const forgedFirst = store.append({ ...eventInput(firstEvent), payload: firstPayload });
+    if (secondPayload.result.binding.auditHead === null) {
+      throw new Error("missing predecessor head");
+    }
+    secondPayload.result.binding.auditHead.eventHash = forgedFirst.eventHash;
+    const genuineLatest = f
+      .authorize(secondPayload.result.binding)
+      .consumeAndCommit((_receipt, checkpoint) => {
+        checkpoint();
+      });
+    Object.assign(secondPayload.result, { authorization: genuineLatest });
+    store.append({ ...eventInput(secondEvent), payload: secondPayload });
+    expect(f.runtime.verifyPersistedAttentionRefreshReceipt(genuineLatest)).toEqual(genuineLatest);
+    expect(() =>
+      RecordedAttentionHistory.open({ path, receiptVerifier: f.receiptVerifier }),
+    ).toThrow("no exact durable event");
+  });
+
   it("fails closed on attention hash corruption and unknown appended events", () => {
     const f = fixture();
     f.record(recordedBundle());
@@ -985,6 +1590,7 @@ describe("recorded attention history", () => {
     const path = join(f.root, "overflow.sqlite");
     using store = new SqliteEventStore(path);
     store.withExclusiveTransaction(() => {
+      appendGenesis(store, f.path);
       for (let index = 0; index <= MAX_ATTENTION_HISTORY; index += 1)
         store.append({
           type: "unknown",
@@ -998,6 +1604,7 @@ describe("recorded attention history", () => {
     ).toThrow("attention_history_full");
     const largePath = join(f.root, "large.sqlite");
     using largeStore = new SqliteEventStore(largePath);
+    appendGenesis(largeStore, f.path);
     largeStore.append({
       type: "unknown",
       aggregateId: "attention:recorded-base",

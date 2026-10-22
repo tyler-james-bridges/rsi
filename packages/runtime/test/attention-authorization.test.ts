@@ -3,9 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { SqliteEventStore } from "@rsi/store";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  MAX_PERSISTED_ATTENTION_REFRESH_RECEIPTS,
   RuntimeBoundaryDeniedError,
   RuntimeIntegrityError,
   RuntimeValidationError,
@@ -36,6 +38,7 @@ function deniedReceipt(operation: () => unknown): Readonly<RuntimeBoundaryReceip
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
   }
@@ -470,6 +473,80 @@ describe("attention refresh authorization", () => {
       expect(clockWasRead).toBe(false);
     } finally {
       restarted.close();
+    }
+  });
+
+  it("verifies a bounded receipt batch with one runtime replay and indexed exact lookups", () => {
+    const runtime = SqliteRuntimeController.open(
+      { path: databasePath(), openedAt: NOW, processInstanceId: randomUUID() },
+      { clock: () => NOW, monotonicClock: () => 0 },
+    );
+    runtime.transition({
+      expectedMode: "STOPPED",
+      expectedRevision: 1,
+      occurredAt: NOW,
+      requestId: randomUUID(),
+      targetMode: "RESEARCH",
+    });
+    const issue = (actionId: string) =>
+      runtime
+        .requestBoundaryAuthorization({
+          actionId,
+          authorizationId: randomUUID(),
+          boundary: "attention_refresh",
+        })
+        .consumeAndCommit((_receipt, checkpoint) => {
+          checkpoint();
+        });
+    const first = issue("attention-batch-first");
+    const second = issue("attention-batch-second");
+    const transaction = vi.spyOn(SqliteEventStore.prototype, "withExclusiveTransaction");
+    const list = vi.spyOn(SqliteEventStore.prototype, "list");
+    const lookup = vi.spyOn(SqliteEventStore.prototype, "getByIdempotencyKey");
+
+    try {
+      const verified = runtime.verifyPersistedAttentionRefreshReceipts(
+        JSON.parse(JSON.stringify([first, second])),
+      );
+      expect(verified).toEqual([first, second]);
+      expect(Object.isFrozen(verified)).toBe(true);
+      expect(verified.every(Object.isFrozen)).toBe(true);
+      expect(transaction).toHaveBeenCalledTimes(1);
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(lookup).toHaveBeenCalledTimes(2);
+
+      expect(
+        runtime.verifyPersistedAttentionRefreshReceipts(
+          Array(MAX_PERSISTED_ATTENTION_REFRESH_RECEIPTS).fill(first),
+        ),
+      ).toHaveLength(MAX_PERSISTED_ATTENTION_REFRESH_RECEIPTS);
+
+      expect(() =>
+        runtime.verifyPersistedAttentionRefreshReceipts([
+          first,
+          { ...second, authorizationId: randomUUID() },
+        ]),
+      ).toThrow(RuntimeIntegrityError);
+      expect(() =>
+        runtime.verifyPersistedAttentionRefreshReceipts(
+          Array(MAX_PERSISTED_ATTENTION_REFRESH_RECEIPTS + 1).fill(first),
+        ),
+      ).toThrow(RuntimeValidationError);
+      expect(() => runtime.verifyPersistedAttentionRefreshReceipts(new Proxy([first], {}))).toThrow(
+        RuntimeValidationError,
+      );
+      const accessorBatch: unknown[] = [];
+      Object.defineProperty(accessorBatch, "0", {
+        enumerable: true,
+        get: () => {
+          throw new Error("batch accessor must not run");
+        },
+      });
+      expect(() => runtime.verifyPersistedAttentionRefreshReceipts(accessorBatch)).toThrow(
+        RuntimeValidationError,
+      );
+    } finally {
+      runtime.close();
     }
   });
 });

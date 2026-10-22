@@ -59,6 +59,7 @@ export const RUNTIME_STOP_EVENT_TYPE = "runtime.stop.enforced.v1" as const;
 export const RUNTIME_TRANSITION_EVENT_TYPE = "runtime.mode.transitioned.v1" as const;
 export const RUNTIME_BOUNDARY_EVENT_TYPE = "runtime.boundary.checked.v1" as const;
 export const RUNTIME_BOUNDARY_AUTHORIZATION_TTL_MS = 30_000 as const;
+export const MAX_PERSISTED_ATTENTION_REFRESH_RECEIPTS = 1_000 as const;
 
 export const PERMANENTLY_DENIED_RUNTIME_BOUNDARIES = Object.freeze([
   "policy_approval",
@@ -624,6 +625,38 @@ function assertExactAttentionRefreshReceipt(
   }
 }
 
+function parsePersistedAttentionRefreshReceipts(
+  inputValue: unknown,
+): readonly RuntimeAllowedAttentionRefreshReceipt[] {
+  if (
+    !Array.isArray(inputValue) ||
+    utilTypes.isProxy(inputValue) ||
+    Object.getPrototypeOf(inputValue) !== Array.prototype ||
+    inputValue.length > MAX_PERSISTED_ATTENTION_REFRESH_RECEIPTS
+  ) {
+    throw new RuntimeValidationError("Persisted attention refresh receipt batch is invalid");
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(inputValue);
+  if (Reflect.ownKeys(inputValue).length !== inputValue.length + 1) {
+    throw new RuntimeValidationError("Persisted attention refresh receipt batch is invalid");
+  }
+  const receipts: RuntimeAllowedAttentionRefreshReceipt[] = [];
+  for (let index = 0; index < inputValue.length; index += 1) {
+    const descriptor = descriptors[String(index)];
+    if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+      throw new RuntimeValidationError("Persisted attention refresh receipt batch is invalid");
+    }
+    receipts.push(
+      parseRuntimeInput(
+        RuntimeAllowedAttentionRefreshReceiptSchema,
+        descriptor.value,
+        `Persisted attention refresh receipt ${index}`,
+      ),
+    );
+  }
+  return receipts;
+}
+
 function appendBoundaryCheck(
   store: SqliteEventStore,
   replay: ReplayResult,
@@ -1041,19 +1074,26 @@ export class SqliteRuntimeController {
   verifyPersistedAttentionRefreshReceipt(
     inputValue: unknown,
   ): Readonly<RuntimeAllowedAttentionRefreshReceipt> {
+    const receipt = this.verifyPersistedAttentionRefreshReceipts([inputValue])[0];
+    if (receipt === undefined) throw new RuntimeIntegrityError("Receipt verification failed");
+    return receipt;
+  }
+
+  verifyPersistedAttentionRefreshReceipts(
+    inputValue: unknown,
+  ): readonly Readonly<RuntimeAllowedAttentionRefreshReceipt>[] {
     this.#assertAuthentic();
-    const receipt = parseRuntimeInput(
-      RuntimeAllowedAttentionRefreshReceiptSchema,
-      inputValue,
-      "Persisted attention refresh receipt",
-    );
+    const receipts = parsePersistedAttentionRefreshReceipts(inputValue);
     return this.#store.withExclusiveTransaction(() => {
       replayRuntimeStore(this.#store);
-      const event = this.#store.getByIdempotencyKey(
-        `runtime-boundary-v1:${receipt.authorizationId}`,
-      );
-      assertExactAttentionRefreshReceipt(event, receipt);
-      return Object.freeze(receipt);
+      for (const receipt of receipts) {
+        const event = this.#store.getByIdempotencyKey(
+          `runtime-boundary-v1:${receipt.authorizationId}`,
+        );
+        assertExactAttentionRefreshReceipt(event, receipt);
+        Object.freeze(receipt);
+      }
+      return Object.freeze(receipts);
     });
   }
 

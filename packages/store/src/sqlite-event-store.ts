@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 
 import { canonicalJson, deepFreezeJson, InvalidJsonValueError } from "./canonical-json.js";
@@ -21,6 +22,9 @@ import type {
 const SCHEMA_VERSION = 1;
 const GENESIS_HASH = "0".repeat(64);
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
+const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+const SQLITE_BUSY_RETRY_INTERVAL_MS = 5;
+const SQLITE_BUSY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 const MAX_IDENTIFIER_BYTES = 512;
 const MAX_PAYLOAD_BYTES = 1_048_576;
 const authenticSqliteEventStores = new WeakSet<object>();
@@ -83,7 +87,7 @@ export class SqliteEventStore {
     }
 
     this.path = path;
-    this.database = new DatabaseSync(path);
+    this.database = new DatabaseSync(path, { timeout: SQLITE_BUSY_TIMEOUT_MS });
 
     try {
       this.configureDatabase();
@@ -309,13 +313,16 @@ export class SqliteEventStore {
   }
 
   private configureDatabase(): void {
-    this.database.exec(`
-      PRAGMA busy_timeout = 5000;
+    this.database.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+    execWithBusyRetry(
+      this.database,
+      `
       PRAGMA foreign_keys = ON;
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = FULL;
       PRAGMA trusted_schema = OFF;
-    `);
+    `,
+    );
   }
 
   private initializeSchema(): void {
@@ -596,6 +603,27 @@ export class SqliteEventStore {
       valid: errors.length === 0,
     });
   }
+}
+
+function execWithBusyRetry(database: DatabaseSync, sql: string): void {
+  const deadline = performance.now() + SQLITE_BUSY_TIMEOUT_MS;
+  for (;;) {
+    try {
+      database.exec(sql);
+      return;
+    } catch (error) {
+      if (!isSqliteBusy(error) || performance.now() >= deadline) throw error;
+      Atomics.wait(SQLITE_BUSY_SLEEP, 0, 0, SQLITE_BUSY_RETRY_INTERVAL_MS);
+    }
+  }
+}
+
+function isSqliteBusy(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "errcode" in error &&
+    (error as Error & { readonly errcode?: unknown }).errcode === 5
+  );
 }
 
 /** Returns true only for an event store whose constructor completed successfully. */

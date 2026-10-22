@@ -62,6 +62,11 @@ matches every receipt field against the exact durable runtime event. Verificatio
 clock nor a current authority mode, so a separate attention store can verify an earlier commit
 after restart without gaining new authority.
 
+`verifyPersistedAttentionRefreshReceipts` applies the same exact check to a strict batch of at most
+1,000 receipts. It replays runtime history once under one lock, then uses each authorization ID's
+indexed durable-event lookup. This is the bounded verification path used by attention-history
+replay.
+
 The runtime database and `listAudit` DTO contain only closed mode and boundary audit fields.
 External content and research proposals belong in separate stores. `ResearchProposalV1` is
 deliberately non-executable; it cannot be converted into an `ExecutionIntent` inside this package.
