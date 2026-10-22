@@ -55,3 +55,45 @@
 - [x] Pick.
 - [x] Graft.
 - [x] Verify.
+
+## Live opportunity autonomous run
+
+- [x] State the exit condition as a checkable predicate before the first iteration.
+- [x] Pick the wake mechanism using the available CI and agent watchers.
+- [ ] Each iteration makes the smallest change the evidence justifies and verifies it against the predicate.
+- [ ] Mid-run discoveries are addressed and the run returns to the predicate.
+- [ ] Checkpoint every iteration through the decision trail.
+- [ ] Stop when the predicate is met. A plateau is not a stop.
+
+### Architect phases
+
+- [x] Ground.
+- [x] Sketch.
+- [x] Agree.
+- [ ] Implement.
+- [ ] Scrap. skip: no repeated structural deviation has shown the selected architecture is wrong.
+
+### Architect arena
+
+- [x] Frame.
+- [x] Fan out.
+- [x] Cross-judge.
+- [x] Pick.
+- [x] Graft.
+- [x] Verify.
+
+### Exit condition
+
+- [ ] A deterministic fixture produces an explained Base collection queue with review, watch, and rejected outcomes.
+- [ ] Hostile, ambiguous, stale, future-dated, cross-chain, duplicated, and forged evidence is rejected or capped by policy.
+- [ ] The loopback operator shows rank components, provenance, expiry, and the next action without exposing execution authority.
+- [ ] Refresh is explicit, STOP-aware, idempotent, restart-safe, and never performs implicit network work.
+- [ ] Existing authority gates, `pnpm check`, offline drills, a fresh process flow, and a real browser flow pass.
+- [ ] The work is published in a green, independently verified PR.
+
+### Throughput checkpoint
+
+- [x] Blocking first steps. Merge the verified watchlist base, inspect current provider contracts, define the product predicate, and create an isolated worktree.
+- [x] Independent workstreams. Ground live-source contracts, product composition, and credential readiness in parallel before selecting the architecture.
+- [x] Shared mutable state. One implementation owner writes this worktree. Design and review agents remain read-only or use isolated worktrees.
+- [x] Smallest safe decomposition. Ship collection-level research priority first because current sources cannot support honest token-level profit or purchase claims.

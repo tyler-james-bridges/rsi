@@ -1,0 +1,5 @@
+ts	phase	decision	why	evidence	result
+2026-10-22T03:39:34Z	shipping	merged the verified offline Base watchlist PR	it supplies the typed collection identity and operator review base for the live queue	PR #14, merge 1287db33141cb0f59851206a882c1b8c45acebcb	merged
+2026-10-22T03:42:00Z	frame	limited this phase to an honest collection research queue	current OpenSea, X, and Base contracts do not provide token prices, token IDs, author identity, or independent contract proof	packages/source-contracts/src/opensea-trending.ts, packages/x-collector/src/schema.ts, packages/base-rpc-collector/src/index.ts	exit predicate defined
+2026-10-22T04:10:00Z	ground	separated collection attention from token proposals and execution	live typed projections are discarded while offline watchlist provenance is unverified	.audit/live-opportunity-grounding.md	architecture constraints fixed
+2026-10-22T04:40:00Z	architecture	selected candidate B with two grafts from A	it preserves incident chronology and copied-content expiry while keeping one cohesive package	.audit/live-opportunity-architecture-synthesis.md	design agreed
