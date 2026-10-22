@@ -60,9 +60,9 @@
 
 - [x] State the exit condition as a checkable predicate before the first iteration.
 - [x] Pick the wake mechanism using the available CI and agent watchers.
-- [ ] Each iteration makes the smallest change the evidence justifies and verifies it against the predicate.
-- [ ] Mid-run discoveries are addressed and the run returns to the predicate.
-- [ ] Checkpoint every iteration through the decision trail.
+- [x] Each iteration makes the smallest change the evidence justifies and verifies it against the predicate.
+- [x] Mid-run discoveries are addressed and the run returns to the predicate.
+- [x] Checkpoint every iteration through the decision trail.
 - [ ] Stop when the predicate is met. A plateau is not a stop.
 
 ### Architect phases
@@ -71,7 +71,7 @@
 - [x] Sketch.
 - [x] Agree.
 - [x] Implement.
-- [ ] Scrap. skip: no repeated structural deviation has shown the selected architecture is wrong.
+- [x] Scrap. skip: no repeated structural deviation showed that the selected architecture was wrong.
 
 ### Architect arena
 
