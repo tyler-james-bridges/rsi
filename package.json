@@ -32,6 +32,7 @@
     "ci:stage0": "node scripts/ci/verify-stage0-authority-boundary.mjs && node --test scripts/ci/verify-stage0-authority-boundary.test.mjs",
     "ci:stage1": "node scripts/ci/verify-stage1-read-canary-boundary.mjs && node --test scripts/ci/verify-stage1-read-canary-boundary.test.mjs",
     "demo": "pnpm --filter @rsi/cli start",
+    "demo:attention-fixture": "node scripts/demo/recorded-attention-fixture.mjs",
     "demo:ingestion": "pnpm --filter @rsi/cli ingestion",
     "demo:pipeline": "pnpm --filter @rsi/cli pipeline",
     "operator": "pnpm --filter @rsi/cli run operator --",

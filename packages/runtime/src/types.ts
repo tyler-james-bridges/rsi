@@ -6,13 +6,15 @@ import type {
 
 export type RuntimeMode = "PROPOSE_ONLY" | "RESEARCH" | "STOPPED";
 
+export type RuntimeLocalCommitBoundary = "attention_refresh" | "watchlist_import";
+
 export type RuntimeBoundary =
+  | RuntimeLocalCommitBoundary
   | "execution_adapter"
   | "external_publish"
   | "paid_read"
   | "policy_approval"
   | "proposal_persist"
-  | "watchlist_import"
   | "research_collection"
   | "transaction_broadcast"
   | "wallet_sign";
@@ -94,6 +96,15 @@ export interface RuntimeBoundaryReceipt {
   readonly reason: RuntimeBoundaryDecisionReason;
 }
 
+export type RuntimeAllowedAttentionRefreshReceipt = Readonly<
+  RuntimeBoundaryReceipt & {
+    readonly boundary: "attention_refresh";
+    readonly decision: "allowed";
+    readonly mode: "RESEARCH";
+    readonly reason: "ALLOWED";
+  }
+>;
+
 export interface RuntimeBoundaryCommitCheckpointFacts {
   readonly schemaVersion: 1;
   readonly checkedAt: string;
@@ -138,7 +149,7 @@ export type RuntimeBoundaryCommit = (
 export type RuntimeBoundaryCompletion = (facts: Readonly<RuntimeBoundaryCompletionFacts>) => void;
 
 type RuntimeBoundaryAuthorizationMethods<TBoundary extends RuntimeBoundary> =
-  TBoundary extends "watchlist_import"
+  TBoundary extends RuntimeLocalCommitBoundary
     ? Readonly<{
         consumeAndCommit(commit: RuntimeBoundaryCommit): Readonly<RuntimeBoundaryReceipt>;
       }>
@@ -154,7 +165,7 @@ type RuntimeBoundaryAuthorizationMethods<TBoundary extends RuntimeBoundary> =
         }>;
 
 /**
- * Network collection authority wraps synchronous dispatch. Watchlist authority wraps a
+ * Network collection authority wraps synchronous dispatch. Local commit authority wraps a
  * synchronous commit with a final checkpoint. Other boundaries expose one-shot consumption.
  */
 export type RuntimeBoundaryAuthorization<TBoundary extends RuntimeBoundary = RuntimeBoundary> =

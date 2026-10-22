@@ -29,6 +29,9 @@ importers:
 
   apps/cli:
     dependencies:
+      "@rsi/attention":
+        specifier: workspace:*
+        version: link:../../packages/attention
       "@rsi/capture-registry":
         specifier: workspace:*
         version: link:../../packages/capture-registry
@@ -113,6 +116,18 @@ importers:
 
   packages/alerts:
     dependencies:
+      "@rsi/store":
+        specifier: workspace:*
+        version: link:../store
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/attention:
+    dependencies:
+      "@rsi/runtime":
+        specifier: workspace:*
+        version: link:../runtime
       "@rsi/store":
         specifier: workspace:*
         version: link:../store

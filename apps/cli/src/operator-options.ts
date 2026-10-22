@@ -2,6 +2,7 @@ import { realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export interface OperatorOptions {
+  readonly attentionDatabasePath: string;
   readonly databasePath: string;
   readonly port: number;
   readonly researchDatabasePath: string;
@@ -14,8 +15,12 @@ function isMissingPath(error: unknown): boolean {
   );
 }
 
+function storageContainmentIdentity(path: string): string {
+  return resolve(path).normalize("NFC").toLowerCase();
+}
+
 function isAtOrBelow(root: string, candidate: string): boolean {
-  const offset = relative(root, candidate);
+  const offset = relative(storageContainmentIdentity(root), storageContainmentIdentity(candidate));
   return (
     offset === "" || (offset !== ".." && !offset.startsWith(`..${sep}`) && !isAbsolute(offset))
   );
@@ -44,6 +49,7 @@ export function assertStage0StorageIsolation(
   researchDatabasePath: string,
   productionDataDirectory: string,
   watchlistDatabasePath?: string,
+  attentionDatabasePath?: string,
 ): void {
   const productionRoot = resolve(productionDataDirectory);
   const permittedStage0Root = join(productionRoot, "stage0");
@@ -51,6 +57,7 @@ export function assertStage0StorageIsolation(
     databasePath,
     researchDatabasePath,
     ...(watchlistDatabasePath === undefined ? [] : [watchlistDatabasePath]),
+    ...(attentionDatabasePath === undefined ? [] : [attentionDatabasePath]),
   ]) {
     if (path === ":memory:") continue;
     const candidate = resolve(path);
@@ -60,12 +67,22 @@ export function assertStage0StorageIsolation(
   }
 }
 
+export function assertDistinctStage0DatabasePaths(paths: readonly string[]): void {
+  const identities = paths.map((path) =>
+    path === ":memory:" ? path : resolve(path).normalize("NFC"),
+  );
+  if (new Set(identities).size !== identities.length) {
+    throw new TypeError("Stage 0 databases must use separate SQLite files");
+  }
+}
+
 const DEFAULT_DATABASE_PATH = ".local/stage0/rsi-runtime.sqlite";
 const DEFAULT_RESEARCH_DATABASE_PATH = ".local/stage0/rsi-research.sqlite";
+const DEFAULT_ATTENTION_DATABASE_PATH = ".local/stage0/rsi-attention.sqlite";
 
 export function operatorUsage(): string {
   return [
-    "Usage: pnpm operator [--db PATH] [--research-db PATH] [--watchlist-db PATH] [--port PORT]",
+    "Usage: pnpm operator [--db PATH] [--research-db PATH] [--watchlist-db PATH] [--attention-db PATH] [--port PORT]",
     "",
     "Starts RSI's signer-blind Stage 0 runtime and operator API on IPv4 loopback.",
     "Every process boot begins in STOPPED; this command cannot pay, sign, or execute.",
@@ -75,6 +92,7 @@ export function operatorUsage(): string {
 export function parseOperatorOptions(args: readonly string[]): OperatorOptions | null {
   let databasePath = DEFAULT_DATABASE_PATH;
   let researchDatabasePath = DEFAULT_RESEARCH_DATABASE_PATH;
+  let attentionDatabasePath: string | undefined;
   let watchlistDatabasePath: string | undefined;
   let port = 8_787;
 
@@ -99,6 +117,15 @@ export function parseOperatorOptions(args: readonly string[]): OperatorOptions |
       index += 1;
       continue;
     }
+    if (argument === "--attention-db") {
+      const value = args[index + 1];
+      if (value === undefined || value.length === 0) {
+        throw new Error("--attention-db requires a path");
+      }
+      attentionDatabasePath = value;
+      index += 1;
+      continue;
+    }
     if (argument === "--port") {
       const value = args[index + 1];
       if (value === undefined || !/^\d{1,5}$/.test(value)) {
@@ -119,22 +146,22 @@ export function parseOperatorOptions(args: readonly string[]): OperatorOptions |
     }
     throw new Error(`unknown argument: ${argument}`);
   }
-
-  if (databasePath !== ":memory:" && researchDatabasePath !== ":memory:") {
-    const normalizedRuntime = databasePath.replaceAll("\\", "/");
-    const normalizedResearch = researchDatabasePath.replaceAll("\\", "/");
-    if (normalizedRuntime === normalizedResearch) {
-      throw new Error("--db and --research-db must use separate SQLite files");
-    }
-  }
-  if (databasePath === ":memory:" && researchDatabasePath === ":memory:") {
-    throw new Error("--db and --research-db must use separate SQLite files");
-  }
   watchlistDatabasePath ??= join(dirname(researchDatabasePath), "rsi-watchlist.sqlite");
-  const paths = [databasePath, researchDatabasePath, watchlistDatabasePath].map((path) =>
-    path === ":memory:" ? path : resolve(path),
-  );
-  if (new Set(paths).size !== paths.length)
-    throw new Error("Runtime, research and watchlist must use separate SQLite files");
-  return { databasePath, port, researchDatabasePath, watchlistDatabasePath };
+  attentionDatabasePath ??=
+    researchDatabasePath === DEFAULT_RESEARCH_DATABASE_PATH
+      ? DEFAULT_ATTENTION_DATABASE_PATH
+      : join(dirname(researchDatabasePath), "rsi-attention.sqlite");
+  assertDistinctStage0DatabasePaths([
+    databasePath,
+    researchDatabasePath,
+    watchlistDatabasePath,
+    attentionDatabasePath,
+  ]);
+  return {
+    attentionDatabasePath,
+    databasePath,
+    port,
+    researchDatabasePath,
+    watchlistDatabasePath,
+  };
 }

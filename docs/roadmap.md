@@ -21,6 +21,9 @@ Status: **complete**
 - [x] Run five closed recorded scenarios through quarantine, evidence-derived abstention scoring,
       genuine `PROPOSE_ONLY` authorization, durable proposal persistence, and the local dashboard.
       Recorded evidence has zero opportunity and cannot become a trade recommendation.
+- [x] Add a recorded-only Base collection-attention queue with strict local evidence, deterministic
+      explained outcomes, an exact short-lived RESEARCH preview/record boundary, isolated history,
+      and a fictional fresh-timestamp fixture generator. It has no live provider or execution path.
 
 Exit: normal CI passes and RSI can run locally without credentials, funds, or additional hardware.
 
@@ -58,8 +61,9 @@ Status: **X READ_CANARY commissioned; OpenSea READ_CANARY complete and uncommiss
   its live request.
 - Keep raw provider content inside quarantine and persist only typed, provenance-rich evidence.
 - [ ] Add live opportunity scoring, outcome labels, source information-lift measurement, and
-      explicit abstention reasons. The completed recorded replay deliberately supplies no price or
-      return input and therefore always abstains.
+      explicit abstention reasons. The recorded attention queue exercises deterministic collection
+      triage only; its operator-supplied evidence is not live or authenticated and contains no price
+      or expected-return input.
 - Keep all wallet, payment, and transaction authority absent.
 
 Exit: RSI produces useful live NFT proposals and can be stopped durably, but cannot spend or sign.

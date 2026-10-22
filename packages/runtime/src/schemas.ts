@@ -27,6 +27,7 @@ export const RuntimeModeSchema = z.enum(["STOPPED", "RESEARCH", "PROPOSE_ONLY"])
 export const RuntimeBoundarySchema = z.enum([
   "research_collection",
   "proposal_persist",
+  "attention_refresh",
   "watchlist_import",
   "policy_approval",
   "paid_read",
@@ -134,6 +135,13 @@ export const RuntimeBoundaryReceiptSchema = z.strictObject({
   modeRevision: RuntimeRevisionSchema,
   processInstanceId: RuntimeUuidSchema,
   reason: RuntimeBoundaryDecisionReasonSchema,
+});
+
+export const RuntimeAllowedAttentionRefreshReceiptSchema = RuntimeBoundaryReceiptSchema.extend({
+  boundary: z.literal("attention_refresh"),
+  decision: z.literal("allowed"),
+  mode: z.literal("RESEARCH"),
+  reason: z.literal("ALLOWED"),
 });
 
 export type RuntimeStopEventPayload = z.infer<typeof RuntimeStopEventPayloadSchema>;

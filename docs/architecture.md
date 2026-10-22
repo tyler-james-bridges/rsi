@@ -18,7 +18,7 @@ The first product is an AI agent service, not a new protocol. Agent reasoning, r
 The active local process is narrower than the longer-term diagram below. A dedicated
 `@rsi/runtime` event store boots into `STOPPED` on every process start and permits only
 `research_collection` in `RESEARCH` and `PROPOSE_ONLY`, `watchlist_import` only in `RESEARCH`,
-and `proposal_persist` only in `PROPOSE_ONLY`. Authorizations
+`attention_refresh` only in `RESEARCH`, and `proposal_persist` only in `PROPOSE_ONLY`. Authorizations
 are genuine one-shot objects bound to the current process, mode, revision, action, and audit event.
 Payment, wallet signing, policy approval, execution-adapter use, transaction broadcast, and
 external publication are permanent denials.
@@ -31,6 +31,22 @@ runtime then holds its write lock while the watchlist acquires its own, and a fi
 revalidates authority before the append. The dashboard derives bounded current, changed, and
 departed rows from locally validated event history without a mutable projection. See
 [ADR 0002](decisions/0002-offline-base-watchlist.md).
+
+`@rsi/attention` owns a fourth isolated event database for strict recorded Base collection
+evidence. A pure assessment assigns explained `review`, `watch`, or `rejected` outcomes from exact
+contract groups, bounded rank comparisons, capped social clusters, and Base context. Every input is
+`operator_supplied_unverified`; rank and social activity are neither legitimacy evidence nor a
+return or purchase claim. Preview binds the canonical input and assessment to the runtime process,
+mode, revision, attention history head, and a 30-second wall-clock deadline. Separately, the server
+retains a private 30-second monotonic lease only for that preview window; process restart invalidates
+the lease. Record accepts only that exact server binding under a one-shot `attention_refresh` permit
+serialized against STOP. GET, startup, page reload, and timers perform no refresh. The browser reads
+the operator-selected raw JSON on Preview and retains its parsed value in memory only for the
+preview-to-record draft; it never renders the raw file. Operator responses never echo it, and
+durable attention history never persists raw X text, post IDs, or original JSON. The response
+projection is receipt-free, while server-side history replay verifies the private runtime receipt.
+See
+[ADR 0003](decisions/0003-recorded-base-collection-attention.md).
 
 Non-executable proposal scorecards live in a separate research ledger. Its isolated schema has no
 action, target, selector, calldata, recipient, payment asset, spend, order, nonce, wallet, or
@@ -129,6 +145,12 @@ These are logical and credential boundaries on the owner's existing FileVault-pr
 The local foundation now uses a transactional SQLite event log. Each event commits to its canonical payload, sequence, predecessor hash, type, aggregate, idempotency key, and timestamp. A metadata head makes direct edits, reordering, and tail deletion detectable on reopen. Duplicate retries return the original event only when the complete request is identical; conflicting reuse fails closed.
 
 The event store can be checkpointed into a separate, hash-linked journal. Each checkpoint signs the exact SQLite head sequence and hash with an injected Ed25519 key, and the verifier checks every historical anchor against the current store. The external-anchor package wraps those signed checkpoints in a separately authorized profile/retention envelope, queues immutable publication records, verifies an independently pinned suffix, and rejects rollback. Its current provider is an offline simulation. A future client-side encrypted off-host backup or immutable remote receipt may add independent retention with scoped credentials, but is not a prerequisite for local research and proposals.
+
+The runtime, research, watchlist, and attention histories remain separate SQLite files. Attention
+replay validates every stored runtime receipt against durable runtime history, so an attention-only
+restore that leaves unmatched receipts fails closed. A valid attention-only prefix rollback is
+indistinguishable from legitimate orphaned runtime receipts without an independently retained
+attention head or cross-store acknowledgement.
 
 The policy read/decide/append step runs inside one SQLite `BEGIN IMMEDIATE` transaction. A clean restart rebuilds intent-ID, nonce, and daily-spend state from approved decisions, and multiple local writers sharing that database cannot approve from stale snapshots. This does not coordinate separate database copies or hosts; a future distributed executor still requires one durable authorization authority.
 

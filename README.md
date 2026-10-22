@@ -49,6 +49,11 @@ RSI researches markets, converts adversarial internet activity into typed eviden
 - An optional read-only compatibility preflight that reports runtime and host facts without reading secret values or changing the host. Its earlier all-provider profile is not a staged-readiness verdict.
 - A signer-blind, SQLite-backed Stage 0 runtime with exact `STOPPED`, `RESEARCH`, and `PROPOSE_ONLY` modes. Every process boot persists a new STOP, transitions use compare-and-swap revisions, STOP is universal, and one-shot boundary authorizations are invalidated by any transition or restart.
 - A separate typed research ledger for non-executable proposal scorecards. It accepts only a genuine `proposal_persist` authorization in `PROPOSE_ONLY`, rejects raw or executable fields, and exposes exact assets, provenance, scam flags, bounded scores, candidates, and abstentions.
+- A separate recorded Base collection-attention queue. It strictly parses a local fictional evidence
+  bundle, derives explained `review`, `watch`, and `rejected` outcomes, and records a batch only
+  from an exact short-lived preview in `RESEARCH`. Its provenance is always
+  `operator_supplied_unverified`; it has no live source, signer, payment, trade, or expected-return
+  claim.
 - A closed recorded-fixture product loop for five adversarial scenarios. It runs the real quarantine,
   extraction, and correlation path, derives an abstention reason from the resulting evidence, fixes
   opportunity at zero, and persists only a content-free proposal through the authorized research
@@ -86,6 +91,7 @@ pnpm check
 pnpm demo
 pnpm demo:pipeline
 pnpm demo:ingestion
+mkdir -p .local/stage0 && pnpm --silent demo:attention-fixture > .local/stage0/recorded-attention-demo.json
 pnpm ci:drills
 pnpm ci:stage1
 pnpm ci:opensea
@@ -94,6 +100,11 @@ pnpm ci:release
 ```
 
 `pnpm demo` exercises the original in-memory policy decision. `pnpm demo:pipeline` runs five recorded scenarios through quarantine, typed extraction, correlation, durable events, and policy evaluation. `pnpm demo:ingestion` runs an entirely offline X cassette through encrypted snapshot storage, a sanitized event, and a signed checkpoint. All demos use fictional data and cannot execute anything.
+
+`demo:attention-fixture` copies the repository's fictional mixed attention fixture to standard
+output with only its source timestamps refreshed. The modeled source window spans 120 seconds and
+has about 90 seconds remaining when generated. It makes no network or provider request; generate
+the file immediately before loading it in the dashboard.
 
 `pnpm ci:release` runs only on a clean committed tree. It generates a deterministic inventory of
 tracked source and verifies every recorded Git object and content hash. Running the verifier twice
@@ -109,6 +120,7 @@ pnpm operator
 curl http://127.0.0.1:8787/api/runtime
 curl http://127.0.0.1:8787/api/research
 curl http://127.0.0.1:8787/api/watchlist
+curl http://127.0.0.1:8787/api/attention
 curl http://127.0.0.1:8787/api/summary
 curl 'http://127.0.0.1:8787/api/events?limit=20'
 ```
@@ -122,13 +134,23 @@ In `RESEARCH`, you can also preview and confirm an [offline Base watchlist](pack
 Choose a local JSON file. The dashboard labels the watchlist data as operator-supplied and unverified,
 shows stale and partial state, and compares observed contract groups. It makes no OpenSea request.
 
+The separate collection-attention panel also accepts one local JSON file in `RESEARCH`. Generate a
+fresh fictional file with the command above, select it, choose **Preview recorded evidence**, inspect
+the exact unrecorded assessment, then choose **Record exact preview**. Selection alone sends
+nothing. On Preview, the browser reads the selected raw JSON and retains its parsed value in memory
+only for that preview-to-record draft. It never renders the raw file. Operator responses never echo
+it, and durable history never persists raw X text, post IDs, or the original JSON. The preview
+expires quickly, is invalidated by runtime or history changes, and cannot be rebuilt by the browser.
+A duplicate remains read-only, and the panel never renders arbitrary links.
+
 The operator service binds to IPv4 loopback and has no network authentication. Do not expose it to
 a network. Every launch begins in persisted `STOPPED`. The dashboard can enter `RESEARCH`, import an
-offline watchlist, enter `PROPOSE_ONLY`, run the closed recorded-fixture replay, de-escalate, or
-STOP, but it has no financial authority. Its separate development-only runtime, research, and
-watchlist databases live under `.local/stage0/` by default. The command refuses canonical Stage 1
-storage namespaces before creating or opening a path and rejects database aliases. Stop it with
-`Ctrl-C`, which persists STOP before closing.
+offline watchlist, record a local attention assessment, enter `PROPOSE_ONLY`, run the closed
+recorded-fixture replay, de-escalate, or STOP, but it has no financial authority. Its separate
+development-only runtime, research, watchlist, and attention databases live under
+`.local/stage0/` by default. The command refuses canonical Stage 1 storage namespaces before
+creating or opening a path and rejects database aliases. Stop it with `Ctrl-C`, which persists STOP
+before closing.
 
 The production-shaped Stage 1 host is `pnpm operator:x-canary`. It also boots `STOPPED` and cannot
 sign, pay, trade, publish, or paginate. Its local data directory must be owner-only (`0700`), which
@@ -158,6 +180,7 @@ apps/operator        Loopback dashboard/API and closed local lifecycle controls
 packages/domain      Runtime schemas and EIP-712 intent format
 packages/runtime     Persisted signer-blind Stage 0 mode and boundary authority
 packages/research-ledger Typed non-executable proposal scorecards
+packages/attention   Recorded-only Base collection assessment and append-only history
 packages/policy      Non-self-modifying authorization kernel
 packages/engine      Recursive strategy proposal/promotion loop
 packages/adapters    Capability catalog and disabled execution interfaces

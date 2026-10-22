@@ -1,7 +1,9 @@
+import { fork } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -42,6 +44,42 @@ describe("canonicalJson", () => {
 });
 
 describe("SqliteEventStore", () => {
+  it("retries journal-mode configuration while another connection holds a read lock", async () => {
+    const path = makeDatabasePath();
+    using blocker = new DatabaseSync(path);
+    blocker.exec(`
+      CREATE TABLE startup_lock_probe (value INTEGER) STRICT;
+      BEGIN;
+      SELECT * FROM startup_lock_probe;
+    `);
+    const script = fileURLToPath(new URL("./open-store-child.ts", import.meta.url));
+    const child = fork(script, [path], {
+      cwd: join(import.meta.dirname, "../../.."),
+      execArgv: ["--import", "tsx"],
+      silent: true,
+    });
+    let stderr = "";
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    const exited = new Promise<readonly [number | null, NodeJS.Signals | null]>((resolve) => {
+      child.once("exit", (code, signal) => resolve([code, signal]));
+    });
+    const nextMessage = () =>
+      new Promise<unknown>((resolve, reject) => {
+        child.once("message", resolve);
+        child.once("error", reject);
+      });
+    expect(await nextMessage()).toBe("ready");
+    const opened = nextMessage();
+    child.send("open");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    blocker.exec("COMMIT");
+    expect(await opened).toBe("opened");
+    expect(await exited, stderr).toEqual([0, null]);
+  });
+
   it("appends a monotonic, hash-linked event chain", () => {
     const store = new SqliteEventStore(makeDatabasePath());
     expect(isSqliteEventStore(store)).toBe(true);

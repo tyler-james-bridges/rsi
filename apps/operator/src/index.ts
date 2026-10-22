@@ -13,6 +13,7 @@ export {
   type OperatorRecordedReplayScenario,
   type OperatorControlCommand,
   type OperatorControlProvider,
+  type OperatorAttentionProvider,
   type OperatorRuntimeProvider,
   type OperatorRuntimeSnapshotV1,
   type OperatorServerOptions,

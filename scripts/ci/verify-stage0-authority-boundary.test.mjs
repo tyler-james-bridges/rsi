@@ -374,6 +374,71 @@ test("keeps watchlist hashing and UUID allowances narrow while rejecting dynamic
   });
 });
 
+test("keeps recorded attention hashing and UUID allowances file-specific", () => {
+  withFixture((root) => {
+    write(
+      root,
+      "packages/attention/package.json",
+      manifest("@rsi/attention", {
+        "@rsi/runtime": "workspace:*",
+        "@rsi/store": "workspace:*",
+        zod: "1.0.0",
+      }),
+    );
+    write(
+      root,
+      "packages/attention/src/index.ts",
+      `export { hash } from "./hash.js"; export { historyId } from "./history.js";`,
+    );
+    write(
+      root,
+      "packages/attention/src/hash.ts",
+      `import { createHash } from "node:crypto"; export const hash = createHash("sha256").update("safe").digest("hex");`,
+    );
+    write(
+      root,
+      "packages/attention/src/history.ts",
+      `import { randomUUID } from "node:crypto"; export const historyId = randomUUID();`,
+    );
+    write(
+      root,
+      "apps/cli/src/attention-provider.ts",
+      `import { randomUUID } from "node:crypto"; import { hash } from "@rsi/attention"; export const providerId = [hash, randomUUID()];`,
+    );
+    write(root, "apps/cli/src/operator.ts", `import "./attention-provider.js";`);
+    assert.equal(verifyStage0AuthorityBoundary({ root }).status, "pass");
+
+    write(
+      root,
+      "packages/attention/src/hash.ts",
+      `import { createHash, randomUUID } from "node:crypto"; void createHash; void randomUUID;`,
+    );
+    expectFailure(root, /node:crypto imports must be exactly createHash/u);
+    write(
+      root,
+      "packages/attention/src/hash.ts",
+      `import { createHash } from "node:crypto"; void createHash;`,
+    );
+    write(
+      root,
+      "apps/cli/src/attention-provider.ts",
+      `import { createHash, randomUUID } from "node:crypto"; void createHash; void randomUUID;`,
+    );
+    expectFailure(root, /node:crypto imports must be exactly randomUUID/u);
+    write(
+      root,
+      "apps/cli/src/attention-provider.ts",
+      `import { randomUUID } from "node:crypto"; import { hash } from "@rsi/attention"; export const providerId = [hash, randomUUID()];`,
+    );
+    write(
+      root,
+      "packages/attention/src/history.ts",
+      `import { createHash, randomUUID } from "node:crypto"; void createHash; void randomUUID;`,
+    );
+    expectFailure(root, /node:crypto imports must be exactly randomUUID/u);
+  });
+});
+
 test("rejects createRequire even when the imported callable is aliased", () => {
   withFixture((root) => {
     write(

@@ -912,7 +912,7 @@ describe("SqliteRuntimeController", () => {
     runtime.close();
   });
 
-  it.each(["research_collection", "watchlist_import"] as const)(
+  it.each(["research_collection", "watchlist_import", "attention_refresh"] as const)(
     "holds the cross-process write lock through %s",
     async (boundary) => {
       const path = databasePath();
@@ -1006,12 +1006,12 @@ describe("SqliteRuntimeController", () => {
           Atomics.notify(coordination, 2);
         };
         const receipt =
-          authorization.boundary === "watchlist_import"
-            ? authorization.consumeAndCommit((checked, checkpoint) => {
+          authorization.boundary === "research_collection"
+            ? authorization.consumeAndDispatch(protectedCallback)
+            : authorization.consumeAndCommit((checked, checkpoint) => {
                 checkpoint();
                 protectedCallback(checked);
-              })
-            : authorization.consumeAndDispatch(protectedCallback);
+              });
         expect(receipt).toMatchObject({ decision: "allowed", mode: "RESEARCH" });
 
         const stopResult = await stopped;

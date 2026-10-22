@@ -18,9 +18,10 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 - No raw external content reaches a signer or transaction builder.
 - Every Stage 0 process boot persists a fresh `STOPPED` revision. A prior `RESEARCH` or
   `PROPOSE_ONLY` mode is audit history and never resumes authority.
-- Stage 0 exposes only one-shot research-collection, offline-watchlist-import, and non-executable
-  proposal-persistence authorizations. Payment, signing, policy approval, execution, broadcast,
-  and publication are permanently denied and absent from the active operator dependency graph.
+- Stage 0 exposes only one-shot research-collection, offline-watchlist-import,
+  recorded-attention-refresh, and non-executable proposal-persistence authorizations. Payment,
+  signing, policy approval, execution, broadcast, and publication are permanently denied and absent
+  from the active operator dependency graph.
 - Offline watchlist imports accept only a strict collection projection, not raw provider responses.
   Operator-supplied timestamps and contract groups remain unverified facts. The stateless preview
   binding is also untrusted and does not prove human review. Confirmation checks its internal and
@@ -30,6 +31,20 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
   action binding, sequence, and uniqueness. It does not cross-check the separate runtime database.
   Replay detects hash and semantic corruption, but it cannot detect a complete older database or a
   coherent rewrite by a malicious same-user process.
+- Recorded attention accepts one strict bounded local bundle and assigns
+  `operator_supplied_unverified` at ingress. Unknown fields, invalid times or identities, cross-chain
+  collections, and oversized input fail closed; bounded arrays and counted clusters are capped by
+  schema and policy. Plausible fabricated ranks or posts remain possible and receive no authority.
+  On Preview, the browser reads the operator-selected raw JSON and retains its parsed value in memory
+  only for the preview-to-record draft, but never renders the raw file. Operator responses return a
+  closed assessment with diagnostics, hashed evidence identifiers, and bounded cluster counts; they
+  never echo the original JSON. Durable attention history never persists raw X text, post IDs, or
+  original JSON, and the panel renders no arbitrary links. Preview creates no authority: record
+  requires the exact unexpired 30-second wall-clock binding, the server's separate private 30-second
+  monotonic lease, and a genuine one-shot `attention_refresh` permit under the runtime lock. Process
+  restart invalidates the lease. GET, startup, timers, and duplicate replay perform no provider read
+  or new authorization. Scores rank research attention only; they do not authenticate a collection
+  or estimate return.
 - Recorded replay scenarios are closed and code-owned, but their names cannot select a verdict.
   Dispositions are derived from extracted evidence, opportunity remains zero, and hostile fixture
   text cannot enter the proposal ledger or operator response.
@@ -72,10 +87,13 @@ Therefore: **external activity ranks hypotheses; it never grants authority.**
 - Each Stage 1 controller persists sanitized result evidence before raw-capture deletion, then authenticates the exact runtime event, capture event, network closure, and keyed deletion tombstone before returning a receipt. Restart recovery reads storage keys only, has no collector, X bearer, OpenSea or Alchemy API key, or egress dependency, and cannot repeat egress. The Base recovery entry additionally has a statically collectorless and network-free dependency graph.
 - Vault compromise is contained with a dedicated directory, strict permissions, authenticated encryption, per-capture keys, bounded objects, and filesystem identity checks. A same-user process holding a live wrapping key can still decrypt active data, so production deployment requires process and Keychain isolation.
 - SQLite's internal hash chain cannot detect replacement with another internally consistent database. Production state paths are therefore code-owned, and each provider's create-once Keychain marker must be claimed before its credential is revealed. RSI contains no marker update, reset, or delete path. This protects against ordinary alternate-database replay, not a malicious same-user process that can alter code or Keychain state. Signed checkpoints plus an independently retained hash or immutable remote receipt can prove a pinned suffix. Remote retention is an optional software control with scoped credentials; same-Mac restore drills and one durable authorization writer remain required before authority grows.
-- The Stage 0 runtime, research ledger, and watchlist use separate SQLite files. Each detects invalid
-  rows, edits, reordering, tail deletion, foreign aggregates, and semantically invalid hash-valid
-  events. None claims rollback protection against a complete older file or a coherent same-user
-  rewrite without an independently retained head.
+- The Stage 0 runtime, research ledger, watchlist, and attention history use separate SQLite files.
+  Each detects invalid rows, edits, reordering, tail deletion, foreign aggregates, and semantically
+  invalid hash-valid events. Attention additionally verifies its stored runtime receipts against
+  durable runtime history. A valid attention-only prefix rollback is indistinguishable from
+  legitimate orphaned runtime receipts without an independently retained attention head or
+  cross-store acknowledgement. The other stores likewise do not claim rollback protection against
+  a complete older file or coherent same-user rewrite without an independently retained head.
 - Recovery archives are intentionally split into state evidence, sanitized event history, and a signed release bundle. No single component may claim complete restoration, and lifecycle acceptance records all three exact archive hashes.
 
 ## Tool activation

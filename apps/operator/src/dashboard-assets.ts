@@ -1,3 +1,5 @@
+import { ATTENTION_DASHBOARD_ASSETS } from "./attention-dashboard-assets.js";
+
 export const OPERATOR_DASHBOARD_HTML = `<!doctype html>
 <html lang="en">
   <head>
@@ -74,6 +76,8 @@ export const OPERATOR_DASHBOARD_HTML = `<!doctype html>
           <ol id="watchlist-rows" class="proposal-list"></ol>
           <details><summary>Recent snapshot history</summary><pre id="watchlist-history">No history.</pre></details>
         </article>
+
+        ${ATTENTION_DASHBOARD_ASSETS.html}
 
         <article id="canary-panel" class="panel span-two canary-panel" hidden>
           <div class="panel-heading">
@@ -335,6 +339,8 @@ pre { overflow: auto; max-height: 28rem; border-radius: 12px; background: #080a0
 .score-grid .metric { padding: .6rem; }
 footer { display: flex; justify-content: space-between; gap: 1rem; max-width: 1180px; margin: 0 auto; border-top: 1px solid var(--line); padding: 1.3rem 1.4rem 2rem; color: var(--muted); font-size: .75rem; }
 
+${ATTENTION_DASHBOARD_ASSETS.css}
+
 @media (max-width: 760px) {
   .masthead, .hero, footer { align-items: stretch; flex-direction: column; }
   .grid { grid-template-columns: 1fr; }
@@ -377,6 +383,8 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
     connection.classList.add(state);
     byId("connection-status").textContent = label;
   }
+
+  ${ATTENTION_DASHBOARD_ASSETS.runtimeBridge}
 
   function legacyCommandAction(buttonAction) {
     return buttonAction === "ack-45" || buttonAction === "ack-90" ? "acknowledge" : buttonAction;
@@ -497,6 +505,10 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
   }
 
   function renderRuntime(snapshot) {
+    const changed = runtimeSnapshot !== null &&
+      (runtimeSnapshot.mode !== snapshot.mode ||
+        runtimeSnapshot.revision !== snapshot.revision ||
+        runtimeSnapshot.processInstanceId !== snapshot.processInstanceId);
     runtimeSnapshot = snapshot;
     const mode = typeof snapshot.mode === "string" ? snapshot.mode : "UNAVAILABLE";
     const badge = byId("runtime-mode");
@@ -508,9 +520,11 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
     byId("runtime-authority").textContent = "NONE";
     updateRuntimeButtons();
     updateReadCanaryButton();
+    if (changed) signalRuntimeChange("rsi:runtime-changed");
   }
 
   function clearRuntime(message) {
+    const changed = runtimeSnapshot !== null;
     runtimeSnapshot = null;
     const badge = byId("runtime-mode");
     badge.textContent = "Unavailable";
@@ -523,6 +537,7 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
     byId("runtime-message").className = "message error";
     updateRuntimeButtons();
     updateReadCanaryButton();
+    if (changed) signalRuntimeChange("rsi:runtime-changed");
   }
 
   function usdFromMicros(value) {
@@ -766,7 +781,6 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
       byId("watchlist-state").textContent = "Offline watchlist unavailable. Operator-supplied and unverified.";
       updateWatchlistButtons();
     }
-
     if (readCanary.status === "fulfilled" && readCanary.value !== null) {
       renderReadCanary(readCanary.value.readCanary);
     } else {
@@ -864,6 +878,7 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
   async function runRuntimeControl(action) {
     if (action !== "runtime-stop" && !supportedRuntimeActions.has(action)) return;
     clearWatchlistPreview();
+    signalRuntimeChange("rsi:runtime-changing");
     const message = byId("runtime-message");
     message.className = "message";
     message.textContent = action === "runtime-stop" ? "Persisting STOP…" : "Persisting mode transition…";
@@ -882,6 +897,7 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
     } catch (error) {
       message.textContent = error instanceof Error ? error.message : "Runtime control failed.";
       message.className = "message error";
+      signalRuntimeChange("rsi:runtime-changed");
     } finally {
       pendingRuntimeControls -= 1;
       updateRuntimeButtons();
@@ -979,4 +995,5 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
   updateResearchReplayButton();
   void refresh();
 })();
+${ATTENTION_DASHBOARD_ASSETS.js}
 `;

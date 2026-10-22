@@ -14,6 +14,7 @@
     "start": "tsx src/index.ts"
   },
   "dependencies": {
+    "@rsi/attention": "workspace:*",
     "@rsi/watchlist": "workspace:*",
     "@rsi/checkpoints": "workspace:*",
     "@rsi/capture-registry": "workspace:*",
