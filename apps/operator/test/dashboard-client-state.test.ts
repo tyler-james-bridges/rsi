@@ -19,6 +19,7 @@ class FakeClassList {
 }
 
 class FakeElement {
+  files: readonly { size: number; text(): Promise<string> }[] = [];
   checked = false;
   className = "";
   readonly classList = new FakeClassList();
@@ -101,7 +102,7 @@ function createFakeDocument(): {
   };
 }
 
-function runtimeSnapshot(mode: "PROPOSE_ONLY" | "RESEARCH" | "STOPPED", revision: number): unknown {
+function runtimeSnapshot(mode: "PROPOSE_ONLY" | "RESEARCH" | "STOPPED", revision: number) {
   return {
     schemaVersion: 1,
     mode,
@@ -153,6 +154,91 @@ async function flushClientTasks(): Promise<void> {
 }
 
 describe("operator dashboard runtime controls", () => {
+  it("binds the offline preview, renders inert departures, and clears confirmation on STOP", async () => {
+    const { document, elements } = createFakeDocument();
+    const input = { schemaVersion: 1, kind: "offline_opensea_trending" };
+    const snapshot = runtimeSnapshot("RESEARCH", 2);
+    const binding = {
+      snapshotId: "a".repeat(64),
+      predecessorId: null,
+      processInstanceId: snapshot.processInstanceId,
+      modeRevision: 2,
+      previewedAt: "2026-10-20T00:00:30.000Z",
+    };
+    const commands: unknown[] = [];
+    const response = (value: unknown) => Promise.resolve({ ok: true, json: async () => value });
+    const fetch = (path: string, init?: { body?: string }) => {
+      if (path === "/api/runtime") return response({ runtime: snapshot });
+      if (path === "/api/watchlist")
+        return response({
+          watchlist: {
+            head: binding.snapshotId,
+            stale: true,
+            partial: true,
+            rows: [
+              {
+                rank: 1,
+                slug: "<script>untrusted</script>",
+                change: "left_window",
+                previousRank: 1,
+                baseAddresses: ["0xabc"],
+              },
+            ],
+            history: [],
+          },
+        });
+      if (path === "/api/watchlist/preview") {
+        commands.push(JSON.parse(init!.body!));
+        return response({ preview: { binding, rows: [], stale: true, partial: true } });
+      }
+      if (path === "/api/watchlist/confirm") {
+        commands.push(JSON.parse(init!.body!));
+        return response({ result: { duplicate: false } });
+      }
+      if (path === "/api/control") return new Promise<never>(() => undefined);
+      if (path === "/api/control/capabilities")
+        return response({ controls: { runtime: { enabled: true, actions: ["runtime-stop"] } } });
+      if (path === "/api/research")
+        return response({
+          research: { schemaVersion: 1, candidateCount: 0, abstentionCount: 0, proposals: [] },
+        });
+      if (path === "/api/summary") return response({ summary: {} });
+      if (path.startsWith("/api/events")) return response({ events: [] });
+      return Promise.resolve({
+        ok: false,
+        json: async () => ({ error: { code: "read_canary_unavailable" } }),
+      });
+    };
+    runInNewContext(OPERATOR_DASHBOARD_JS, {
+      document,
+      fetch,
+      crypto: { randomUUID: () => "00000000-0000-4000-8000-000000000001" },
+      console,
+    });
+    await flushClientTasks();
+    expect(elements.get("watchlist-state")!.textContent).toContain("STALE");
+    expect(elements.get("watchlist-state")!.textContent).toContain("PARTIAL");
+    expect(elements.get("watchlist-rows")!.children[0]!.textContent).toContain(
+      "left the observed list",
+    );
+    expect(elements.get("watchlist-rows")!.children[0]!.textContent).toContain(
+      "<script>untrusted</script>",
+    );
+    elements.get("watchlist-file")!.files = [{ size: 30, text: async () => JSON.stringify(input) }];
+    elements.get("watchlist-preview")!.click();
+    await flushClientTasks();
+    expect(elements.get("watchlist-preview-details")!.textContent).toContain(binding.snapshotId);
+    expect(elements.get("watchlist-confirm")!.disabled).toBe(false);
+    elements.get("watchlist-confirm")!.click();
+    await flushClientTasks();
+    expect(commands).toEqual([{ input }, { input, expected: binding }]);
+    expect(elements.get("watchlist-confirm")!.disabled).toBe(true);
+    elements.get("watchlist-preview")!.click();
+    await flushClientTasks();
+    elements.get("runtime-stop")!.click();
+    expect(elements.get("watchlist-confirm")!.disabled).toBe(true);
+    expect(elements.get("runtime-stop")!.disabled).toBe(false);
+  });
   it("keeps emergency STOP actionable while a mode-transition request is pending", async () => {
     const { document, elements } = createFakeDocument();
     const commands: Array<Record<string, unknown>> = [];

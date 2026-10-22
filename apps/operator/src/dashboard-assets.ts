@@ -59,6 +59,22 @@ export const OPERATOR_DASHBOARD_HTML = `<!doctype html>
           <p class="help">Always disabled: policy approval, paid reads, wallet signing, execution adapters, transaction broadcast, and external publication.</p>
         </article>
 
+        <article id="watchlist-panel" class="panel span-two">
+          <p class="eyebrow">Offline Base watchlist</p>
+          <h2>Observed collection groups</h2>
+          <p class="help">Operator-supplied and unverified. This local JSON import is not provider proof, policy evidence, or a trade recommendation. No live request is made.</p>
+          <label>Offline snapshot JSON file<input id="watchlist-file" type="file" accept="application/json,.json"></label>
+          <div class="runtime-actions">
+            <button id="watchlist-preview" type="button" disabled>Preview offline snapshot</button>
+            <button id="watchlist-confirm" type="button" disabled>Confirm exact preview</button>
+          </div>
+          <p id="watchlist-message" class="message" aria-live="polite">Enter RESEARCH to import. STOP prevents imports.</p>
+          <pre id="watchlist-preview-details">No preview.</pre>
+          <p id="watchlist-state" class="help">No observed list loaded.</p>
+          <ol id="watchlist-rows" class="proposal-list"></ol>
+          <details><summary>Recent snapshot history</summary><pre id="watchlist-history">No history.</pre></details>
+        </article>
+
         <article id="canary-panel" class="panel span-two canary-panel" hidden>
           <div class="panel-heading">
             <div>
@@ -347,6 +363,11 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
   let researchReplayEnabled = false;
   let researchReplayScenarios = new Set();
   let pendingResearchReplay = false;
+  let watchlistPreview = null;
+  let watchlistInput = null;
+  let pendingWatchlist = false;
+  let watchlistAvailable = false;
+  let watchlistGeneration = 0;
 
   const text = (value) => typeof value === "string" ? value : JSON.stringify(value);
   const safeSessionId = () => byId("session-id").value.trim();
@@ -385,6 +406,73 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
     // Emergency STOP does not depend on a successful snapshot or capabilities read.
     byId("runtime-stop").disabled = false;
     updateResearchReplayButton();
+    updateWatchlistButtons();
+  }
+
+  function updateWatchlistButtons() {
+    const permitted = watchlistAvailable && runtimeSnapshot && runtimeSnapshot.mode === "RESEARCH" && pendingRuntimeControls === 0;
+    byId("watchlist-preview").disabled = !permitted || pendingWatchlist;
+    const binding = watchlistPreview && watchlistPreview.binding;
+    byId("watchlist-confirm").disabled = !permitted || pendingWatchlist || !binding || binding.processInstanceId !== runtimeSnapshot.processInstanceId || binding.modeRevision !== runtimeSnapshot.revision;
+  }
+
+  function clearWatchlistPreview() {
+    watchlistGeneration += 1;
+    watchlistPreview = null;
+    watchlistInput = null;
+    byId("watchlist-preview-details").textContent = "No preview.";
+    updateWatchlistButtons();
+  }
+
+  function watchlistRows(rows) {
+    return rows.map((row) => row.rank + ". " + row.slug + " | " + (row.change === "left_window" ? "left the observed list" : row.change) + " | previous rank " + (row.previousRank === null ? "none" : row.previousRank) + " | " + row.baseAddresses.join(", "));
+  }
+
+  function renderWatchlist(view) {
+    watchlistAvailable = true;
+    byId("watchlist-state").textContent = "Operator-supplied and unverified. " + (view.head === null ? "No snapshots." : (view.stale ? "STALE" : "Not expired by supplied timestamp") + ". " + (view.partial ? "PARTIAL observed window." : "No next page reported."));
+    byId("watchlist-rows").replaceChildren();
+    for (const line of watchlistRows(view.rows)) {
+      const row = document.createElement("li");
+      row.textContent = line;
+      byId("watchlist-rows").append(row);
+    }
+    byId("watchlist-history").textContent = JSON.stringify(view.history, null, 2);
+    updateWatchlistButtons();
+  }
+
+  async function previewWatchlist() {
+    if (byId("watchlist-preview").disabled) return;
+    clearWatchlistPreview();
+    const generation = watchlistGeneration;
+    pendingWatchlist = true;
+    updateWatchlistButtons();
+    try {
+      const file = byId("watchlist-file").files && byId("watchlist-file").files[0];
+      if (!file || file.size > 30000) throw new Error("Choose an offline JSON snapshot no larger than 30,000 bytes.");
+      const input = JSON.parse(await file.text());
+      const body = await requestJson("/api/watchlist/preview", { method: "POST", headers: { "content-type": "application/json", "x-rsi-operator-request": "1" }, body: JSON.stringify({ input }) });
+      if (generation !== watchlistGeneration) return;
+      watchlistPreview = body.preview;
+      watchlistInput = input;
+      byId("watchlist-preview-details").textContent = JSON.stringify({ binding: body.preview.binding, snapshot: body.preview.snapshot }, null, 2) + "\\n" + (body.preview.stale ? "STALE" : "Not expired by supplied timestamp") + " / " + (body.preview.partial ? "PARTIAL" : "No next page reported") + "\\n" + watchlistRows(body.preview.rows).join("\\n");
+      byId("watchlist-message").textContent = "Review this operator-supplied, unverified snapshot and confirm the exact preview.";
+    } catch (error) { byId("watchlist-message").textContent = error instanceof Error ? error.message : "Preview failed."; }
+    finally { pendingWatchlist = false; updateWatchlistButtons(); }
+  }
+
+  async function confirmWatchlist() {
+    if (byId("watchlist-confirm").disabled) return;
+    const command = { input: watchlistInput, expected: watchlistPreview.binding };
+    pendingWatchlist = true;
+    updateWatchlistButtons();
+    try {
+      const body = await requestJson("/api/watchlist/confirm", { method: "POST", headers: { "content-type": "application/json", "x-rsi-operator-request": "1" }, body: JSON.stringify(command) });
+      byId("watchlist-message").textContent = body.result.duplicate ? "This snapshot was already recorded." : "Offline snapshot recorded. Operator-supplied and unverified.";
+      clearWatchlistPreview();
+      await refresh();
+    } catch (error) { byId("watchlist-message").textContent = error instanceof Error ? error.message : "Confirmation failed. Refresh before retrying."; }
+    finally { pendingWatchlist = false; updateWatchlistButtons(); }
   }
 
   function updateResearchReplayButton() {
@@ -657,13 +745,14 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
   }
 
   async function refresh() {
-    const [runtime, research, readCanary, summary, events, capabilities] = await Promise.allSettled([
+    const [runtime, research, readCanary, summary, events, capabilities, watchlist] = await Promise.allSettled([
       requestJson("/api/runtime"),
       requestJson("/api/research"),
       requestOptionalReadCanary(),
       requestJson("/api/summary"),
       requestJson("/api/events?limit=12"),
       requestJson("/api/control/capabilities"),
+      requestJson("/api/watchlist"),
     ]);
 
     if (runtime.status === "fulfilled") renderRuntime(runtime.value.runtime);
@@ -671,6 +760,12 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
 
     if (research.status === "fulfilled") renderResearch(research.value.research);
     else clearResearch();
+    if (watchlist.status === "fulfilled") renderWatchlist(watchlist.value.watchlist);
+    else {
+      watchlistAvailable = false;
+      byId("watchlist-state").textContent = "Offline watchlist unavailable. Operator-supplied and unverified.";
+      updateWatchlistButtons();
+    }
 
     if (readCanary.status === "fulfilled" && readCanary.value !== null) {
       renderReadCanary(readCanary.value.readCanary);
@@ -768,6 +863,7 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
 
   async function runRuntimeControl(action) {
     if (action !== "runtime-stop" && !supportedRuntimeActions.has(action)) return;
+    clearWatchlistPreview();
     const message = byId("runtime-message");
     message.className = "message";
     message.textContent = action === "runtime-stop" ? "Persisting STOP…" : "Persisting mode transition…";
@@ -863,6 +959,9 @@ export const OPERATOR_DASHBOARD_JS = `"use strict";
   }
 
   byId("refresh").addEventListener("click", refresh);
+  byId("watchlist-file").addEventListener("change", clearWatchlistPreview);
+  byId("watchlist-preview").addEventListener("click", previewWatchlist);
+  byId("watchlist-confirm").addEventListener("click", confirmWatchlist);
   for (const button of legacyButtons) {
     button.addEventListener("click", () => runLegacyControl(button.dataset.action));
   }

@@ -17,6 +17,7 @@ export {
   type OperatorRuntimeSnapshotV1,
   type OperatorServerOptions,
   type OperatorSnapshotProvider,
+  type OperatorWatchlistProvider,
   type PublicJsonValue,
   type RuntimeOperatorAction,
   type RuntimeOperatorControlCommand,

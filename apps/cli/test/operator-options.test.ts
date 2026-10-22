@@ -31,7 +31,12 @@ describe("operator command options", () => {
         "--port",
         "0",
       ]),
-    ).toEqual({ databasePath: ":memory:", port: 0, researchDatabasePath: "research.sqlite" });
+    ).toEqual({
+      databasePath: ":memory:",
+      port: 0,
+      researchDatabasePath: "research.sqlite",
+      watchlistDatabasePath: "rsi-watchlist.sqlite",
+    });
   });
 
   it("uses loopback-service defaults", () => {
@@ -39,6 +44,7 @@ describe("operator command options", () => {
       databasePath: ".local/stage0/rsi-runtime.sqlite",
       port: 8_787,
       researchDatabasePath: ".local/stage0/rsi-research.sqlite",
+      watchlistDatabasePath: ".local/stage0/rsi-watchlist.sqlite",
     });
   });
 
@@ -50,6 +56,14 @@ describe("operator command options", () => {
 
   it("allows only the dedicated Stage 0 subtree inside the production data directory", () => {
     const production = "/private/rsi/production";
+    expect(() =>
+      assertStage0StorageIsolation(
+        "/private/rsi/runtime.sqlite",
+        "/private/rsi/research.sqlite",
+        production,
+        `${production}/watchlist.sqlite`,
+      ),
+    ).toThrow("cannot open Stage 1 production storage");
     expect(() =>
       assertStage0StorageIsolation(
         `${production}/rsi-runtime.sqlite`,
@@ -110,6 +124,11 @@ describe("operator command options", () => {
     ["retired fixture seed", ["--seed"]],
     ["missing database path", ["--db"]],
     ["missing research database path", ["--research-db"]],
+    ["missing watchlist database path", ["--watchlist-db"]],
+    [
+      "watchlist aliases research",
+      ["--watchlist-db", "same.sqlite", "--research-db", "same.sqlite"],
+    ],
     ["shared database", ["--db", "same.sqlite", "--research-db", "same.sqlite"]],
     ["non-integer port", ["--port", "12.5"]],
     ["out-of-range port", ["--port", "65536"]],

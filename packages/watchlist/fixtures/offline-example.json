@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "kind": "offline_opensea_trending",
+  "sourceContractVersion": "opensea-api-v2-collections-trending.2026-09-05.one-day-base-ten-v1",
+  "acquiredAt": "2026-10-20T00:00:00.000Z",
+  "validUntil": "2026-10-20T00:02:00.000Z",
+  "hasNextPage": true,
+  "collections": [
+    {
+      "rank": 1,
+      "slug": "fictional-offline-example",
+      "baseAddresses": ["0xabababababababababababababababababababab"]
+    }
+  ]
+}

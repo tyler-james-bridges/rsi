@@ -108,6 +108,7 @@ pnpm operator
 # In another terminal:
 curl http://127.0.0.1:8787/api/runtime
 curl http://127.0.0.1:8787/api/research
+curl http://127.0.0.1:8787/api/watchlist
 curl http://127.0.0.1:8787/api/summary
 curl 'http://127.0.0.1:8787/api/events?limit=20'
 ```
@@ -117,7 +118,17 @@ recorded scenarios and run it. The result appears in the proposal ledger as an a
 the same request is idempotent after re-entering `PROPOSE_ONLY`. Restarting the process preserves
 the ledger while booting the runtime back into `STOPPED`.
 
-The operator service binds to IPv4 loopback and has no network authentication. Do not expose it to a network. Every launch begins in persisted `STOPPED`; the dashboard can enter research, enter proposal-only mode, run only the closed recorded-fixture replay, de-escalate, or STOP, but it has no financial authority. Its development-only runtime and research databases live under `.local/stage0/`; the command refuses canonical Stage 1 storage namespaces before creating or opening a path. Stop it with `Ctrl-C`, which persists STOP before closing.
+In `RESEARCH`, you can also preview and confirm an [offline Base watchlist](packages/watchlist/README.md).
+Choose a local JSON file. The dashboard labels the watchlist data as operator-supplied and unverified,
+shows stale and partial state, and compares observed contract groups. It makes no OpenSea request.
+
+The operator service binds to IPv4 loopback and has no network authentication. Do not expose it to
+a network. Every launch begins in persisted `STOPPED`. The dashboard can enter `RESEARCH`, import an
+offline watchlist, enter `PROPOSE_ONLY`, run the closed recorded-fixture replay, de-escalate, or
+STOP, but it has no financial authority. Its separate development-only runtime, research, and
+watchlist databases live under `.local/stage0/` by default. The command refuses canonical Stage 1
+storage namespaces before creating or opening a path and rejects database aliases. Stop it with
+`Ctrl-C`, which persists STOP before closing.
 
 The production-shaped Stage 1 host is `pnpm operator:x-canary`. It also boots `STOPPED` and cannot
 sign, pay, trade, publish, or paginate. Its local data directory must be owner-only (`0700`), which

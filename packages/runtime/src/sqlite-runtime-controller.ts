@@ -35,6 +35,8 @@ import type {
   RuntimeBoundary,
   RuntimeBoundaryAuthorization,
   RuntimeBoundaryAuthorizationInput,
+  RuntimeBoundaryCommit,
+  RuntimeBoundaryCommitCheckpoint,
   RuntimeBoundaryCompletion,
   RuntimeBoundaryCompletionFacts,
   RuntimeBoundaryDispatch,
@@ -228,6 +230,7 @@ function isPermanentlyDeniedBoundary(boundary: RuntimeBoundary): boolean {
 }
 
 function modeAllowsBoundary(mode: RuntimeMode, boundary: RuntimeBoundary): boolean {
+  if (boundary === "watchlist_import") return mode === "RESEARCH";
   if (boundary === "research_collection") return mode !== "STOPPED";
   if (boundary === "proposal_persist") return mode === "PROPOSE_ONLY";
   return false;
@@ -963,6 +966,7 @@ export class SqliteRuntimeController {
       requestedMode: requested.requestedMode,
       requestedRevision: requested.requestedRevision,
       consume: () => this.#consumeBoundaryAuthorization(requested),
+      consumeAndCommit: (commit) => this.#consumeWatchlistCommit(requested, commit),
       consumeAndDispatch: (dispatch) =>
         this.#consumeBoundaryAuthorizationAndDispatch(requested, dispatch),
       guardCompletion: (completion) => this.#guardBoundaryCompletion(requested, completion),
@@ -1003,6 +1007,81 @@ export class SqliteRuntimeController {
     });
     if (receipt.decision === "denied") throw new RuntimeBoundaryDeniedError(receipt);
     return receipt;
+  }
+
+  #consumeWatchlistCommit(
+    requested: IssuedBoundary,
+    commit: RuntimeBoundaryCommit,
+  ): Readonly<RuntimeBoundaryReceipt> {
+    const receipt = this.#consumeBoundaryAuthorization(requested);
+    return this.#store.withExclusiveTransaction(() => {
+      const replay = replayRuntimeStore(this.#store);
+      const state = replay.state;
+      if (state === null || requested.boundary !== "watchlist_import") {
+        throw new RuntimeIntegrityError("Watchlist authority is unavailable");
+      }
+      const durable = this.#store.getByIdempotencyKey(
+        `runtime-boundary-v1:${requested.authorizationId}`,
+      );
+      if (durable?.eventHash !== receipt.eventHash)
+        throw new RuntimeIntegrityError("Watchlist receipt changed");
+      const assertFresh = (currentReplay: ReplayResult): string => {
+        const currentState = currentReplay.state;
+        if (currentState === null)
+          throw new RuntimeIntegrityError("Watchlist authority is unavailable");
+        const checkedAt = nonRegressingBoundaryTime(
+          readRuntimeClock(this.#clock),
+          currentReplay,
+          requested.requestedAt,
+        );
+        const monotonicAt = readMonotonicClock(this.#monotonicClock);
+        const reason = boundaryReason(requested, currentState, checkedAt);
+        if (
+          reason !== "ALLOWED" ||
+          monotonicAt < requested.monotonicIssuedAt ||
+          monotonicAt >= requested.monotonicExpiresAt
+        ) {
+          throw new RuntimeConflictError(
+            "STALE_STATE",
+            "Watchlist authority changed before commit",
+          );
+        }
+        return checkedAt;
+      };
+      assertFresh(replay);
+      const checkpointScope: {
+        active: boolean;
+        state: "unused" | "valid" | "failed";
+      } = { active: true, state: "unused" };
+      const checkpoint: RuntimeBoundaryCommitCheckpoint = () => {
+        if (!checkpointScope.active) {
+          throw new RuntimeConflictError(
+            "STALE_STATE",
+            "Watchlist checkpoint called outside commit callback",
+          );
+        }
+        if (checkpointScope.state !== "unused") {
+          checkpointScope.state = "failed";
+          throw new RuntimeConflictError(
+            "STALE_STATE",
+            "Watchlist checkpoint must be invoked exactly once",
+          );
+        }
+        checkpointScope.state = "failed";
+        const checkedAt = assertFresh(replayRuntimeStore(this.#store));
+        checkpointScope.state = "valid";
+        return Object.freeze({ schemaVersion: 1 as const, checkedAt });
+      };
+      try {
+        commit(receipt, checkpoint);
+        if (checkpointScope.state !== "valid") {
+          throw new RuntimeValidationError("Watchlist commit must invoke checkpoint exactly once");
+        }
+      } finally {
+        checkpointScope.active = false;
+      }
+      return receipt;
+    });
   }
 
   #consumeBoundaryAuthorizationAndDispatch(

@@ -246,6 +246,59 @@ export const replay = true;
   });
 });
 
+test("allows only the reviewed node:fs constants import in the operator", () => {
+  withFixture((root) => {
+    write(
+      root,
+      "apps/cli/src/operator.ts",
+      `import { constants } from "node:fs";
+import { lstat, mkdir, open, realpath, stat } from "node:fs/promises";
+import { runtime } from "@rsi/runtime";
+void constants;
+void lstat;
+void mkdir;
+void open;
+void realpath;
+void stat;
+void runtime;
+`,
+    );
+    assert.equal(verifyStage0AuthorityBoundary({ root }).status, "pass");
+
+    write(
+      root,
+      "apps/cli/src/operator.ts",
+      `import { readFileSync } from "node:fs";
+import { runtime } from "@rsi/runtime";
+void readFileSync;
+void runtime;
+`,
+    );
+    expectFailure(root, /node:fs imports must be exactly constants/u);
+
+    write(
+      root,
+      "apps/cli/src/operator.ts",
+      `import { constants } from "node:fs";
+import { lstat, mkdir, open, readFile, realpath, stat } from "node:fs/promises";
+import { runtime } from "@rsi/runtime";
+void constants;
+void lstat;
+void mkdir;
+void open;
+void readFile;
+void realpath;
+void stat;
+void runtime;
+`,
+    );
+    expectFailure(
+      root,
+      /node:fs\/promises imports must be exactly lstat, mkdir, open, realpath, stat/u,
+    );
+  });
+});
+
 test("rejects non-literal module loading and financial-authority identifiers", () => {
   withFixture((root) => {
     write(
@@ -267,6 +320,57 @@ export function sendTransaction() {}
     );
     expectFailure(root, /non-literal import\/require/u);
     expectFailure(root, /financial-authority identifier\(s\): sendTransaction/u);
+  });
+});
+
+test("keeps watchlist hashing and UUID allowances narrow while rejecting dynamic imports", () => {
+  withFixture((root) => {
+    write(root, "packages/watchlist/package.json", manifest("@rsi/watchlist"));
+    write(
+      root,
+      "packages/watchlist/src/index.ts",
+      `export { OfflineBaseWatchlist } from "./history.js"; import "./snapshot.js";`,
+    );
+    write(
+      root,
+      "packages/watchlist/src/snapshot.ts",
+      `import { createHash } from "node:crypto"; void createHash;`,
+    );
+    write(
+      root,
+      "packages/watchlist/src/history.ts",
+      `export class OfflineBaseWatchlist { importSnapshot(command: WatchlistImportCommand): WatchlistImportResult { return command; } }`,
+    );
+    write(
+      root,
+      "apps/cli/src/watchlist-provider.ts",
+      `import { randomUUID } from "node:crypto"; import { OfflineBaseWatchlist } from "@rsi/watchlist"; new OfflineBaseWatchlist().importSnapshot(randomUUID());`,
+    );
+    write(root, "apps/cli/src/operator.ts", `import "./watchlist-provider.js";`);
+    assert.equal(verifyStage0AuthorityBoundary({ root }).status, "pass");
+    write(
+      root,
+      "packages/watchlist/src/snapshot.ts",
+      `import { createHash, randomUUID } from "node:crypto"; void createHash; void randomUUID;`,
+    );
+    expectFailure(root, /node:crypto imports must be exactly createHash/u);
+    write(
+      root,
+      "packages/watchlist/src/snapshot.ts",
+      `import { createHash } from "node:crypto"; void createHash;`,
+    );
+    write(
+      root,
+      "packages/watchlist/src/history.ts",
+      `export class OfflineBaseWatchlist { importSnapshot(command: WatchlistImportCommand): WatchlistImportResult { void import(command); return command; } }`,
+    );
+    expectFailure(root, /runtime import\(\) expression/u);
+    write(
+      root,
+      "packages/watchlist/src/history.ts",
+      `import "@rsi/policy"; export class OfflineBaseWatchlist {}`,
+    );
+    expectFailure(root, /policy approval/u);
   });
 });
 

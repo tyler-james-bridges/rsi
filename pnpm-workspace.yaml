@@ -4,3 +4,7 @@ packages:
 
 allowBuilds:
   esbuild: true
+
+overrides:
+  source-map-js: 1.2.2
+  vite: 8.2.4

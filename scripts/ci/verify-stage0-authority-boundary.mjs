@@ -60,6 +60,8 @@ const SPECIAL_PLATFORM_IMPORTS = new Map([
       files: new Map([
         ["apps/cli/src/operator.ts", Object.freeze(["randomUUID"])],
         ["apps/cli/src/research-replay-provider.ts", Object.freeze(["randomUUID"])],
+        ["apps/cli/src/watchlist-provider.ts", Object.freeze(["randomUUID"])],
+        ["packages/watchlist/src/snapshot.ts", Object.freeze(["createHash"])],
         ["packages/research/src/capture.ts", Object.freeze(["createHash"])],
         ["packages/research/src/coordination.ts", Object.freeze(["createHash"])],
         ["packages/research/src/pipeline.ts", Object.freeze(["createHash"])],
@@ -76,6 +78,7 @@ const SPECIAL_PLATFORM_IMPORTS = new Map([
     "node:fs",
     Object.freeze({
       files: new Map([
+        ["apps/cli/src/operator.ts", Object.freeze(["constants"])],
         ["packages/research/src/replay.ts", Object.freeze(["readFileSync"])],
         [
           "packages/session-lifecycle/src/sqlite-session-coordinator.ts",
@@ -88,7 +91,7 @@ const SPECIAL_PLATFORM_IMPORTS = new Map([
     "node:fs/promises",
     Object.freeze({
       files: new Map([
-        ["apps/cli/src/operator.ts", Object.freeze(["lstat", "mkdir", "realpath", "stat"])],
+        ["apps/cli/src/operator.ts", Object.freeze(["lstat", "mkdir", "open", "realpath", "stat"])],
         ["apps/cli/src/operator-options.ts", Object.freeze(["realpath"])],
       ]),
     }),
@@ -725,6 +728,7 @@ function analyzeSource(source) {
 
     if (token.kind === ts.SyntaxKind.ImportKeyword) {
       const next = source.tokens[index + 1];
+      if (source.tokens[index - 1]?.kind === ts.SyntaxKind.DotToken) continue;
       if (next?.kind === ts.SyntaxKind.DotToken) continue;
       if (next?.kind === ts.SyntaxKind.OpenParenToken) {
         runtimeDynamicImportIndexes.push(index);

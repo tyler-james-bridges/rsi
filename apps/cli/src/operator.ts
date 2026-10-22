@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, realpath, stat } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 
 import {
@@ -13,6 +14,7 @@ import {
   type RuntimeOperatorControlCommand,
 } from "@rsi/operator";
 import { SqliteResearchLedger } from "@rsi/research-ledger";
+import { OfflineBaseWatchlist } from "@rsi/watchlist";
 import {
   RuntimeConflictError,
   SqliteRuntimeController,
@@ -27,6 +29,7 @@ import {
 } from "./operator-options.js";
 import { productionXCanaryHostOptions } from "./production-canary-config.js";
 import { createRecordedResearchReplayProvider } from "./research-replay-provider.js";
+import { createWatchlistProvider } from "./watchlist-provider.js";
 
 interface DatabaseIdentity {
   readonly path: string;
@@ -34,10 +37,8 @@ interface DatabaseIdentity {
   readonly inode?: bigint;
 }
 
-function isMissingPath(error: unknown): boolean {
-  return (
-    error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT"
-  );
+function isExistingPath(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "EEXIST";
 }
 
 async function resolveDatabaseIdentity(path: string): Promise<DatabaseIdentity> {
@@ -45,17 +46,26 @@ async function resolveDatabaseIdentity(path: string): Promise<DatabaseIdentity> 
   await mkdir(dirname(path), { mode: 0o700, recursive: true });
   const parent = await realpath(dirname(path));
   const canonicalPath = resolve(parent, basename(path));
+  let created;
   try {
-    const entry = await lstat(canonicalPath, { bigint: true });
-    if (entry.isSymbolicLink() || !entry.isFile() || entry.nlink !== 1n) {
-      throw new TypeError("SQLite paths must be single-link regular files");
-    }
-    const identity = await stat(canonicalPath, { bigint: true });
-    return { path: canonicalPath, device: identity.dev, inode: identity.ino };
+    created = await open(
+      canonicalPath,
+      constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY,
+      0o600,
+    );
   } catch (error) {
-    if (isMissingPath(error)) return { path: canonicalPath };
-    throw error;
+    if (!isExistingPath(error)) throw error;
   }
+  await created?.close();
+  const entry = await lstat(canonicalPath, { bigint: true });
+  if (entry.isSymbolicLink() || !entry.isFile() || entry.nlink !== 1n) {
+    throw new TypeError("SQLite paths must be single-link regular files");
+  }
+  const identity = await stat(canonicalPath, { bigint: true });
+  if (entry.dev !== identity.dev || entry.ino !== identity.ino) {
+    throw new TypeError("SQLite path changed during inspection");
+  }
+  return { path: canonicalPath, device: identity.dev, inode: identity.ino };
 }
 
 function assertSeparateDatabases(runtime: DatabaseIdentity, research: DatabaseIdentity): void {
@@ -180,25 +190,37 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
       ? options.researchDatabasePath
       : resolve(options.researchDatabasePath);
   const requestedProductionDataDirectory = dirname(productionXCanaryHostOptions().databasePath);
+  const requestedWatchlistDatabasePath =
+    options.watchlistDatabasePath === ":memory:"
+      ? options.watchlistDatabasePath
+      : resolve(options.watchlistDatabasePath);
   assertStage0StorageIsolation(
     requestedDatabasePath,
     requestedResearchDatabasePath,
     requestedProductionDataDirectory,
+    requestedWatchlistDatabasePath,
   );
-  const [prospectiveRuntimePath, prospectiveResearchPath, productionDataDirectory] =
-    await Promise.all([
-      resolveProspectiveStoragePath(requestedDatabasePath),
-      resolveProspectiveStoragePath(requestedResearchDatabasePath),
-      resolveProspectiveStoragePath(requestedProductionDataDirectory),
-    ]);
+  const [
+    prospectiveRuntimePath,
+    prospectiveResearchPath,
+    productionDataDirectory,
+    prospectiveWatchlistPath,
+  ] = await Promise.all([
+    resolveProspectiveStoragePath(requestedDatabasePath),
+    resolveProspectiveStoragePath(requestedResearchDatabasePath),
+    resolveProspectiveStoragePath(requestedProductionDataDirectory),
+    resolveProspectiveStoragePath(requestedWatchlistDatabasePath),
+  ]);
   assertStage0StorageIsolation(
     prospectiveRuntimePath,
     prospectiveResearchPath,
     productionDataDirectory,
+    prospectiveWatchlistPath,
   );
 
   let runtime: SqliteRuntimeController | undefined;
   let research: SqliteResearchLedger | undefined;
+  let watchlist: OfflineBaseWatchlist | undefined;
   let operator: Awaited<ReturnType<typeof startOperatorServer>> | undefined;
   let hostClosing = false;
   let closePromise: Promise<void> | null = null;
@@ -224,6 +246,11 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
       }
       try {
         research?.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        watchlist?.close();
       } catch (error) {
         failures.push(error);
       }
@@ -269,9 +296,10 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
   process.once("SIGTERM", handleSignal);
 
   try {
-    const [runtimeIdentity, researchIdentity] = await Promise.all([
+    const [runtimeIdentity, researchIdentity, watchlistIdentity] = await Promise.all([
       resolveDatabaseIdentity(prospectiveRuntimePath),
       resolveDatabaseIdentity(prospectiveResearchPath),
+      resolveDatabaseIdentity(prospectiveWatchlistPath),
     ]);
     if (shutdownRequested) {
       removeSignalHandlers();
@@ -281,8 +309,11 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
       runtimeIdentity.path,
       researchIdentity.path,
       productionDataDirectory,
+      watchlistIdentity.path,
     );
     assertSeparateDatabases(runtimeIdentity, researchIdentity);
+    assertSeparateDatabases(runtimeIdentity, watchlistIdentity);
+    assertSeparateDatabases(researchIdentity, watchlistIdentity);
     const databasePath = runtimeIdentity.path;
     const researchDatabasePath = researchIdentity.path;
 
@@ -292,6 +323,7 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
       processInstanceId: randomUUID(),
     });
     research = SqliteResearchLedger.open(researchDatabasePath);
+    watchlist = OfflineBaseWatchlist.open(watchlistIdentity.path);
     if (shutdownRequested) {
       await close();
       removeSignalHandlers();
@@ -309,6 +341,7 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
       research: provider,
       researchReplay,
       runtime: runtimeControls,
+      watchlist: createWatchlistProvider({ runtime, watchlist, isClosing: () => hostClosing }),
     });
     if (shutdownRequested) {
       await close();
@@ -323,6 +356,7 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
       financialAuthority: false,
       databasePath,
       researchDatabasePath,
+      watchlistDatabasePath: watchlistIdentity.path,
       origin: operator.origin,
     });
     if (shutdownRequested) {

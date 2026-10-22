@@ -5,6 +5,7 @@ export interface OperatorOptions {
   readonly databasePath: string;
   readonly port: number;
   readonly researchDatabasePath: string;
+  readonly watchlistDatabasePath: string;
 }
 
 function isMissingPath(error: unknown): boolean {
@@ -42,10 +43,15 @@ export function assertStage0StorageIsolation(
   databasePath: string,
   researchDatabasePath: string,
   productionDataDirectory: string,
+  watchlistDatabasePath?: string,
 ): void {
   const productionRoot = resolve(productionDataDirectory);
   const permittedStage0Root = join(productionRoot, "stage0");
-  for (const path of [databasePath, researchDatabasePath]) {
+  for (const path of [
+    databasePath,
+    researchDatabasePath,
+    ...(watchlistDatabasePath === undefined ? [] : [watchlistDatabasePath]),
+  ]) {
     if (path === ":memory:") continue;
     const candidate = resolve(path);
     if (isAtOrBelow(productionRoot, candidate) && !isAtOrBelow(permittedStage0Root, candidate)) {
@@ -59,7 +65,7 @@ const DEFAULT_RESEARCH_DATABASE_PATH = ".local/stage0/rsi-research.sqlite";
 
 export function operatorUsage(): string {
   return [
-    "Usage: pnpm operator [--db PATH] [--research-db PATH] [--port PORT]",
+    "Usage: pnpm operator [--db PATH] [--research-db PATH] [--watchlist-db PATH] [--port PORT]",
     "",
     "Starts RSI's signer-blind Stage 0 runtime and operator API on IPv4 loopback.",
     "Every process boot begins in STOPPED; this command cannot pay, sign, or execute.",
@@ -69,6 +75,7 @@ export function operatorUsage(): string {
 export function parseOperatorOptions(args: readonly string[]): OperatorOptions | null {
   let databasePath = DEFAULT_DATABASE_PATH;
   let researchDatabasePath = DEFAULT_RESEARCH_DATABASE_PATH;
+  let watchlistDatabasePath: string | undefined;
   let port = 8_787;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -102,6 +109,14 @@ export function parseOperatorOptions(args: readonly string[]): OperatorOptions |
       index += 1;
       continue;
     }
+    if (argument === "--watchlist-db") {
+      const value = args[index + 1];
+      if (value === undefined || value.length === 0)
+        throw new Error("--watchlist-db requires a path");
+      watchlistDatabasePath = value;
+      index += 1;
+      continue;
+    }
     throw new Error(`unknown argument: ${argument}`);
   }
 
@@ -115,5 +130,11 @@ export function parseOperatorOptions(args: readonly string[]): OperatorOptions |
   if (databasePath === ":memory:" && researchDatabasePath === ":memory:") {
     throw new Error("--db and --research-db must use separate SQLite files");
   }
-  return { databasePath, port, researchDatabasePath };
+  watchlistDatabasePath ??= join(dirname(researchDatabasePath), "rsi-watchlist.sqlite");
+  const paths = [databasePath, researchDatabasePath, watchlistDatabasePath].map((path) =>
+    path === ":memory:" ? path : resolve(path),
+  );
+  if (new Set(paths).size !== paths.length)
+    throw new Error("Runtime, research and watchlist must use separate SQLite files");
+  return { databasePath, port, researchDatabasePath, watchlistDatabasePath };
 }

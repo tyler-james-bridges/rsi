@@ -599,6 +599,56 @@ describe("SqliteRuntimeController", () => {
       expect.objectContaining({ code: "AUTHORIZATION_ALREADY_USED" }),
     );
 
+    const promiseReturningDispatchAuthorization = runtime.requestBoundaryAuthorization({
+      actionId: "x-attempt-promise-returning-dispatch",
+      authorizationId: uuids[15]!,
+      boundary: "research_collection",
+    });
+    expect(() =>
+      promiseReturningDispatchAuthorization.consumeAndDispatch(() => Promise.resolve()),
+    ).toThrow(RuntimeValidationError);
+    expect(
+      runtime
+        .listAudit()
+        .find(
+          (event) =>
+            event.type === RUNTIME_BOUNDARY_EVENT_TYPE &&
+            event.payload.authorizationId === promiseReturningDispatchAuthorization.authorizationId,
+        )?.payload,
+    ).toMatchObject({ decision: "allowed", reason: "ALLOWED" });
+    expect(() =>
+      promiseReturningDispatchAuthorization.consumeAndDispatch(() => undefined),
+    ).toThrowError(expect.objectContaining({ code: "AUTHORIZATION_ALREADY_USED" }));
+    expect(promiseReturningDispatchAuthorization.guardCompletion(() => undefined)).toMatchObject({
+      decision: "allowed",
+      reason: "ALLOWED",
+    });
+
+    const throwingThenAuthorization = runtime.requestBoundaryAuthorization({
+      actionId: "x-attempt-throwing-then",
+      authorizationId: uuids[16]!,
+      boundary: "research_collection",
+    });
+    const thenError = new Error("then getter failed");
+    expect(() =>
+      throwingThenAuthorization.consumeAndDispatch(() =>
+        Object.defineProperty({}, "then", {
+          get() {
+            throw thenError;
+          },
+        }),
+      ),
+    ).toThrow(thenError);
+    expect(
+      runtime
+        .listAudit()
+        .find(
+          (event) =>
+            event.type === RUNTIME_BOUNDARY_EVENT_TYPE &&
+            event.payload.authorizationId === throwingThenAuthorization.authorizationId,
+        )?.payload,
+    ).toMatchObject({ decision: "allowed", reason: "ALLOWED" });
+
     const boundAsyncDispatchAuthorization = runtime.requestBoundaryAuthorization({
       actionId: "x-attempt-bound-async-dispatch",
       authorizationId: uuids[14]!,
@@ -735,6 +785,7 @@ describe("SqliteRuntimeController", () => {
     const invalid = [
       async () => undefined,
       (async () => undefined).bind(null),
+      () => Promise.resolve(),
       function* completionGenerator() {
         yield undefined;
       },
@@ -861,122 +912,129 @@ describe("SqliteRuntimeController", () => {
     runtime.close();
   });
 
-  it("holds the cross-process write lock from revalidation through synchronous dispatch", async () => {
-    const path = databasePath();
-    const coordination = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 3));
-    const worker = new Worker(
-      new URL(`data:text/javascript,${encodeURIComponent(COMPETING_STOP_WORKER)}`),
-      {
-        execArgv: ["--import", "tsx"],
-        workerData: {
-          coordination: coordination.buffer,
-          openedAt: timestamps[0]!,
-          path,
-          processInstanceId: PROCESS_B,
-          requestId: uuids[4]!,
-          runtimeModuleUrl: new URL("../src/index.ts", import.meta.url).href,
-          stoppedAt: timestamps[4]!,
-        },
-      },
-    );
-    let resolveReady!: () => void;
-    let rejectReady!: (error: Error) => void;
-    const ready = new Promise<void>((resolve, reject) => {
-      resolveReady = resolve;
-      rejectReady = reject;
-    });
-    let resolveStopped!: (value: {
-      dispatchWasInvoked: boolean;
-      snapshot: { mode: string; revision: number };
-    }) => void;
-    let rejectStopped!: (error: Error) => void;
-    const stopped = new Promise<{
-      dispatchWasInvoked: boolean;
-      snapshot: { mode: string; revision: number };
-    }>((resolve, reject) => {
-      resolveStopped = resolve;
-      rejectStopped = reject;
-    });
-    void stopped.catch(() => undefined);
-    worker.on("message", (message: unknown) => {
-      if (typeof message !== "object" || message === null || !("type" in message)) return;
-      if (message.type === "ready") resolveReady();
-      else if (
-        message.type === "stopped" &&
-        "dispatchWasInvoked" in message &&
-        "snapshot" in message
-      ) {
-        resolveStopped(
-          message as {
-            dispatchWasInvoked: boolean;
-            snapshot: { mode: string; revision: number };
+  it.each(["research_collection", "watchlist_import"] as const)(
+    "holds the cross-process write lock through %s",
+    async (boundary) => {
+      const path = databasePath();
+      const coordination = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 3));
+      const worker = new Worker(
+        new URL(`data:text/javascript,${encodeURIComponent(COMPETING_STOP_WORKER)}`),
+        {
+          execArgv: ["--import", "tsx"],
+          workerData: {
+            coordination: coordination.buffer,
+            openedAt: timestamps[0]!,
+            path,
+            processInstanceId: PROCESS_B,
+            requestId: uuids[4]!,
+            runtimeModuleUrl: new URL("../src/index.ts", import.meta.url).href,
+            stoppedAt: timestamps[4]!,
           },
-        );
-      } else if (message.type === "error" && "message" in message) {
-        const error = new Error(String(message.message));
+        },
+      );
+      let resolveReady!: () => void;
+      let rejectReady!: (error: Error) => void;
+      const ready = new Promise<void>((resolve, reject) => {
+        resolveReady = resolve;
+        rejectReady = reject;
+      });
+      let resolveStopped!: (value: {
+        dispatchWasInvoked: boolean;
+        snapshot: { mode: string; revision: number };
+      }) => void;
+      let rejectStopped!: (error: Error) => void;
+      const stopped = new Promise<{
+        dispatchWasInvoked: boolean;
+        snapshot: { mode: string; revision: number };
+      }>((resolve, reject) => {
+        resolveStopped = resolve;
+        rejectStopped = reject;
+      });
+      void stopped.catch(() => undefined);
+      worker.on("message", (message: unknown) => {
+        if (typeof message !== "object" || message === null || !("type" in message)) return;
+        if (message.type === "ready") resolveReady();
+        else if (
+          message.type === "stopped" &&
+          "dispatchWasInvoked" in message &&
+          "snapshot" in message
+        ) {
+          resolveStopped(
+            message as {
+              dispatchWasInvoked: boolean;
+              snapshot: { mode: string; revision: number };
+            },
+          );
+        } else if (message.type === "error" && "message" in message) {
+          const error = new Error(String(message.message));
+          rejectReady(error);
+          rejectStopped(error);
+        }
+      });
+      worker.on("error", (error) => {
         rejectReady(error);
         rejectStopped(error);
+      });
+
+      let runtime: SqliteRuntimeController | undefined;
+      try {
+        await ready;
+        runtime = open(path, timestamps[1]!, PROCESS_C);
+        runtime.transition({
+          expectedMode: "STOPPED",
+          expectedRevision: 2,
+          occurredAt: timestamps[2]!,
+          requestId: uuids[0]!,
+          targetMode: "RESEARCH",
+        });
+        const authorization = runtime.requestBoundaryAuthorization({
+          actionId: "x-dispatch-stop-race",
+          authorizationId: uuids[1]!,
+          boundary,
+        });
+
+        const protectedCallback = (checked: { decision: string; mode: string }) => {
+          Atomics.store(coordination, 0, 1);
+          Atomics.notify(coordination, 0);
+          // The worker may announce immediately before this thread begins
+          // waiting. Both "ok" (notified while waiting) and "not-equal"
+          // (announcement already observed) complete the handshake.
+          expect(Atomics.wait(coordination, 1, 0, 2_000)).not.toBe("timed-out");
+          expect(Atomics.load(coordination, 1)).toBe(1);
+          expect(checked).toMatchObject({ decision: "allowed", mode: "RESEARCH" });
+          Atomics.store(coordination, 2, 1);
+          Atomics.notify(coordination, 2);
+        };
+        const receipt =
+          authorization.boundary === "watchlist_import"
+            ? authorization.consumeAndCommit((checked, checkpoint) => {
+                checkpoint();
+                protectedCallback(checked);
+              })
+            : authorization.consumeAndDispatch(protectedCallback);
+        expect(receipt).toMatchObject({ decision: "allowed", mode: "RESEARCH" });
+
+        const stopResult = await stopped;
+        expect(stopResult.dispatchWasInvoked).toBe(true);
+        expect(stopResult.snapshot).toMatchObject({ mode: "STOPPED", revision: 4 });
+        const relevantEvents = runtime
+          .listAudit()
+          .filter(
+            (event) =>
+              event.type === RUNTIME_BOUNDARY_EVENT_TYPE ||
+              (event.type === RUNTIME_STOP_EVENT_TYPE && event.payload.cause === "operator"),
+          );
+        expect(relevantEvents.map((event) => event.type)).toEqual([
+          RUNTIME_BOUNDARY_EVENT_TYPE,
+          RUNTIME_STOP_EVENT_TYPE,
+        ]);
+        expect(runtime.getSnapshot()).toMatchObject({ mode: "STOPPED", revision: 4 });
+      } finally {
+        runtime?.close();
+        await worker.terminate();
       }
-    });
-    worker.on("error", (error) => {
-      rejectReady(error);
-      rejectStopped(error);
-    });
-
-    let runtime: SqliteRuntimeController | undefined;
-    try {
-      await ready;
-      runtime = open(path, timestamps[1]!, PROCESS_C);
-      runtime.transition({
-        expectedMode: "STOPPED",
-        expectedRevision: 2,
-        occurredAt: timestamps[2]!,
-        requestId: uuids[0]!,
-        targetMode: "RESEARCH",
-      });
-      const authorization = runtime.requestBoundaryAuthorization({
-        actionId: "x-dispatch-stop-race",
-        authorizationId: uuids[1]!,
-        boundary: "research_collection",
-      });
-
-      const receipt = authorization.consumeAndDispatch((checked) => {
-        Atomics.store(coordination, 0, 1);
-        Atomics.notify(coordination, 0);
-        // The worker may announce immediately before this thread begins
-        // waiting. Both "ok" (notified while waiting) and "not-equal"
-        // (announcement already observed) complete the handshake.
-        expect(Atomics.wait(coordination, 1, 0, 2_000)).not.toBe("timed-out");
-        expect(Atomics.load(coordination, 1)).toBe(1);
-        expect(checked).toMatchObject({ decision: "allowed", mode: "RESEARCH" });
-        // The competing controller announced its STOP attempt before this
-        // dispatch marker. It cannot persist until this callback returns and
-        // the runtime transaction releases its write lock.
-        Atomics.store(coordination, 2, 1);
-        Atomics.notify(coordination, 2);
-      });
-      expect(receipt).toMatchObject({ decision: "allowed", mode: "RESEARCH" });
-
-      const stopResult = await stopped;
-      expect(stopResult.dispatchWasInvoked).toBe(true);
-      expect(stopResult.snapshot).toMatchObject({ mode: "STOPPED", revision: 4 });
-      const relevantEvents = runtime
-        .listAudit()
-        .filter(
-          (event) =>
-            event.type === RUNTIME_BOUNDARY_EVENT_TYPE ||
-            (event.type === RUNTIME_STOP_EVENT_TYPE && event.payload.cause === "operator"),
-        );
-      expect(relevantEvents.map((event) => event.type)).toEqual([
-        RUNTIME_BOUNDARY_EVENT_TYPE,
-        RUNTIME_STOP_EVENT_TYPE,
-      ]);
-      expect(runtime.getSnapshot()).toMatchObject({ mode: "STOPPED", revision: 4 });
-    } finally {
-      runtime?.close();
-      await worker.terminate();
-    }
-  });
+    },
+  );
 
   it("holds the cross-process write lock through the completion checkpoint", async () => {
     const path = databasePath();

@@ -4,6 +4,7 @@ import { RuntimeConflictError, RuntimeValidationError } from "./errors.js";
 import type {
   RuntimeBoundary,
   RuntimeBoundaryAuthorization,
+  RuntimeBoundaryCommit,
   RuntimeBoundaryCompletion,
   RuntimeBoundaryCompletionFacts,
   RuntimeBoundaryDispatch,
@@ -26,6 +27,7 @@ interface RuntimeBoundaryAuthorizationParts<TBoundary extends RuntimeBoundary> {
   readonly requestedMode: RuntimeMode;
   readonly requestedRevision: number;
   readonly consume: () => Readonly<RuntimeBoundaryReceipt>;
+  readonly consumeAndCommit: (commit: RuntimeBoundaryCommit) => Readonly<RuntimeBoundaryReceipt>;
   readonly consumeAndDispatch: (
     dispatch: RuntimeBoundaryDispatch,
   ) => Readonly<RuntimeBoundaryReceipt>;
@@ -44,11 +46,41 @@ function isSynchronousCallback(value: unknown): value is (...arguments_: unknown
   );
 }
 
+function isThenableResult(value: unknown): boolean {
+  if (utilTypes.isPromise(value)) {
+    void value.catch(() => undefined);
+    return true;
+  }
+  return (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
+function assertSynchronousResult(value: unknown, message: string): void {
+  if (isThenableResult(value)) throw new RuntimeValidationError(message);
+}
+
 export function createRuntimeBoundaryAuthorization<TBoundary extends RuntimeBoundary>(
   parts: RuntimeBoundaryAuthorizationParts<TBoundary>,
 ): RuntimeBoundaryAuthorization<TBoundary> {
   const authorization = Object.create(null) as RuntimeBoundaryAuthorization<TBoundary>;
   const consumeBoundary = parts.consume;
+  const consumeAndCommit = (...arguments_: unknown[]): Readonly<RuntimeBoundaryReceipt> => {
+    claim();
+    const commit = arguments_[0];
+    const message = "Watchlist commit requires one synchronous callback";
+    if (arguments_.length !== 1 || !isSynchronousCallback(commit)) {
+      throw new RuntimeValidationError(message);
+    }
+    let callbackResult: unknown;
+    const receipt = parts.consumeAndCommit((receipt, checkpoint) => {
+      callbackResult = commit(receipt, checkpoint);
+    });
+    assertSynchronousResult(callbackResult, message);
+    return receipt;
+  };
   const consumeBoundaryAndDispatch = parts.consumeAndDispatch;
   const guardBoundaryCompletion = parts.guardCompletion;
   const claim = (): void => {
@@ -78,17 +110,20 @@ export function createRuntimeBoundaryAuthorization<TBoundary extends RuntimeBoun
   const consumeAndDispatch = (...arguments_: unknown[]): Readonly<RuntimeBoundaryReceipt> => {
     claim();
     const dispatch = arguments_[0];
+    const message =
+      "Runtime network boundary consumption requires one synchronous dispatch callback";
     if (arguments_.length !== 1 || !isSynchronousCallback(dispatch)) {
-      throw new RuntimeValidationError(
-        "Runtime network boundary consumption requires one synchronous dispatch callback",
-      );
+      throw new RuntimeValidationError(message);
     }
     let dispatchWasInvoked = false;
+    let callbackResult: unknown;
     try {
-      return consumeBoundaryAndDispatch((receipt) => {
+      const receipt = consumeBoundaryAndDispatch((receipt) => {
         dispatchWasInvoked = true;
-        dispatch(receipt);
+        callbackResult = dispatch(receipt);
       });
+      assertSynchronousResult(callbackResult, message);
+      return receipt;
     } finally {
       // Dispatch is an irreversible boundary even if the surrounding SQLite
       // COMMIT or the protected callback subsequently throws. Remember it so
@@ -119,12 +154,16 @@ export function createRuntimeBoundaryAuthorization<TBoundary extends RuntimeBoun
       );
     }
     const completion = arguments_[0];
+    const message = "Runtime network completion requires one synchronous completion callback";
     if (arguments_.length !== 1 || !isSynchronousCallback(completion)) {
-      throw new RuntimeValidationError(
-        "Runtime network completion requires one synchronous completion callback",
-      );
+      throw new RuntimeValidationError(message);
     }
-    return guardBoundaryCompletion(completion as RuntimeBoundaryCompletion);
+    let callbackResult: unknown;
+    const facts = guardBoundaryCompletion((facts) => {
+      callbackResult = completion(facts);
+    });
+    assertSynchronousResult(callbackResult, message);
+    return facts;
   };
 
   const properties: PropertyDescriptorMap = {
@@ -138,7 +177,9 @@ export function createRuntimeBoundaryAuthorization<TBoundary extends RuntimeBoun
     requestedMode: { enumerable: true, value: parts.requestedMode },
     requestedRevision: { enumerable: true, value: parts.requestedRevision },
   };
-  if (parts.boundary === "research_collection") {
+  if (parts.boundary === "watchlist_import") {
+    properties.consumeAndCommit = { enumerable: true, value: consumeAndCommit };
+  } else if (parts.boundary === "research_collection") {
     properties.consumeAndDispatch = { enumerable: true, value: consumeAndDispatch };
     properties.guardCompletion = { enumerable: true, value: guardCompletion };
   } else {
