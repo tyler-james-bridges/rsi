@@ -12,6 +12,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@rsi/runtime": "workspace:*",
+    "@rsi/store": "workspace:*",
     "zod": "^4.4.3"
   },
   "engines": {

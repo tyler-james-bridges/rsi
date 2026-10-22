@@ -1,5 +1,37 @@
 export { assessRecordedAttention, type AssessRecordedAttentionInput } from "./assess.js";
 export {
+  RecordedAttentionHistory,
+  AttentionHistoryError,
+  createRuntimeAttentionReceiptVerifier,
+  type RuntimeAttentionReceiptVerifier,
+  type AttentionRecordCommand,
+} from "./history.js";
+export {
+  ATTENTION_PREVIEW_TTL_MS,
+  MAX_ATTENTION_HISTORY,
+  MAX_ATTENTION_EVENT_BYTES,
+  AttentionPreviewContextSchema,
+  AttentionPreviewBindingSchema,
+  AttentionPreviewSchema,
+  AttentionRecordResultSchema,
+  AttentionViewSchema,
+  type AttentionPreviewContext,
+  type AttentionPreviewBinding,
+  type AttentionPreview,
+  type AttentionRecordResult,
+  type AttentionView,
+} from "./history-schemas.js";
+export {
+  AttentionPreviewCommandSchema,
+  AttentionRecordCommandSchema,
+  parseAttentionPreviewCommand,
+  parseAttentionRecordCommand,
+  parseAttentionPreviewBinding,
+  parseAttentionPreview,
+  parseAttentionResult,
+  parseAttentionView,
+} from "./operator-protocol.js";
+export {
   ATTENTION_NOTES,
   ATTENTION_POLICY_VERSION,
   BASE_CHAIN_ID,
