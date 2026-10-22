@@ -2676,10 +2676,16 @@ function verifyStage0StorageIsolation(root, violations) {
   const operator = source(STAGE0_OPERATOR_FILE);
   const prospectivePath =
     options === undefined ? "" : namedFunctionSource(options, "resolveProspectiveStoragePath");
+  const distinctPaths =
+    options === undefined ? "" : namedFunctionSource(options, "assertDistinctStage0DatabasePaths");
+  const containmentIdentity =
+    options === undefined ? "" : namedFunctionSource(options, "storageContainmentIdentity");
+  const atOrBelow = options === undefined ? "" : namedFunctionSource(options, "isAtOrBelow");
   if (
     options !== undefined &&
     (!hasExactNames(staticExportNames(options), [
       "OperatorOptions",
+      "assertDistinctStage0DatabasePaths",
       "assertStage0StorageIsolation",
       "operatorUsage",
       "parseOperatorOptions",
@@ -2689,9 +2695,17 @@ function verifyStage0StorageIsolation(root, violations) {
       !/DEFAULT_RESEARCH_DATABASE_PATH\s*=\s*"\.local\/stage0\/rsi-research\.sqlite"/u.test(
         options,
       ) ||
-      !/const\s+offset\s*=\s*relative\(root,\s*candidate\)/u.test(options) ||
-      !/offset\s*===\s*""\s*\|\|\s*\(offset\s*!==\s*"\.\."\s*&&\s*!offset\.startsWith\(`\.\.\$\{sep\}`\)\s*&&\s*!isAbsolute\(offset\)\)/u.test(
+      !/DEFAULT_ATTENTION_DATABASE_PATH\s*=\s*"\.local\/stage0\/rsi-attention\.sqlite"/u.test(
         options,
+      ) ||
+      containmentIdentity.length === 0 ||
+      !/return\s+resolve\(path\)\.normalize\("NFC"\)\.toLowerCase\(\)/u.test(containmentIdentity) ||
+      atOrBelow.length === 0 ||
+      !/const\s+offset\s*=\s*relative\(\s*storageContainmentIdentity\(root\),\s*storageContainmentIdentity\(candidate\),?\s*\)/u.test(
+        atOrBelow,
+      ) ||
+      !/offset\s*===\s*""\s*\|\|\s*\(offset\s*!==\s*"\.\."\s*&&\s*!offset\.startsWith\(`\.\.\$\{sep\}`\)\s*&&\s*!isAbsolute\(offset\)\)/u.test(
+        atOrBelow,
       ) ||
       !/const\s+productionRoot\s*=\s*resolve\(productionDataDirectory\)/u.test(options) ||
       !/const\s+permittedStage0Root\s*=\s*join\(productionRoot,\s*"stage0"\)/u.test(options) ||
@@ -2705,7 +2719,10 @@ function verifyStage0StorageIsolation(root, violations) {
       ) ||
       !/unresolvedSegments\.unshift\(basename\(existingAncestor\)\)/u.test(prospectivePath) ||
       !/existingAncestor\s*=\s*parent/u.test(prospectivePath) ||
-      /\b(?:mkdir|writeFile|open)\s*\(/u.test(prospectivePath))
+      /\b(?:mkdir|writeFile|open)\s*\(/u.test(prospectivePath) ||
+      distinctPaths.length === 0 ||
+      !/resolve\(path\)\.normalize\("NFC"\)/u.test(distinctPaths) ||
+      !/new\s+Set\(identities\)\.size\s*!==\s*identities\.length/u.test(distinctPaths))
   ) {
     violations.push(
       `${STAGE0_OPTIONS_FILE} must confine defaults and every Stage 1-directory descendant to the dedicated Stage 0 subtree`,
@@ -2718,8 +2735,11 @@ function verifyStage0StorageIsolation(root, violations) {
       operator,
       "createClosingAwareRuntimeControls",
     );
+    const requestedDistinct = stage0Run.search(
+      /assertDistinctStage0DatabasePaths\(\[\s*requestedDatabasePath,\s*requestedResearchDatabasePath,\s*requestedWatchlistDatabasePath,\s*requestedAttentionDatabasePath,?\s*\]\)/u,
+    );
     const requestedGuard = stage0Run.search(
-      /assertStage0StorageIsolation\(\s*requestedDatabasePath,\s*requestedResearchDatabasePath,\s*requestedProductionDataDirectory,\s*requestedWatchlistDatabasePath,?\s*\)/u,
+      /assertStage0StorageIsolation\(\s*requestedDatabasePath,\s*requestedResearchDatabasePath,\s*requestedProductionDataDirectory,\s*requestedWatchlistDatabasePath,\s*requestedAttentionDatabasePath,?\s*\)/u,
     );
     const prospectiveRuntimeResolution = stage0Run.indexOf(
       "resolveProspectiveStoragePath(requestedDatabasePath)",
@@ -2737,8 +2757,15 @@ function verifyStage0StorageIsolation(root, violations) {
       "resolveProspectiveStoragePath(requestedWatchlistDatabasePath)",
       prospectiveProductionResolution,
     );
+    const prospectiveAttentionResolution = stage0Run.indexOf(
+      "resolveProspectiveStoragePath(requestedAttentionDatabasePath)",
+      prospectiveWatchlistResolution,
+    );
+    const prospectiveDistinct = stage0Run.search(
+      /assertDistinctStage0DatabasePaths\(\[\s*prospectiveRuntimePath,\s*prospectiveResearchPath,\s*prospectiveWatchlistPath,\s*prospectiveAttentionPath,?\s*\]\)/u,
+    );
     const prospectiveGuard = stage0Run.search(
-      /assertStage0StorageIsolation\(\s*prospectiveRuntimePath,\s*prospectiveResearchPath,\s*productionDataDirectory,\s*prospectiveWatchlistPath,?\s*\)/u,
+      /assertStage0StorageIsolation\(\s*prospectiveRuntimePath,\s*prospectiveResearchPath,\s*productionDataDirectory,\s*prospectiveWatchlistPath,\s*prospectiveAttentionPath,?\s*\)/u,
     );
     const runtimeInspection = stage0Run.indexOf(
       "resolveDatabaseIdentity(prospectiveRuntimePath)",
@@ -2752,8 +2779,12 @@ function verifyStage0StorageIsolation(root, violations) {
       "resolveDatabaseIdentity(prospectiveWatchlistPath)",
       researchInspection,
     );
+    const attentionInspection = stage0Run.indexOf(
+      "resolveDatabaseIdentity(prospectiveAttentionPath)",
+      watchlistInspection,
+    );
     const identityGuard = stage0Run.search(
-      /assertStage0StorageIsolation\(\s*runtimeIdentity\.path,\s*researchIdentity\.path,\s*productionDataDirectory,\s*watchlistIdentity\.path,?\s*\)/u,
+      /assertStage0StorageIsolation\(\s*runtimeIdentity\.path,\s*researchIdentity\.path,\s*productionDataDirectory,\s*watchlistIdentity\.path,\s*attentionIdentity\.path,?\s*\)/u,
     );
     const runtimeResearchSeparation = stage0Run.indexOf(
       "assertSeparateDatabases(runtimeIdentity, researchIdentity)",
@@ -2763,9 +2794,21 @@ function verifyStage0StorageIsolation(root, violations) {
       "assertSeparateDatabases(runtimeIdentity, watchlistIdentity)",
       runtimeResearchSeparation,
     );
+    const runtimeAttentionSeparation = stage0Run.indexOf(
+      "assertSeparateDatabases(runtimeIdentity, attentionIdentity)",
+      runtimeWatchlistSeparation,
+    );
     const researchWatchlistSeparation = stage0Run.indexOf(
       "assertSeparateDatabases(researchIdentity, watchlistIdentity)",
-      runtimeWatchlistSeparation,
+      runtimeAttentionSeparation,
+    );
+    const researchAttentionSeparation = stage0Run.indexOf(
+      "assertSeparateDatabases(researchIdentity, attentionIdentity)",
+      researchWatchlistSeparation,
+    );
+    const watchlistAttentionSeparation = stage0Run.indexOf(
+      "assertSeparateDatabases(watchlistIdentity, attentionIdentity)",
+      researchAttentionSeparation,
     );
     const runtimeOpen = stage0Run.indexOf("SqliteRuntimeController.open(");
     if (
@@ -2774,21 +2817,29 @@ function verifyStage0StorageIsolation(root, violations) {
         databaseIdentity,
       ) ||
       !/productionXCanaryHostOptions\(\)\.databasePath/u.test(operator) ||
-      requestedGuard < 0 ||
+      requestedDistinct < 0 ||
+      requestedGuard < requestedDistinct ||
       prospectiveRuntimeResolution < requestedGuard ||
       prospectiveResearchResolution < prospectiveRuntimeResolution ||
       prospectiveProductionResolution < prospectiveResearchResolution ||
       prospectiveWatchlistResolution < prospectiveProductionResolution ||
-      prospectiveGuard < prospectiveWatchlistResolution ||
+      prospectiveAttentionResolution < prospectiveWatchlistResolution ||
+      prospectiveDistinct < prospectiveAttentionResolution ||
+      prospectiveGuard < prospectiveDistinct ||
       runtimeInspection < prospectiveGuard ||
       researchInspection < runtimeInspection ||
       watchlistInspection < researchInspection ||
-      identityGuard < watchlistInspection ||
+      attentionInspection < watchlistInspection ||
+      identityGuard < attentionInspection ||
       runtimeResearchSeparation < identityGuard ||
       runtimeWatchlistSeparation < runtimeResearchSeparation ||
-      researchWatchlistSeparation < runtimeWatchlistSeparation ||
-      runtimeOpen < researchWatchlistSeparation ||
-      countMatches(operator, /resolveProspectiveStoragePath\s*\(/gu) !== 4 ||
+      runtimeAttentionSeparation < runtimeWatchlistSeparation ||
+      researchWatchlistSeparation < runtimeAttentionSeparation ||
+      researchAttentionSeparation < researchWatchlistSeparation ||
+      watchlistAttentionSeparation < researchAttentionSeparation ||
+      runtimeOpen < watchlistAttentionSeparation ||
+      countMatches(operator, /resolveProspectiveStoragePath\s*\(/gu) !== 5 ||
+      countMatches(operator, /assertDistinctStage0DatabasePaths\s*\(/gu) !== 2 ||
       countMatches(operator, /assertStage0StorageIsolation\s*\(/gu) !== 3
     ) {
       violations.push(
@@ -2804,7 +2855,8 @@ function verifyStage0StorageIsolation(root, violations) {
     const closePromiseStart = closeSource.indexOf("closePromise = (async", activateClosing);
     const initialStop = closeSource.indexOf("activeRuntime.stop(", closePromiseStart);
     const drainServer = closeSource.indexOf("await operator?.close()", initialStop);
-    const closeResearch = closeSource.indexOf("research?.close()", drainServer);
+    const closeAttention = closeSource.indexOf("attention?.close()", drainServer);
+    const closeResearch = closeSource.indexOf("research?.close()", closeAttention);
     const closeWatchlist = closeSource.indexOf("watchlist?.close()", closeResearch);
     const finalStop = closeSource.indexOf("activeRuntime.stop(", closeWatchlist);
     const closeRuntime = closeSource.indexOf("activeRuntime.close()", finalStop);
@@ -2826,12 +2878,17 @@ function verifyStage0StorageIsolation(root, violations) {
     );
     const installSigint = stage0Run.indexOf('process.once("SIGINT", handleSignal)');
     const installSigterm = stage0Run.indexOf('process.once("SIGTERM", handleSignal)');
-    const postIdentityShutdown = stage0Run.indexOf("if (shutdownRequested)", watchlistInspection);
+    const postIdentityShutdown = stage0Run.indexOf("if (shutdownRequested)", attentionInspection);
     const identityGuardInRun = stage0Run.indexOf(
       "assertStage0StorageIsolation(",
       postIdentityShutdown,
     );
-    const researchOpen = stage0Run.indexOf("SqliteResearchLedger.open(", runtimeOpen);
+    const attentionOpen = stage0Run.indexOf("RecordedAttentionHistory.open(", runtimeOpen);
+    const receiptVerifierPassed = stage0Run.indexOf(
+      "receiptVerifier: createRuntimeAttentionReceiptVerifier(runtime)",
+      attentionOpen,
+    );
+    const researchOpen = stage0Run.indexOf("SqliteResearchLedger.open(", receiptVerifierPassed);
     const watchlistOpen = stage0Run.indexOf("OfflineBaseWatchlist.open(", researchOpen);
     const postOpenShutdown = stage0Run.indexOf("if (shutdownRequested)", watchlistOpen);
     const controlConstruction = stage0Run.indexOf(
@@ -2839,7 +2896,8 @@ function verifyStage0StorageIsolation(root, violations) {
       runtimeOpen,
     );
     const serverStart = stage0Run.indexOf("startOperatorServer(provider", controlConstruction);
-    const controlsPassed = stage0Run.indexOf("runtime: runtimeControls", serverStart);
+    const attentionPassed = stage0Run.indexOf("attention: createAttentionProvider(", serverStart);
+    const controlsPassed = stage0Run.indexOf("runtime: runtimeControls", attentionPassed);
     const postServerShutdown = stage0Run.indexOf("if (shutdownRequested)", serverStart);
     const startupSnapshot = stage0Run.indexOf(
       "const snapshot = runtime.getSnapshot()",
@@ -2869,7 +2927,8 @@ function verifyStage0StorageIsolation(root, violations) {
       closePromiseStart < activateClosing ||
       initialStop < closePromiseStart ||
       drainServer < initialStop ||
-      closeResearch < drainServer ||
+      closeAttention < drainServer ||
+      closeResearch < closeAttention ||
       closeWatchlist < closeResearch ||
       finalStop < closeWatchlist ||
       closeRuntime < finalStop ||
@@ -2886,16 +2945,19 @@ function verifyStage0StorageIsolation(root, violations) {
       installSigint < 0 ||
       installSigterm < installSigint ||
       runtimeInspection < installSigterm ||
-      postIdentityShutdown < watchlistInspection ||
+      postIdentityShutdown < attentionInspection ||
       identityGuardInRun < postIdentityShutdown ||
       runtimeOpen < identityGuardInRun ||
-      researchOpen < runtimeOpen ||
+      attentionOpen < runtimeOpen ||
+      receiptVerifierPassed < attentionOpen ||
+      researchOpen < receiptVerifierPassed ||
       watchlistOpen < researchOpen ||
       postOpenShutdown < watchlistOpen ||
       controlConstruction < postOpenShutdown ||
       controlConstruction < runtimeOpen ||
       serverStart < controlConstruction ||
-      controlsPassed < serverStart ||
+      attentionPassed < serverStart ||
+      controlsPassed < attentionPassed ||
       postServerShutdown < controlsPassed ||
       startupSnapshot < postServerShutdown ||
       preOutputShutdown < startupSnapshot ||

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  assertDistinctStage0DatabasePaths,
   assertStage0StorageIsolation,
   operatorUsage,
   parseOperatorOptions,
@@ -32,6 +33,7 @@ describe("operator command options", () => {
         "0",
       ]),
     ).toEqual({
+      attentionDatabasePath: "rsi-attention.sqlite",
       databasePath: ":memory:",
       port: 0,
       researchDatabasePath: "research.sqlite",
@@ -41,6 +43,7 @@ describe("operator command options", () => {
 
   it("uses loopback-service defaults", () => {
     expect(parseOperatorOptions([])).toEqual({
+      attentionDatabasePath: ".local/stage0/rsi-attention.sqlite",
       databasePath: ".local/stage0/rsi-runtime.sqlite",
       port: 8_787,
       researchDatabasePath: ".local/stage0/rsi-research.sqlite",
@@ -62,6 +65,7 @@ describe("operator command options", () => {
         "/private/rsi/research.sqlite",
         production,
         `${production}/watchlist.sqlite`,
+        "/private/rsi/stage0/attention.sqlite",
       ),
     ).toThrow("cannot open Stage 1 production storage");
     expect(() =>
@@ -90,6 +94,8 @@ describe("operator command options", () => {
         `${production}/stage0/runtime.sqlite`,
         `${production}/stage0/nested/research.sqlite`,
         production,
+        `${production}/stage0/watchlist.sqlite`,
+        `${production}/stage0/attention.sqlite`,
       ),
     ).not.toThrow();
     expect(() =>
@@ -97,8 +103,30 @@ describe("operator command options", () => {
         "/private/rsi/stage0/runtime.sqlite",
         "/private/rsi/stage0/research.sqlite",
         production,
+        "/private/rsi/stage0/watchlist.sqlite",
+        `${production}/attention.sqlite`,
+      ),
+    ).toThrow("cannot open Stage 1 production storage");
+    expect(() =>
+      assertStage0StorageIsolation(
+        "/private/rsi/stage0/runtime.sqlite",
+        "/private/rsi/stage0/research.sqlite",
+        production,
       ),
     ).not.toThrow();
+  });
+
+  it("rejects a case alias of an absent production root", () => {
+    const production = join(tmpdir(), "rsi-absent-production-root", ".local");
+    expect(() =>
+      assertStage0StorageIsolation(
+        join(tmpdir(), "rsi-stage0-runtime.sqlite"),
+        join(tmpdir(), "rsi-stage0-research.sqlite"),
+        production,
+        join(tmpdir(), "rsi-stage0-watchlist.sqlite"),
+        join(tmpdir(), "rsi-absent-production-root", ".LOCAL", "attention.sqlite"),
+      ),
+    ).toThrow("cannot open Stage 1 production storage");
   });
 
   it("resolves a symlinked existing ancestor without creating a nested Stage 1 path", async () => {
@@ -125,14 +153,31 @@ describe("operator command options", () => {
     ["missing database path", ["--db"]],
     ["missing research database path", ["--research-db"]],
     ["missing watchlist database path", ["--watchlist-db"]],
+    ["missing attention database path", ["--attention-db"]],
     [
       "watchlist aliases research",
       ["--watchlist-db", "same.sqlite", "--research-db", "same.sqlite"],
     ],
     ["shared database", ["--db", "same.sqlite", "--research-db", "same.sqlite"]],
+    ["attention aliases runtime", ["--attention-db", "same.sqlite", "--db", "same.sqlite"]],
+    [
+      "attention aliases watchlist",
+      ["--attention-db", "collection.sqlite", "--watchlist-db", "collection.sqlite"],
+    ],
     ["non-integer port", ["--port", "12.5"]],
     ["out-of-range port", ["--port", "65536"]],
   ])("rejects %s", (_label, args) => {
     expect(() => parseOperatorOptions(args)).toThrow();
+  });
+
+  it("rejects Unicode-normalized aliases across every Stage 0 database role", () => {
+    expect(() =>
+      assertDistinctStage0DatabasePaths([
+        "/tmp/caf\u00e9.sqlite",
+        "/tmp/research.sqlite",
+        "/tmp/watchlist.sqlite",
+        "/tmp/cafe\u0301.sqlite",
+      ]),
+    ).toThrow("separate SQLite files");
   });
 });

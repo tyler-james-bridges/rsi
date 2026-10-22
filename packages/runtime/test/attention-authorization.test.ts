@@ -545,6 +545,26 @@ describe("attention refresh authorization", () => {
       expect(() => runtime.verifyPersistedAttentionRefreshReceipts(accessorBatch)).toThrow(
         RuntimeValidationError,
       );
+
+      let unrelatedGetterWasRead = false;
+      const noisyBatch = [first];
+      for (let index = 0; index < 10_000; index += 1) {
+        Object.defineProperty(noisyBatch, `unrelated-${index}`, {
+          enumerable: true,
+          get: () => {
+            unrelatedGetterWasRead = true;
+            throw new Error("unrelated receipt-batch property must not be read");
+          },
+        });
+      }
+      expect(runtime.verifyPersistedAttentionRefreshReceipts(noisyBatch)).toEqual([first]);
+      expect(unrelatedGetterWasRead).toBe(false);
+
+      const revocable = Proxy.revocable([first], {});
+      revocable.revoke();
+      expect(() => runtime.verifyPersistedAttentionRefreshReceipts(revocable.proxy)).toThrow(
+        RuntimeValidationError,
+      );
     } finally {
       runtime.close();
     }

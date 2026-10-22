@@ -17,15 +17,27 @@ import { parseOperatorRuntimeSnapshot } from "@rsi/operator";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const entry = fileURLToPath(new URL("../src/operator.ts", import.meta.url));
-const tsx = fileURLToPath(new URL("../../../node_modules/tsx/dist/cli.mjs", import.meta.url));
+const tsxImport = fileURLToPath(
+  new URL("../../../node_modules/tsx/dist/loader.mjs", import.meta.url),
+);
+const operatorArguments = ["--import", tsxImport, entry] as const;
 let directory: string;
 let child: ChildProcessWithoutNullStreams | undefined;
-afterEach(async () => {
-  if (child && child.exitCode === null && child.signalCode === null) {
-    const exited = once(child, "exit");
-    child.kill("SIGTERM");
+
+async function terminate(active: ChildProcessWithoutNullStreams): Promise<void> {
+  if (active.exitCode !== null || active.signalCode !== null) return;
+  const exited = once(active, "exit");
+  active.kill("SIGTERM");
+  const force = setTimeout(() => active.kill("SIGKILL"), 1_000);
+  try {
     await exited;
+  } finally {
+    clearTimeout(force);
   }
+}
+
+afterEach(async () => {
+  if (child !== undefined) await terminate(child);
   child = undefined;
   if (directory) await rm(directory, { recursive: true, force: true });
 });
@@ -33,8 +45,7 @@ async function launch(extra: string[] = []) {
   child = spawn(
     process.execPath,
     [
-      tsx,
-      entry,
+      ...operatorArguments,
       "--db",
       join(directory, "runtime.sqlite"),
       "--research-db",

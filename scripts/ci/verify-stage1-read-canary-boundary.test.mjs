@@ -1241,6 +1241,24 @@ test("pins the shared fail-closed profile lease and blocks disconnected core byp
     },
     {
       path: "apps/cli/src/operator-options.ts",
+      from: 'DEFAULT_ATTENTION_DATABASE_PATH = ".local/stage0/rsi-attention.sqlite"',
+      to: 'DEFAULT_ATTENTION_DATABASE_PATH = ".local/rsi-attention.sqlite"',
+      failure: /confine defaults and every Stage 1-directory descendant/u,
+    },
+    {
+      path: "apps/cli/src/operator-options.ts",
+      from: 'path === ":memory:" ? path : resolve(path).normalize("NFC"),',
+      to: 'path === ":memory:" ? path : resolve(path),',
+      failure: /confine defaults and every Stage 1-directory descendant/u,
+    },
+    {
+      path: "apps/cli/src/operator-options.ts",
+      from: 'return resolve(path).normalize("NFC").toLowerCase();',
+      to: 'return resolve(path).normalize("NFC");',
+      failure: /confine defaults and every Stage 1-directory descendant/u,
+    },
+    {
+      path: "apps/cli/src/operator-options.ts",
       from: "isAtOrBelow(productionRoot, candidate) && !isAtOrBelow(permittedStage0Root, candidate)",
       to: "isAtOrBelow(productionRoot, candidate) && false",
       failure: /every Stage 1-directory descendant/u,
@@ -1253,11 +1271,23 @@ test("pins the shared fail-closed profile lease and blocks disconnected core byp
     },
     {
       path: "apps/cli/src/operator.ts",
+      from: `  assertDistinctStage0DatabasePaths([
+    requestedDatabasePath,
+    requestedResearchDatabasePath,
+    requestedWatchlistDatabasePath,
+    requestedAttentionDatabasePath,
+  ]);`,
+      to: "  void requestedAttentionDatabasePath;",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
       from: `  assertStage0StorageIsolation(
     requestedDatabasePath,
     requestedResearchDatabasePath,
     requestedProductionDataDirectory,
     requestedWatchlistDatabasePath,
+    requestedAttentionDatabasePath,
   );`,
       to: "  void requestedProductionDataDirectory;",
       failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
@@ -1270,11 +1300,30 @@ test("pins the shared fail-closed profile lease and blocks disconnected core byp
     },
     {
       path: "apps/cli/src/operator.ts",
+      from: "    resolveProspectiveStoragePath(requestedAttentionDatabasePath),",
+      to: "    requestedAttentionDatabasePath,",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: `  assertDistinctStage0DatabasePaths([
+    prospectiveRuntimePath,
+    prospectiveResearchPath,
+    prospectiveWatchlistPath,
+    prospectiveAttentionPath,
+  ]);`,
+      to: "  void prospectiveAttentionPath;",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
       from: `    productionDataDirectory,
     prospectiveWatchlistPath,
+    prospectiveAttentionPath,
   );`,
       to: `    productionDataDirectory,
     requestedWatchlistDatabasePath,
+    requestedAttentionDatabasePath,
   );`,
       failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
     },
@@ -1286,12 +1335,26 @@ test("pins the shared fail-closed profile lease and blocks disconnected core byp
     },
     {
       path: "apps/cli/src/operator.ts",
+      from: "        resolveDatabaseIdentity(prospectiveAttentionPath),",
+      to: "        Promise.resolve({ path: prospectiveAttentionPath }),",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
       from: `      productionDataDirectory,
       watchlistIdentity.path,
+      attentionIdentity.path,
     );`,
       to: `      productionDataDirectory,
       prospectiveWatchlistPath,
+      prospectiveAttentionPath,
     );`,
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "    assertSeparateDatabases(runtimeIdentity, researchIdentity);",
+      to: "    void researchIdentity;",
       failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
     },
     {
@@ -1302,9 +1365,45 @@ test("pins the shared fail-closed profile lease and blocks disconnected core byp
     },
     {
       path: "apps/cli/src/operator.ts",
+      from: "    assertSeparateDatabases(runtimeIdentity, attentionIdentity);",
+      to: "    void attentionIdentity;",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
       from: "    assertSeparateDatabases(researchIdentity, watchlistIdentity);",
       to: "    void watchlistIdentity;",
       failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "    assertSeparateDatabases(researchIdentity, attentionIdentity);",
+      to: "    void attentionIdentity;",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "    assertSeparateDatabases(watchlistIdentity, attentionIdentity);",
+      to: "    void attentionIdentity;",
+      failure: /refuse requested, prospective, or canonical Stage 1 storage/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "      receiptVerifier: createRuntimeAttentionReceiptVerifier(runtime),",
+      to: "      receiptVerifier: undefined as never,",
+      failure: /drain the server and local stores/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "        attention?.close();",
+      to: "        void attention;",
+      failure: /drain the server and local stores/u,
+    },
+    {
+      path: "apps/cli/src/operator.ts",
+      from: "      attention: createAttentionProvider({",
+      to: "      attention: undefined, voidAttention: createAttentionProvider({",
+      failure: /drain the server and local stores/u,
     },
     {
       path: "apps/cli/src/operator.ts",
@@ -1575,13 +1674,15 @@ test("rejects policy, executable domain, adapters, wallet, payment, and test tra
   }
 });
 
-test("keeps the shared X operator graph isolated from the Stage 0 watchlist", () => {
-  withFixture((root) => {
-    write(root, "packages/watchlist/package.json", manifest("@rsi/watchlist"));
-    write(root, "packages/watchlist/src/index.ts", "export const watchlist = true;\n");
-    appendFileSync(join(root, "apps/operator/src/server.ts"), 'import "@rsi/watchlist";\n');
-    expectFailure(root, /unreviewed workspace import @rsi\/watchlist/u);
-  });
+test("keeps the shared X operator graph isolated from Stage 0 stores", () => {
+  for (const packageName of ["attention", "watchlist"]) {
+    withFixture((root) => {
+      write(root, `packages/${packageName}/package.json`, manifest(`@rsi/${packageName}`));
+      write(root, `packages/${packageName}/src/index.ts`, "export const store = true;\n");
+      appendFileSync(join(root, "apps/operator/src/server.ts"), `import "@rsi/${packageName}";\n`);
+      expectFailure(root, new RegExp(`unreviewed workspace import @rsi/${packageName}`, "u"));
+    });
+  }
 });
 
 test("rejects reuse of other CLI production, demo, or offline entrypoints", () => {

@@ -628,21 +628,42 @@ function assertExactAttentionRefreshReceipt(
 function parsePersistedAttentionRefreshReceipts(
   inputValue: unknown,
 ): readonly RuntimeAllowedAttentionRefreshReceipt[] {
-  if (
-    !Array.isArray(inputValue) ||
-    utilTypes.isProxy(inputValue) ||
-    Object.getPrototypeOf(inputValue) !== Array.prototype ||
-    inputValue.length > MAX_PERSISTED_ATTENTION_REFRESH_RECEIPTS
-  ) {
+  let length: number;
+  try {
+    if (
+      typeof inputValue !== "object" ||
+      inputValue === null ||
+      utilTypes.isProxy(inputValue) ||
+      !Array.isArray(inputValue) ||
+      Object.getPrototypeOf(inputValue) !== Array.prototype
+    ) {
+      throw new TypeError("invalid receipt batch");
+    }
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(inputValue, "length");
+    if (
+      lengthDescriptor === undefined ||
+      !("value" in lengthDescriptor) ||
+      !Number.isSafeInteger(lengthDescriptor.value) ||
+      lengthDescriptor.value < 0 ||
+      lengthDescriptor.value > MAX_PERSISTED_ATTENTION_REFRESH_RECEIPTS
+    ) {
+      throw new TypeError("invalid receipt batch length");
+    }
+    length = lengthDescriptor.value as number;
+  } catch {
     throw new RuntimeValidationError("Persisted attention refresh receipt batch is invalid");
   }
-  const descriptors = Object.getOwnPropertyDescriptors(inputValue);
-  if (Reflect.ownKeys(inputValue).length !== inputValue.length + 1) {
-    throw new RuntimeValidationError("Persisted attention refresh receipt batch is invalid");
-  }
+
   const receipts: RuntimeAllowedAttentionRefreshReceipt[] = [];
-  for (let index = 0; index < inputValue.length; index += 1) {
-    const descriptor = descriptors[String(index)];
+  for (let index = 0; index < length; index += 1) {
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      // Only array indices are protocol data. Ignoring unrelated own properties keeps
+      // validation work bounded by the receipt limit instead of attacker-controlled keys.
+      descriptor = Object.getOwnPropertyDescriptor(inputValue, String(index));
+    } catch {
+      throw new RuntimeValidationError("Persisted attention refresh receipt batch is invalid");
+    }
     if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
       throw new RuntimeValidationError("Persisted attention refresh receipt batch is invalid");
     }

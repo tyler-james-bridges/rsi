@@ -29,6 +29,9 @@ importers:
 
   apps/cli:
     dependencies:
+      "@rsi/attention":
+        specifier: workspace:*
+        version: link:../../packages/attention
       "@rsi/capture-registry":
         specifier: workspace:*
         version: link:../../packages/capture-registry

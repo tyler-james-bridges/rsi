@@ -59,9 +59,12 @@ const SPECIAL_PLATFORM_IMPORTS = new Map([
     Object.freeze({
       files: new Map([
         ["apps/cli/src/operator.ts", Object.freeze(["randomUUID"])],
+        ["apps/cli/src/attention-provider.ts", Object.freeze(["randomUUID"])],
         ["apps/cli/src/research-replay-provider.ts", Object.freeze(["randomUUID"])],
         ["apps/cli/src/watchlist-provider.ts", Object.freeze(["randomUUID"])],
         ["packages/watchlist/src/snapshot.ts", Object.freeze(["createHash"])],
+        ["packages/attention/src/hash.ts", Object.freeze(["createHash"])],
+        ["packages/attention/src/history.ts", Object.freeze(["randomUUID"])],
         ["packages/research/src/capture.ts", Object.freeze(["createHash"])],
         ["packages/research/src/coordination.ts", Object.freeze(["createHash"])],
         ["packages/research/src/pipeline.ts", Object.freeze(["createHash"])],

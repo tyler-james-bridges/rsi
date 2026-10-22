@@ -12,6 +12,9 @@ import {
   parseAttentionPreview,
   parseAttentionResult,
   parseAttentionView,
+  projectAttentionOperatorPreview,
+  projectAttentionOperatorResult,
+  projectAttentionOperatorView,
 } from "../src/index.js";
 import { recordedBundle } from "./fixtures.js";
 
@@ -112,5 +115,67 @@ describe("attention operator protocol", () => {
     expect(() =>
       parseAttentionPreviewCommand({ input: { ...recordedBundle(), provenance: "authenticated" } }),
     ).toThrow();
+  });
+
+  it("projects receipts out of results, duplicate previews, and view latest values", () => {
+    using runtime = SqliteRuntimeController.open(
+      { path: ":memory:", openedAt: NOW, processInstanceId: randomUUID() },
+      { clock: () => NOW, monotonicClock: () => 0 },
+    );
+    runtime.transition({
+      expectedMode: "STOPPED",
+      expectedRevision: 1,
+      occurredAt: NOW,
+      requestId: randomUUID(),
+      targetMode: "RESEARCH",
+    });
+    using history = RecordedAttentionHistory.open({
+      path: ":memory:",
+      receiptVerifier: createRuntimeAttentionReceiptVerifier(runtime),
+    });
+    const input = recordedBundle();
+    const preview = history.preview(input, {
+      processInstanceId: runtime.processInstanceId,
+      modeRevision: runtime.getSnapshot().revision,
+      evaluatedAt: NOW,
+    });
+    if (preview.kind !== "preview") throw new Error("expected preview");
+    const wirePreview = projectAttentionOperatorPreview(preview);
+    const authorization = runtime.requestBoundaryAuthorization({
+      boundary: "attention_refresh",
+      actionId: attentionPreviewActionId(preview.binding),
+      authorizationId: randomUUID(),
+    });
+    const result = history.record({ input, expected: preview.binding, authorization });
+    const wireResult = projectAttentionOperatorResult(result);
+    const duplicate = history.preview(input, {
+      processInstanceId: runtime.processInstanceId,
+      modeRevision: runtime.getSnapshot().revision,
+      evaluatedAt: NOW,
+    });
+    const wireDuplicate = projectAttentionOperatorPreview(duplicate);
+    const wireView = projectAttentionOperatorView(history.read(NOW));
+
+    for (const projected of [wirePreview, wireResult, wireDuplicate, wireView]) {
+      const json = JSON.parse(JSON.stringify(projected));
+      expect(JSON.stringify(json)).not.toContain('"authorization"');
+    }
+    expect(projectAttentionOperatorResult(JSON.parse(JSON.stringify(wireResult)))).toEqual(
+      wireResult,
+    );
+    expect(projectAttentionOperatorPreview(JSON.parse(JSON.stringify(wirePreview)))).toEqual(
+      wirePreview,
+    );
+    expect(projectAttentionOperatorPreview(JSON.parse(JSON.stringify(wireDuplicate)))).toEqual(
+      wireDuplicate,
+    );
+    expect(projectAttentionOperatorView(JSON.parse(JSON.stringify(wireView)))).toEqual(wireView);
+    expect(wireDuplicate).toEqual({
+      schemaVersion: 2,
+      kind: "already_recorded",
+      result: wireResult,
+    });
+    expect(wireView).toMatchObject({ kind: "available", latest: wireResult });
+    expect(() => projectAttentionOperatorResult({ ...wireResult, authorization: {} })).toThrow();
   });
 });

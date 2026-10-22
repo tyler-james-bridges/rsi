@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { lstat, mkdir, open, realpath, stat } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 
+import { createRuntimeAttentionReceiptVerifier, RecordedAttentionHistory } from "@rsi/attention";
 import {
   createRuntimeOperatorControls,
   startOperatorServer,
@@ -22,11 +23,13 @@ import {
 } from "@rsi/runtime";
 
 import {
+  assertDistinctStage0DatabasePaths,
   assertStage0StorageIsolation,
   operatorUsage,
   parseOperatorOptions,
   resolveProspectiveStoragePath,
 } from "./operator-options.js";
+import { createAttentionProvider } from "./attention-provider.js";
 import { productionXCanaryHostOptions } from "./production-canary-config.js";
 import { createRecordedResearchReplayProvider } from "./research-replay-provider.js";
 import { createWatchlistProvider } from "./watchlist-provider.js";
@@ -76,7 +79,7 @@ function assertSeparateDatabases(runtime: DatabaseIdentity, research: DatabaseId
       runtime.device === research.device &&
       runtime.inode === research.inode)
   ) {
-    throw new TypeError("Runtime and research ledgers must use separate SQLite files");
+    throw new TypeError("Stage 0 databases must use separate SQLite files");
   }
 }
 
@@ -143,14 +146,29 @@ class RuntimeOperatorSnapshotProvider
 }
 
 function projectRuntimeAuditEvent(event: RuntimeAuditEvent): unknown {
+  const payload =
+    event.type === "runtime.boundary.checked.v1"
+      ? Object.freeze({
+          schemaVersion: event.payload.schemaVersion,
+          kind: "runtime_boundary_public_summary",
+          boundary: event.payload.boundary,
+          decision: event.payload.decision,
+          reason: event.payload.reason,
+        })
+      : event.payload;
   return Object.freeze({
+    schemaVersion: 1,
+    kind: "runtime_audit_projection",
     sequence: event.sequence,
     eventId: event.eventId,
     type: event.type,
     occurredAt: event.occurredAt,
-    previousHash: event.previousHash,
-    eventHash: event.eventHash,
-    payload: event.payload,
+    ledgerAnchor: Object.freeze({
+      kind: "opaque_runtime_ledger_anchor",
+      previousHash: event.previousHash,
+      eventHash: event.eventHash,
+    }),
+    payload,
   });
 }
 
@@ -194,33 +212,54 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
     options.watchlistDatabasePath === ":memory:"
       ? options.watchlistDatabasePath
       : resolve(options.watchlistDatabasePath);
+  const requestedAttentionDatabasePath =
+    options.attentionDatabasePath === ":memory:"
+      ? options.attentionDatabasePath
+      : resolve(options.attentionDatabasePath);
+  assertDistinctStage0DatabasePaths([
+    requestedDatabasePath,
+    requestedResearchDatabasePath,
+    requestedWatchlistDatabasePath,
+    requestedAttentionDatabasePath,
+  ]);
   assertStage0StorageIsolation(
     requestedDatabasePath,
     requestedResearchDatabasePath,
     requestedProductionDataDirectory,
     requestedWatchlistDatabasePath,
+    requestedAttentionDatabasePath,
   );
   const [
     prospectiveRuntimePath,
     prospectiveResearchPath,
     productionDataDirectory,
     prospectiveWatchlistPath,
+    prospectiveAttentionPath,
   ] = await Promise.all([
     resolveProspectiveStoragePath(requestedDatabasePath),
     resolveProspectiveStoragePath(requestedResearchDatabasePath),
     resolveProspectiveStoragePath(requestedProductionDataDirectory),
     resolveProspectiveStoragePath(requestedWatchlistDatabasePath),
+    resolveProspectiveStoragePath(requestedAttentionDatabasePath),
+  ]);
+  assertDistinctStage0DatabasePaths([
+    prospectiveRuntimePath,
+    prospectiveResearchPath,
+    prospectiveWatchlistPath,
+    prospectiveAttentionPath,
   ]);
   assertStage0StorageIsolation(
     prospectiveRuntimePath,
     prospectiveResearchPath,
     productionDataDirectory,
     prospectiveWatchlistPath,
+    prospectiveAttentionPath,
   );
 
   let runtime: SqliteRuntimeController | undefined;
   let research: SqliteResearchLedger | undefined;
   let watchlist: OfflineBaseWatchlist | undefined;
+  let attention: RecordedAttentionHistory | undefined;
   let operator: Awaited<ReturnType<typeof startOperatorServer>> | undefined;
   let hostClosing = false;
   let closePromise: Promise<void> | null = null;
@@ -241,6 +280,11 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
       }
       try {
         await operator?.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        attention?.close();
       } catch (error) {
         failures.push(error);
       }
@@ -296,11 +340,13 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
   process.once("SIGTERM", handleSignal);
 
   try {
-    const [runtimeIdentity, researchIdentity, watchlistIdentity] = await Promise.all([
-      resolveDatabaseIdentity(prospectiveRuntimePath),
-      resolveDatabaseIdentity(prospectiveResearchPath),
-      resolveDatabaseIdentity(prospectiveWatchlistPath),
-    ]);
+    const [runtimeIdentity, researchIdentity, watchlistIdentity, attentionIdentity] =
+      await Promise.all([
+        resolveDatabaseIdentity(prospectiveRuntimePath),
+        resolveDatabaseIdentity(prospectiveResearchPath),
+        resolveDatabaseIdentity(prospectiveWatchlistPath),
+        resolveDatabaseIdentity(prospectiveAttentionPath),
+      ]);
     if (shutdownRequested) {
       removeSignalHandlers();
       return;
@@ -310,10 +356,14 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
       researchIdentity.path,
       productionDataDirectory,
       watchlistIdentity.path,
+      attentionIdentity.path,
     );
     assertSeparateDatabases(runtimeIdentity, researchIdentity);
     assertSeparateDatabases(runtimeIdentity, watchlistIdentity);
+    assertSeparateDatabases(runtimeIdentity, attentionIdentity);
     assertSeparateDatabases(researchIdentity, watchlistIdentity);
+    assertSeparateDatabases(researchIdentity, attentionIdentity);
+    assertSeparateDatabases(watchlistIdentity, attentionIdentity);
     const databasePath = runtimeIdentity.path;
     const researchDatabasePath = researchIdentity.path;
 
@@ -321,6 +371,10 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
       openedAt: new Date().toISOString(),
       path: databasePath,
       processInstanceId: randomUUID(),
+    });
+    attention = RecordedAttentionHistory.open({
+      path: attentionIdentity.path,
+      receiptVerifier: createRuntimeAttentionReceiptVerifier(runtime),
     });
     research = SqliteResearchLedger.open(researchDatabasePath);
     watchlist = OfflineBaseWatchlist.open(watchlistIdentity.path);
@@ -338,6 +392,11 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
     });
     operator = await startOperatorServer(provider, {
       port: options.port,
+      attention: createAttentionProvider({
+        runtime,
+        history: attention,
+        isClosing: () => hostClosing,
+      }),
       research: provider,
       researchReplay,
       runtime: runtimeControls,
@@ -355,6 +414,7 @@ async function runStage0Operator(options: Stage0OperatorOptions): Promise<void> 
       executionEnabled: false,
       financialAuthority: false,
       databasePath,
+      attentionDatabasePath: attentionIdentity.path,
       researchDatabasePath,
       watchlistDatabasePath: watchlistIdentity.path,
       origin: operator.origin,

@@ -32,12 +32,21 @@ export {
 export {
   AttentionPreviewCommandSchema,
   AttentionRecordCommandSchema,
+  AttentionOperatorPreviewSchema,
+  AttentionOperatorResultSchema,
+  AttentionOperatorViewSchema,
   parseAttentionPreviewCommand,
   parseAttentionRecordCommand,
   parseAttentionPreviewBinding,
   parseAttentionPreview,
   parseAttentionResult,
   parseAttentionView,
+  projectAttentionOperatorPreview,
+  projectAttentionOperatorResult,
+  projectAttentionOperatorView,
+  type AttentionOperatorPreview,
+  type AttentionOperatorResult,
+  type AttentionOperatorView,
 } from "./operator-protocol.js";
 export {
   ATTENTION_NOTES,

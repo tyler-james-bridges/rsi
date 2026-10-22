@@ -186,7 +186,20 @@ export interface OperatorWatchlistProvider {
   readWatchlist(): unknown;
 }
 
+export interface OperatorAttentionProvider {
+  parsePreviewCommand(input: unknown): Readonly<{ input: unknown }>;
+  parseRecordCommand(input: unknown): Readonly<{ input: unknown; expected: unknown }>;
+  projectPreview(input: unknown): unknown;
+  projectResult(input: unknown): unknown;
+  projectView(input: unknown): unknown;
+  previewAttention(input: unknown): unknown;
+  recordAttention(input: unknown, expected: unknown): unknown;
+  readAttention(): unknown;
+}
+
 export interface OperatorServerOptions {
+  /** Omit when recorded collection-attention history is not configured. */
+  readonly attention?: OperatorAttentionProvider;
   readonly watchlist?: OperatorWatchlistProvider;
   /** Defaults to IPv4 loopback. Only 127.0.0.1 and ::1 are accepted. */
   readonly host?: string;
@@ -1172,6 +1185,7 @@ async function route(
   readCanaryRouteState: { running: boolean },
   researchReplayRouteState: { running: boolean },
   watchlist: OperatorWatchlistProvider | undefined,
+  attention: OperatorAttentionProvider | undefined,
 ): Promise<void> {
   assertLoopbackLocalSocket(request);
   const origin = assertLoopbackHost(request);
@@ -1180,6 +1194,43 @@ async function route(
     throw new HttpError(414, "request_target_too_long", "Request target is too long.");
   }
   const url = new URL(target, "http://operator.invalid");
+
+  if (url.pathname === "/api/attention/preview" || url.pathname === "/api/attention/record") {
+    if (request.method !== "POST")
+      throw new HttpError(405, "method_not_allowed", "Attention commands require POST.");
+    if (url.search !== "") badRequest("Attention commands do not accept query parameters.");
+    assertSameOriginControl(request, origin);
+    if (attention === undefined) {
+      throw new HttpError(
+        501,
+        "attention_unavailable",
+        "Recorded collection attention is not configured.",
+      );
+    }
+    const body = await readControlBody(request, 65_536);
+    if (url.pathname === "/api/attention/preview") {
+      let command;
+      try {
+        command = attention.parsePreviewCommand(body);
+      } catch {
+        badRequest("Invalid recorded attention input.");
+      }
+      sendJson(response, 200, {
+        preview: attention.projectPreview(attention.previewAttention(command.input)),
+      });
+    } else {
+      let command;
+      try {
+        command = attention.parseRecordCommand(body);
+      } catch {
+        badRequest("Invalid recorded attention confirmation.");
+      }
+      sendJson(response, 200, {
+        result: attention.projectResult(attention.recordAttention(command.input, command.expected)),
+      });
+    }
+    return;
+  }
 
   if (url.pathname === "/api/watchlist/preview" || url.pathname === "/api/watchlist/confirm") {
     if (request.method !== "POST")
@@ -1329,6 +1380,19 @@ async function route(
     return;
   }
 
+  if (url.pathname === "/api/attention") {
+    if (url.search !== "") badRequest("Attention reads do not accept query parameters.");
+    if (attention === undefined) {
+      throw new HttpError(
+        501,
+        "attention_unavailable",
+        "Recorded collection attention is not configured.",
+      );
+    }
+    sendJson(response, 200, { attention: attention.projectView(attention.readAttention()) });
+    return;
+  }
+
   if (url.pathname === "/operator.css") {
     if (url.search !== "") badRequest("The stylesheet route does not accept query parameters.");
     sendAsset(response, "text/css; charset=utf-8", OPERATOR_DASHBOARD_CSS);
@@ -1453,6 +1517,7 @@ export function createOperatorServer(
   readCanary?: OperatorReadCanaryProvider,
   researchReplay?: OperatorResearchReplayProvider,
   watchlist?: OperatorWatchlistProvider,
+  attention?: OperatorAttentionProvider,
 ): Server {
   const readCanaryRouteState = { running: false };
   const researchReplayRouteState = { running: false };
@@ -1469,6 +1534,7 @@ export function createOperatorServer(
       readCanaryRouteState,
       researchReplayRouteState,
       watchlist,
+      attention,
     ).catch((error: unknown) => {
       if (response.headersSent) {
         response.destroy();
@@ -1547,6 +1613,7 @@ export async function startOperatorServer(
     options.readCanary,
     options.researchReplay,
     options.watchlist,
+    options.attention,
   );
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => {
