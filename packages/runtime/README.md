@@ -53,6 +53,10 @@ lock. Dispatch or commit expiry, clock regression, a mode transition, STOP, rest
 malformed use, an asynchronous or proxied callback, a copied object, or a fabricated object fails
 closed.
 
+`ownsAttentionRefreshAuthorization` recognizes only the exact attention authority object issued by
+that controller instance. It performs no database access, clock read, write, or consumption. A
+separate controller rejects the object even if its public process ID, mode, and revision match.
+
 `verifyPersistedAttentionRefreshReceipt` accepts a strict JSON-round-tripped allowed receipt. It
 matches every receipt field against the exact durable runtime event. Verification reads neither a
 clock nor a current authority mode, so a separate attention store can verify an earlier commit

@@ -4,7 +4,7 @@
 
 ## Local recording
 
-Open `RecordedAttentionHistory` with a dedicated SQLite path and `createRuntimeAttentionReceiptVerifier(runtime)`. The verifier exposes only persisted-receipt verification and requires a genuine runtime controller. Keep the runtime open until the history is closed.
+Open `RecordedAttentionHistory` with a dedicated SQLite path and `createRuntimeAttentionReceiptVerifier(runtime)`. The verifier exposes only attention-authorization ownership and persisted-receipt verification, and it requires a genuine runtime controller. Keep the runtime open until the history is closed.
 
 1. Call `findRecorded(rawBundle)` before requesting authority. An exact canonical duplicate returns its original immutable result in every runtime mode, including STOPPED and after restart.
 2. Call `preview(rawBundle, { processInstanceId, modeRevision, evaluatedAt })`. This is write-free. It returns either `preview` or `already_recorded`.
@@ -19,7 +19,7 @@ The binding includes the canonical bundle, policy, audit head, evaluated time, a
 
 Every open/read/preview/lookup verifies the full event chain, replays the pinned policy from empty facts, and checks each receipt against durable runtime history. Receipt verification happens outside the attention lock. A new commit takes the runtime lock before the attention lock. Unknown events, inconsistent restores, mutated assessments or facts, reused receipts, and chronology violations fail closed. Coordinated rollback of both internally consistent databases is outside this release's detection boundary.
 
-The verifier also binds new previews and authorizations to its runtime process ID. A remaining integration seam is owner identity when two distinct runtime databases deliberately reuse the same process UUID. Runtime must supply an unforgeable authorization-owner check before operator integration; receipt verification already makes later reads fail closed if such a mismatched receipt is persisted.
+The verifier binds each new authorization to the exact runtime controller instance that issued it. A different controller cannot supply authority even when a separate runtime database deliberately reuses the same process UUID, mode, and revision. This process-local object check grants no durable authority; exact receipt verification against runtime history remains the restart-safe proof for saved events.
 
 History is capped at 1,000 events, each at 512 KiB, with the model's shared 1,000-retained-fact limit. Preview rejects additions that exceed these bounds. The event retains sanitized facts, the assessment, next facts, binding, receipt, and checkpoint. Raw post text, IDs, and URLs are never persisted. Public previews/results/views also exclude internal sanitized facts.
 

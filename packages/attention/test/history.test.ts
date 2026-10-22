@@ -223,6 +223,7 @@ describe("recorded attention history", () => {
       actionId: "different",
       authorizationId: randomUUID(),
     });
+    const runtimeAudit = f.runtime.listAudit();
     for (const authority of [
       forged,
       serialized,
@@ -239,7 +240,12 @@ describe("recorded attention history", () => {
       ).toThrow("attention_authority_mismatch");
     }
     expect(invoked).toBe(false);
+    expect(f.runtime.listAudit()).toEqual(runtimeAudit);
     expect(events(f.path)).toEqual([]);
+    expect(f.history.record({ input, expected, authorization: genuine })).toMatchObject({
+      binding: expected,
+    });
+    expect(events(f.path)).toHaveLength(1);
     expect(() => createRuntimeAttentionReceiptVerifier({} as SqliteRuntimeController)).toThrow(
       "runtime_verifier_invalid",
     );
@@ -247,6 +253,9 @@ describe("recorded attention history", () => {
       RecordedAttentionHistory.open({
         path: f.path,
         receiptVerifier: {
+          ownsAttentionRefreshAuthorization: (
+            input: unknown,
+          ): input is RuntimeBoundaryAuthorization<"attention_refresh"> => input !== null,
           verifyPersistedAttentionRefreshReceipt: () => {
             throw new Error("forged");
           },
@@ -288,6 +297,110 @@ describe("recorded attention history", () => {
     );
     expect(other.runtime.listAudit()).toEqual(before);
     expect(events(f.path)).toEqual([]);
+  });
+
+  it("rejects a live foreign authority with the same public runtime identity", () => {
+    const f = fixture();
+    const input = recordedBundle();
+    const expected = f.preview(input).binding;
+    const foreignRuntime = SqliteRuntimeController.open(
+      {
+        path: join(f.root, "foreign-runtime.sqlite"),
+        openedAt: NOW,
+        processInstanceId: f.runtime.processInstanceId,
+      },
+      { clock: () => NOW, monotonicClock: () => 0 },
+    );
+    closeables.push(foreignRuntime);
+    foreignRuntime.transition({
+      expectedMode: "STOPPED",
+      expectedRevision: 1,
+      occurredAt: NOW,
+      requestId: randomUUID(),
+      targetMode: "RESEARCH",
+    });
+    const foreignAuthorization = foreignRuntime.requestBoundaryAuthorization({
+      boundary: "attention_refresh",
+      actionId: expected.refreshId,
+      authorizationId: randomUUID(),
+    });
+    const foreignAudit = foreignRuntime.listAudit();
+
+    expect(() =>
+      f.history.record({ input, expected, authorization: foreignAuthorization }),
+    ).toThrow("attention_authority_mismatch");
+    expect(foreignRuntime.listAudit()).toEqual(foreignAudit);
+    expect(events(f.path)).toEqual([]);
+
+    let foreignAuthorizationWasStillUsable = false;
+    foreignAuthorization.consumeAndCommit((_receipt, checkpoint) => {
+      checkpoint();
+      foreignAuthorizationWasStillUsable = true;
+    });
+    expect(foreignAuthorizationWasStillUsable).toBe(true);
+    expect(events(f.path)).toEqual([]);
+
+    expect(
+      f.history.record({ input, expected, authorization: f.authorize(expected) }),
+    ).toMatchObject({ binding: expected });
+    expect(events(f.path)).toHaveLength(1);
+  });
+
+  it("rejects authority issued by a stale controller instance before touching attention", () => {
+    const f = fixture();
+    const input = recordedBundle();
+    const expected = f.preview(input).binding;
+    const staleRuntimePath = join(f.root, "stale-runtime.sqlite");
+    const staleRuntime = SqliteRuntimeController.open(
+      {
+        path: staleRuntimePath,
+        openedAt: NOW,
+        processInstanceId: f.runtime.processInstanceId,
+      },
+      { clock: () => NOW, monotonicClock: () => 0 },
+    );
+    staleRuntime.transition({
+      expectedMode: "STOPPED",
+      expectedRevision: 1,
+      occurredAt: NOW,
+      requestId: randomUUID(),
+      targetMode: "RESEARCH",
+    });
+    const staleAuthorization = staleRuntime.requestBoundaryAuthorization({
+      boundary: "attention_refresh",
+      actionId: expected.refreshId,
+      authorizationId: randomUUID(),
+    });
+    staleRuntime.close();
+
+    const replacementRuntime = SqliteRuntimeController.open(
+      {
+        path: staleRuntimePath,
+        openedAt: "2026-10-21T12:00:31.000Z",
+        processInstanceId: randomUUID(),
+      },
+      {
+        clock: () => {
+          throw new Error("ownership rejection must not read the replacement clock");
+        },
+        monotonicClock: () => {
+          throw new Error("ownership rejection must not read the replacement clock");
+        },
+      },
+    );
+    closeables.push(replacementRuntime);
+    const replacementAudit = replacementRuntime.listAudit();
+
+    expect(replacementRuntime.ownsAttentionRefreshAuthorization(staleAuthorization)).toBe(false);
+    expect(() => f.history.record({ input, expected, authorization: staleAuthorization })).toThrow(
+      "attention_authority_mismatch",
+    );
+    expect(replacementRuntime.listAudit()).toEqual(replacementAudit);
+    expect(events(f.path)).toEqual([]);
+    expect(
+      f.history.record({ input, expected, authorization: f.authorize(expected) }),
+    ).toMatchObject({ binding: expected });
+    expect(events(f.path)).toHaveLength(1);
   });
 
   it("rejects stale heads, changed bundles, decision hashes, process IDs, and revisions before consuming authority", () => {
@@ -517,7 +630,15 @@ describe("recorded attention history", () => {
   it("requires exact stored binding for a record retry and does not consume valid retry authority", () => {
     const f = fixture();
     const input = recordedBundle();
-    const result = f.record(input);
+    const expected = f.preview(input).binding;
+    const consumedAuthorization = f.authorize(expected);
+    const result = f.history.record({ input, expected, authorization: consumedAuthorization });
+    const beforeConsumedRetry = f.runtime.listAudit();
+    expect(f.history.record({ input, expected, authorization: consumedAuthorization })).toEqual(
+      result,
+    );
+    expect(f.runtime.listAudit()).toEqual(beforeConsumedRetry);
+    expect(events(f.path)).toHaveLength(1);
     const authorization = f.authorize(result.binding);
     const before = f.runtime.listAudit();
     expect(() =>

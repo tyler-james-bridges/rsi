@@ -42,6 +42,115 @@ afterEach(() => {
 });
 
 describe("attention refresh authorization", () => {
+  it("binds authority ownership to the exact issuing controller instance", () => {
+    const firstPath = databasePath();
+    const secondPath = databasePath();
+    const processInstanceId = randomUUID();
+    let clockReads = 0;
+    const clock = () => {
+      clockReads += 1;
+      return NOW;
+    };
+    const first = SqliteRuntimeController.open(
+      { path: firstPath, openedAt: NOW, processInstanceId },
+      { clock, monotonicClock: () => 0 },
+    );
+    const second = SqliteRuntimeController.open(
+      { path: secondPath, openedAt: NOW, processInstanceId },
+      { clock, monotonicClock: () => 0 },
+    );
+    for (const runtime of [first, second]) {
+      runtime.transition({
+        expectedMode: "STOPPED",
+        expectedRevision: 1,
+        occurredAt: NOW,
+        requestId: randomUUID(),
+        targetMode: "RESEARCH",
+      });
+    }
+    const sharedAuthorizationId = randomUUID();
+    const firstAuthorization = first.requestBoundaryAuthorization({
+      actionId: "shared-attention-batch",
+      authorizationId: sharedAuthorizationId,
+      boundary: "attention_refresh",
+    });
+    const staleAuthorization = first.requestBoundaryAuthorization({
+      actionId: "stale-attention-batch",
+      authorizationId: randomUUID(),
+      boundary: "attention_refresh",
+    });
+    const secondAuthorization = second.requestBoundaryAuthorization({
+      actionId: "shared-attention-batch",
+      authorizationId: sharedAuthorizationId,
+      boundary: "attention_refresh",
+    });
+    const wrongBoundary = first.requestBoundaryAuthorization({
+      actionId: "shared-attention-batch",
+      authorizationId: randomUUID(),
+      boundary: "watchlist_import",
+    });
+    const firstAudit = first.listAudit();
+    const secondAudit = second.listAudit();
+    const readsBeforeOwnershipChecks = clockReads;
+    let proxyTrapWasInvoked = false;
+    const proxy = new Proxy(firstAuthorization, {
+      get: () => {
+        proxyTrapWasInvoked = true;
+        throw new Error("authorization proxy trap must not run");
+      },
+    });
+
+    expect(first.ownsAttentionRefreshAuthorization(firstAuthorization)).toBe(true);
+    expect(first.ownsAttentionRefreshAuthorization(secondAuthorization)).toBe(false);
+    expect(second.ownsAttentionRefreshAuthorization(firstAuthorization)).toBe(false);
+    expect(second.ownsAttentionRefreshAuthorization(secondAuthorization)).toBe(true);
+    expect(first.ownsAttentionRefreshAuthorization({ ...firstAuthorization })).toBe(false);
+    expect(
+      first.ownsAttentionRefreshAuthorization(JSON.parse(JSON.stringify(firstAuthorization))),
+    ).toBe(false);
+    expect(first.ownsAttentionRefreshAuthorization(Object.create(firstAuthorization))).toBe(false);
+    expect(first.ownsAttentionRefreshAuthorization(proxy)).toBe(false);
+    expect(first.ownsAttentionRefreshAuthorization(wrongBoundary)).toBe(false);
+    expect(proxyTrapWasInvoked).toBe(false);
+    expect(clockReads).toBe(readsBeforeOwnershipChecks);
+    expect(first.listAudit()).toEqual(firstAudit);
+    expect(second.listAudit()).toEqual(secondAudit);
+
+    firstAuthorization.consumeAndCommit((_receipt, checkpoint) => {
+      checkpoint();
+    });
+    secondAuthorization.consumeAndCommit((_receipt, checkpoint) => {
+      checkpoint();
+    });
+    first.close();
+
+    let restartedClockWasRead = false;
+    const restarted = SqliteRuntimeController.open(
+      { path: firstPath, openedAt: LATER, processInstanceId: randomUUID() },
+      {
+        clock: () => {
+          restartedClockWasRead = true;
+          throw new Error("ownership checks must not read the wall clock");
+        },
+        monotonicClock: () => {
+          restartedClockWasRead = true;
+          throw new Error("ownership checks must not read the monotonic clock");
+        },
+      },
+    );
+
+    try {
+      const restartedAudit = restarted.listAudit();
+      expect(restarted.ownsAttentionRefreshAuthorization(staleAuthorization)).toBe(false);
+      expect(first.ownsAttentionRefreshAuthorization(staleAuthorization)).toBe(true);
+      expect(restartedClockWasRead).toBe(false);
+      expect(restarted.listAudit()).toEqual(restartedAudit);
+    } finally {
+      restarted.close();
+      second.close();
+    }
+  });
+
   it("allows only RESEARCH and exposes only the local commit method", () => {
     const runtime = SqliteRuntimeController.open(
       { path: ":memory:", openedAt: NOW, processInstanceId: randomUUID() },

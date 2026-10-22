@@ -734,6 +734,7 @@ export class SqliteRuntimeController {
   readonly path: string;
   readonly processInstanceId: string;
   readonly #clock: () => string;
+  readonly #issuedAttentionRefreshAuthorizations = new WeakSet<object>();
   readonly #monotonicClock: () => number;
   readonly #store: SqliteEventStore;
 
@@ -999,7 +1000,7 @@ export class SqliteRuntimeController {
     if (result.receipt !== null) throw new RuntimeBoundaryDeniedError(result.receipt);
 
     const requested = result.requested;
-    return createRuntimeBoundaryAuthorization({
+    const authorization = createRuntimeBoundaryAuthorization({
       actionId: requested.actionId,
       authorizationId: requested.authorizationId,
       boundary: requested.boundary,
@@ -1014,11 +1015,27 @@ export class SqliteRuntimeController {
         this.#consumeBoundaryAuthorizationAndDispatch(requested, dispatch),
       guardCompletion: (completion) => this.#guardBoundaryCompletion(requested, completion),
     });
+    if (requested.boundary === "attention_refresh") {
+      this.#issuedAttentionRefreshAuthorizations.add(authorization);
+    }
+    return authorization;
   }
 
   listAudit(): readonly RuntimeAuditEvent[] {
     this.#assertAuthentic();
     return this.#store.withExclusiveTransaction(() => replayRuntimeStore(this.#store).events);
+  }
+
+  ownsAttentionRefreshAuthorization(
+    inputValue: unknown,
+  ): inputValue is RuntimeBoundaryAuthorization<"attention_refresh"> {
+    this.#assertAuthentic();
+    return (
+      typeof inputValue === "object" &&
+      inputValue !== null &&
+      !utilTypes.isProxy(inputValue) &&
+      this.#issuedAttentionRefreshAuthorizations.has(inputValue)
+    );
   }
 
   verifyPersistedAttentionRefreshReceipt(

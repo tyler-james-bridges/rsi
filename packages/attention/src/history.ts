@@ -1,7 +1,6 @@
 import { types as utilTypes } from "node:util";
 
 import {
-  isRuntimeBoundaryAuthorization,
   isSqliteRuntimeController,
   type RuntimeAllowedAttentionRefreshReceipt,
   type RuntimeBoundaryAuthorization,
@@ -54,6 +53,9 @@ const VERIFIERS = new WeakMap<object, string>();
 const HISTORIES = new WeakSet<object>();
 
 export interface RuntimeAttentionReceiptVerifier {
+  ownsAttentionRefreshAuthorization(
+    input: unknown,
+  ): input is RuntimeBoundaryAuthorization<"attention_refresh">;
   verifyPersistedAttentionRefreshReceipt(
     input: unknown,
   ): Readonly<RuntimeAllowedAttentionRefreshReceipt>;
@@ -65,6 +67,10 @@ export function createRuntimeAttentionReceiptVerifier(
   if (!isSqliteRuntimeController(runtime))
     throw new AttentionHistoryError("runtime_verifier_invalid");
   const verifier: RuntimeAttentionReceiptVerifier = Object.freeze({
+    ownsAttentionRefreshAuthorization: (
+      input: unknown,
+    ): input is RuntimeBoundaryAuthorization<"attention_refresh"> =>
+      runtime.ownsAttentionRefreshAuthorization(input),
     verifyPersistedAttentionRefreshReceipt: (input: unknown) =>
       runtime.verifyPersistedAttentionRefreshReceipt(input),
   });
@@ -275,8 +281,7 @@ export class RecordedAttentionHistory {
     const expected = parseAttentionPreviewBinding(command.expected);
     const authorization = command.authorization;
     if (
-      !isRuntimeBoundaryAuthorization(authorization) ||
-      authorization.boundary !== "attention_refresh" ||
+      !this.#verifier.ownsAttentionRefreshAuthorization(authorization) ||
       authorization.actionId !== recordedRefreshId(recordedBundleId(sourceFacts)) ||
       authorization.actionId !== expected.refreshId ||
       authorization.processInstanceId !== VERIFIERS.get(this.#verifier) ||
