@@ -42,7 +42,7 @@ A later security-reviewed series may retain a sanitized source projection in a k
 
 ## Verification status
 
-Three subsystem reviews, three design candidates, and an independent cross-judge established the architecture. The implementation through `d339bdb` passes the pinned Node 24.19.0 checks, 1,339 tests, the Stage 0 and Stage 1 gates, and the fresh-process HTTP flow. Independent security and product reviews passed. The final real-browser receipt and PR landing remain pending in `todo.md`.
+Three subsystem reviews, three design candidates, and an independent cross-judge established the architecture. The implementation through `fd03272` passes the pinned Node 24.19.0 checks, 1,339 tests, the Stage 0 and Stage 1 gates, the fresh-process HTTP flow, and hosted quality and full-history secret checks. Independent security and product reviews passed. Headless Chrome verified the rendered STOPPED, RESEARCH preview, exact record, reload, persisted STOP, same-database restart, and exact-duplicate flow without new runtime authority or raw X material. PR #15 was green and independently verified at that exact implementation head before final bookkeeping.
 
 ## Exact-preview authorization amendment
 

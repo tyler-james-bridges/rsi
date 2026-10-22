@@ -63,7 +63,7 @@
 - [x] Each iteration makes the smallest change the evidence justifies and verifies it against the predicate.
 - [x] Mid-run discoveries are addressed and the run returns to the predicate.
 - [x] Checkpoint every iteration through the decision trail.
-- [ ] Stop when the predicate is met. A plateau is not a stop.
+- [x] Stop when the predicate is met. A plateau is not a stop.
 
 ### Architect phases
 
@@ -90,8 +90,8 @@
       remains `operator_supplied_unverified` and cannot grant authority.
 - [x] The loopback operator shows rank components, provenance, expiry, and the next action without exposing execution authority.
 - [x] Refresh is explicit, STOP-aware, idempotent, restart-safe, and never performs implicit network work.
-- [ ] Existing authority gates, `pnpm check`, offline drills, a fresh process flow, and a real browser flow pass.
-- [ ] The work is published in a green, independently verified PR.
+- [x] Existing authority gates, `pnpm check`, offline drills, a fresh process flow, and a real browser flow pass.
+- [x] The work is published in a green, independently verified PR.
 
 ### Throughput checkpoint
 
