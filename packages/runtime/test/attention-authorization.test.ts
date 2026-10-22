@@ -15,6 +15,8 @@ import {
 
 const NOW = "2026-10-21T00:00:00.000Z";
 const LATER = "2026-10-21T00:01:00.000Z";
+const RESEARCH_AFTER_RESTART = "2026-10-21T00:02:00.000Z";
+const PROPOSE_AFTER_RESTART = "2026-10-21T00:03:00.000Z";
 const temporaryDirectories: string[] = [];
 
 function databasePath(): string {
@@ -257,28 +259,89 @@ describe("attention refresh authorization", () => {
 
     try {
       const persisted: unknown = JSON.parse(JSON.stringify(allowedReceipt));
-      const before = restarted.listAudit();
-      const verified = restarted.verifyPersistedAttentionRefreshReceipt(persisted);
-      expect(verified).toEqual(allowedReceipt);
-      expect(Object.isFrozen(verified)).toBe(true);
-      expect(restarted.listAudit()).toEqual(before);
-      expect(clockWasRead).toBe(false);
+      const verifyWithoutAuthority = (mode: "PROPOSE_ONLY" | "RESEARCH" | "STOPPED") => {
+        const before = restarted.listAudit();
+        const verified = restarted.verifyPersistedAttentionRefreshReceipt(persisted);
+        expect(restarted.getSnapshot().mode).toBe(mode);
+        expect(verified).toEqual(allowedReceipt);
+        expect(Object.isFrozen(verified)).toBe(true);
+        expect(Object.values(verified).some((value) => typeof value === "function")).toBe(false);
+        expect("consume" in verified).toBe(false);
+        expect("consumeAndCommit" in verified).toBe(false);
+        expect("consumeAndDispatch" in verified).toBe(false);
+        expect("guardCompletion" in verified).toBe(false);
+        expect("capabilities" in verified).toBe(false);
+        expect(restarted.listAudit()).toEqual(before);
+        expect(clockWasRead).toBe(false);
+      };
 
-      expect(() =>
-        restarted.verifyPersistedAttentionRefreshReceipt({
-          ...allowedReceipt,
-          eventHash: "0".repeat(64),
-        }),
-      ).toThrow(RuntimeIntegrityError);
+      verifyWithoutAuthority("STOPPED");
+      restarted.transition({
+        expectedMode: "STOPPED",
+        expectedRevision: 4,
+        occurredAt: RESEARCH_AFTER_RESTART,
+        requestId: randomUUID(),
+        targetMode: "RESEARCH",
+      });
+      verifyWithoutAuthority("RESEARCH");
+      restarted.transition({
+        expectedMode: "RESEARCH",
+        expectedRevision: 5,
+        occurredAt: PROPOSE_AFTER_RESTART,
+        requestId: randomUUID(),
+        targetMode: "PROPOSE_ONLY",
+      });
+      verifyWithoutAuthority("PROPOSE_ONLY");
+
+      const changedEventHash = `${allowedReceipt.eventHash.startsWith("0") ? "1" : "0"}${allowedReceipt.eventHash.slice(1)}`;
+      const mutatedReceipts = [
+        ["schemaVersion", { ...allowedReceipt, schemaVersion: 2 }, RuntimeValidationError],
+        [
+          "actionId",
+          { ...allowedReceipt, actionId: "different-attention-batch" },
+          RuntimeIntegrityError,
+        ],
+        [
+          "authorizationId",
+          { ...allowedReceipt, authorizationId: randomUUID() },
+          RuntimeIntegrityError,
+        ],
+        ["boundary", { ...allowedReceipt, boundary: "watchlist_import" }, RuntimeValidationError],
+        ["checkedAt", { ...allowedReceipt, checkedAt: LATER }, RuntimeIntegrityError],
+        ["decision", { ...allowedReceipt, decision: "denied" }, RuntimeValidationError],
+        ["eventHash", { ...allowedReceipt, eventHash: changedEventHash }, RuntimeIntegrityError],
+        [
+          "eventSequence",
+          { ...allowedReceipt, eventSequence: allowedReceipt.eventSequence + 1 },
+          RuntimeIntegrityError,
+        ],
+        ["mode", { ...allowedReceipt, mode: "PROPOSE_ONLY" }, RuntimeValidationError],
+        [
+          "modeRevision",
+          { ...allowedReceipt, modeRevision: allowedReceipt.modeRevision + 1 },
+          RuntimeIntegrityError,
+        ],
+        [
+          "processInstanceId",
+          { ...allowedReceipt, processInstanceId: randomUUID() },
+          RuntimeIntegrityError,
+        ],
+        ["reason", { ...allowedReceipt, reason: "MODE_NOT_ALLOWED" }, RuntimeValidationError],
+        ["extra key", { ...allowedReceipt, extra: true }, RuntimeValidationError],
+      ] as const;
+      const beforeRejections = restarted.listAudit();
+      for (const [field, mutated, ErrorType] of mutatedReceipts) {
+        expect(
+          () => restarted.verifyPersistedAttentionRefreshReceipt(mutated),
+          `mutated ${field} must fail closed`,
+        ).toThrow(ErrorType);
+      }
       expect(() => restarted.verifyPersistedAttentionRefreshReceipt(denied)).toThrow(
         RuntimeValidationError,
       );
       expect(() => restarted.verifyPersistedAttentionRefreshReceipt(wrongBoundaryReceipt)).toThrow(
         RuntimeValidationError,
       );
-      expect(() =>
-        restarted.verifyPersistedAttentionRefreshReceipt({ ...allowedReceipt, extra: true }),
-      ).toThrow(RuntimeValidationError);
 
       let proxyTrapWasInvoked = false;
       const proxy = new Proxy(
@@ -294,7 +357,7 @@ describe("attention refresh authorization", () => {
         RuntimeValidationError,
       );
       expect(proxyTrapWasInvoked).toBe(false);
-      expect(restarted.listAudit()).toEqual(before);
+      expect(restarted.listAudit()).toEqual(beforeRejections);
       expect(clockWasRead).toBe(false);
     } finally {
       restarted.close();
